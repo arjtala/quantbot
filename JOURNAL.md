@@ -90,7 +90,83 @@ This is the academic bedrock for the modern CTA (Commodity Trading Advisor) and 
 
 ---
 
-## 5. Architectural Blueprint for `quantbot`
+## 5. 2024–2025 Research Update
+
+The following papers address gaps in the original literature review, covering multi-agent debate frameworks, self-improving agents, financial reasoning via RL, tool-augmented agents, foundation models for time series, and efficient architectures for Rust portability.
+
+### H. Multi-Agent Debate for Trading Decisions
+**Paper:** *TradingAgents: Multi-Agents LLM Financial Trading Framework* (Xiao, Sun, Luo, Wang - Dec 2024)
+**Link:** [arXiv:2412.20138](https://arxiv.org/abs/2412.20138)
+- **Core Concept:** Bull vs. bear debate among specialized agents (fundamental, sentiment, technical) with a risk manager making final calls.
+- **Utility:** Closest analogue to quantbot's Phase 2. Directly informs how the Decision Agent should weigh conflicting signals in the fan-out/fan-in LangGraph design.
+
+### I. Behavioral Diversity in Agent Ensembles
+**Paper:** *StockAgent: LLM-based Stock Trading in Simulated Real-world Environments* (Zhang et al. - Jul 2024)
+**Link:** [arXiv:2407.18957](https://arxiv.org/abs/2407.18957)
+- **Core Concept:** Introduces heterogeneous agent "personalities" — conservative, aggressive, trend-following — and shows diversity improves ensemble robustness. Also benchmarks GPT vs. Gemini.
+- **Utility:** Informs agent configuration for quantbot. Weight assignment in `SignalCombiner` could account for agent behavioral type, not just signal confidence.
+
+### J. Self-Improving Alpha Discovery
+**Paper:** *QuantAgent: Seeking Holy Grail in Trading by Self-Improving LLM* (Wang, Yuan, Ni, Guo — HKUST - Feb 2024)
+**Link:** [arXiv:2402.03755](https://arxiv.org/abs/2402.03755)
+- **Core Concept:** LLM generates alpha factors, backtests them, evaluates results, and iteratively refines. Distinct from Y-Research QuantAgent (Section 2.1).
+- **Utility:** Validates AlphaGPT concept (Section F) with concrete results. Blueprint for quantbot's Generative Alpha Layer — LLM writes and backtests its own math-based signals.
+
+### K. Small Financial Reasoning Models via RL
+**Paper:** *Fin-R1: Financial Reasoning through Reinforcement Learning* (Liu et al. - Mar 2025)
+**Link:** [arXiv:2503.16252](https://arxiv.org/abs/2503.16252)
+- **Core Concept:** A 7B model matching GPT-4 on financial reasoning via DeepSeek-R1 RL training.
+- **Utility:** Could replace expensive API calls for quantbot's LLM agents with a locally-runnable model — drastically reducing latency and cost. The 2025 successor to FinGPT (Section E).
+
+### L. Multimodal Tool-Augmented Trading Agents
+**Paper:** *FinAgent: A Multimodal Foundation Agent for Financial Trading* (Zhang et al. - Feb 2024)
+**Link:** [arXiv:2402.18485](https://arxiv.org/abs/2402.18485)
+- **Core Concept:** Processes both text and visual data (candlestick charts) and calls external tools (code execution, APIs).
+- **Utility:** Extends the "Robo-Chartist" concept (Section 2.1). Provides patterns for making quantbot's Pattern and Trend agents multimodal with tool use.
+
+### M. Open-Source Agent Platform for Finance
+**Paper:** *FinRobot: Open-Source AI Agent Platform for Financial Applications* (Yang et al. - May 2024)
+**Link:** [arXiv:2405.14767](https://arxiv.org/abs/2405.14767)
+- **Core Concept:** Complete platform with agent orchestration, market data adapters, and multi-agent patterns.
+- **Utility:** Architecture patterns for Phase 3 (paper trading + dashboard). Data adapter design applicable to quantbot's `DataProvider` hierarchy.
+
+### N. Chain-of-Thought Prompting for Stock Selection
+**Paper:** *MarketSenseAI: Can Large Language Models Beat Wall Street?* (Fatouros et al. - Jan 2024)
+**Link:** [arXiv:2401.03737](https://arxiv.org/abs/2401.03737)
+- **Core Concept:** GPT-4 with structured chain-of-thought prompting achieves 72.3% directional accuracy and outperforms S&P 500.
+- **Utility:** Demonstrates that structured CoT reasoning improves signal quality. Should directly inform prompt engineering for quantbot's Indicator, Pattern, and Trend agents.
+
+### O. Foundation Models for Time Series Forecasting
+**Paper:** *Chronos: Learning the Language of Time Series* (Ansari et al., Amazon - Mar 2024)
+**Link:** [arXiv:2403.07815](https://arxiv.org/abs/2403.07815)
+- **Core Concept:** Tokenizes numerical time series and achieves zero-shot forecasting competitive with task-specific models.
+- **Utility:** Potential paradigm shift for quantbot's forecasting layer — one pre-trained model across all instruments instead of per-asset LSTMs/LightGBM.
+
+### P. State Space Models for Stock Prediction
+**Paper:** *MambaStock: Selective State Space Model for Stock Prediction* (Shi - Feb 2024)
+**Link:** [arXiv:2402.18959](https://arxiv.org/abs/2402.18959)
+- **Core Concept:** Mamba's linear complexity (vs. transformer's quadratic) with competitive forecasting performance.
+- **Utility:** Simpler architecture is more amenable to Rust implementation — directly relevant to Phase 4. Hybrid TFT-Mamba models showing 10%+ improvement on benchmarks.
+
+### Q. Comprehensive RL for Finance Survey
+**Paper:** *Reinforcement Learning in Financial Decision Making: A Systematic Review* (Nov 2024)
+**Link:** [arXiv:2411.07585](https://arxiv.org/abs/2411.07585)
+- **Core Concept:** Survey of 250+ papers. Key finding: hybrid methods (LSTM-DQN, CNN-PPO, Attention-DDPG) outperform pure RL by 15-20%.
+- **Utility:** Validates quantbot's hybrid architecture. Maps which RL algorithms work best per trading task (execution, allocation, market making).
+
+### Phase Relevance Map
+
+| QuantBot Phase | Most Relevant Papers |
+|---|---|
+| Phase 2 (LangGraph + LLM agents) | TradingAgents (H), StockAgent (I), MarketSenseAI (N), FinAgent (L) |
+| Phase 3 (Paper trading + dashboard) | FinRobot (M) |
+| Phase 4 (Rust port) | MambaStock (P) — simpler architecture for Rust |
+| Phase 5 (Extensions) | Chronos (O), Fin-R1 (K), QuantAgent-HKUST (J) |
+| General reference | RL survey (Q) |
+
+---
+
+## 6. Architectural Blueprint for `quantbot`
 
 Triangulating across traditional stats, enterprise machine learning, and modern LLM agents suggests a comprehensive, four-layer architecture for `quantbot`:
 
@@ -107,6 +183,8 @@ Triangulating across traditional stats, enterprise machine learning, and modern 
 ---
 
 ## References
+
+### Foundational (2012–2023)
 - Gu, S., Kelly, B., & Xiu, D. (2020). "Empirical Asset Pricing via Machine Learning." *The Review of Financial Studies*, 33(5), 2223-2273.
 - Kakushadze, Z. (2015). "101 Formulaic Alphas." *Wilmott Magazine*, 2016(84), 72-81.
 - Lim, B., Zohren, S., & Roberts, S. J. (2019). "Enhancing Time Series Momentum Strategies Using Deep Neural Networks." *Available at SSRN 3369159*.
@@ -118,3 +196,15 @@ Triangulating across traditional stats, enterprise machine learning, and modern 
 - Xiong, F., Zhang, X., Feng, A., Sun, S., & You, C. (2025). "QuantAgent: Price-Driven Multi-Agent LLMs for High-Frequency Trading." *arXiv preprint arXiv:2509.09995* / [Y-Research-SBU/QuantAgent GitHub](https://github.com/Y-Research-SBU/QuantAgent).
 - Yang, H., Liu, X. Y., & Wang, C. D. (2023). "FinGPT: Open-Source Financial Large Language Models." *arXiv preprint arXiv:2306.06031*.
 - Yu, B., et al. (2023). "FinMem: A Performance-Enhanced LLM Trading Agent with Layered Memory and Character Design." *arXiv preprint arXiv:2311.13743*.
+
+### 2024–2025 Update
+- Ansari, A. F., et al. (2024). "Chronos: Learning the Language of Time Series." *arXiv preprint arXiv:2403.07815*.
+- Fatouros, G., et al. (2024). "Can Large Language Models Beat Wall Street? Unveiling the Potential of AI in Stock Selection." *arXiv preprint arXiv:2401.03737*.
+- Liu, Z., et al. (2025). "Fin-R1: Financial Reasoning through Reinforcement Learning." *arXiv preprint arXiv:2503.16252*.
+- Shi, Z. (2024). "MambaStock: Selective State Space Model for Stock Prediction." *arXiv preprint arXiv:2402.18959*.
+- Wang, S., Yuan, Y., Ni, L. M., & Guo, J. (2024). "QuantAgent: Seeking Holy Grail in Trading by Self-Improving Large Language Model." *arXiv preprint arXiv:2402.03755*.
+- Xiao, Y., Sun, Y., Luo, J., & Wang, W. (2024). "TradingAgents: Multi-Agents LLM Financial Trading Framework." *arXiv preprint arXiv:2412.20138*.
+- Yang, H., et al. (2024). "FinRobot: An Open-Source AI Agent Platform for Financial Applications using Large Language Models." *arXiv preprint arXiv:2405.14767*.
+- Zhang, C., et al. (2024). "StockAgent: LLM-based Stock Trading in Simulated Real-world Environments." *arXiv preprint arXiv:2407.18957*.
+- Zhang, W., et al. (2024). "FinAgent: A Multimodal Foundation Agent for Financial Trading." *arXiv preprint arXiv:2402.18485*.
+- (2024). "Reinforcement Learning in Financial Decision Making: A Systematic Review." *arXiv preprint arXiv:2411.07585*.
