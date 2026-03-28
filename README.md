@@ -92,7 +92,7 @@ See [PROGRESS.md](PROGRESS.md) for detailed status.
 | 1 | Quant Core — TSMOM agent + backtest engine | Done |
 | 2 | LangGraph + LLM agents (indicator, pattern, trend, decision) | Planned |
 | 3 | Paper trading loop + FastAPI web dashboard | Planned |
-| 4 | Rust port of performance-critical paths via PyO3 | Planned |
+| 4 | Rust port of performance-critical paths via PyO3 (hybrid approach — [research notes](PROGRESS.md#rust-ecosystem-research)) | Planned |
 | 5 | Extensions — new strategies, CCXT, alerting | Planned |
 
 ## Testing

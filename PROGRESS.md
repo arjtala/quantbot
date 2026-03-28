@@ -77,6 +77,18 @@
 - [ ] `quantbot-core/` Rust crate via PyO3/maturin
 - [ ] Candidates: BacktestEngine loop, TSMOM signals, EWMA vol, SignalCombiner, portfolio accounting
 
+### Rust Ecosystem Research
+Evaluated Rust crates for potential full Rust rewrite vs hybrid PyO3 approach:
+
+| Crate | What it is | Verdict |
+|-------|-----------|---------|
+| [langchain-rust](https://github.com/Abraxas-365/langchain-rust) | Rust port of LangChain (chains, agents, vector stores). Supports OpenAI, Anthropic, Ollama. 532 commits. | No graph orchestration (no fan-out/fan-in). Useful for LLM API calls only. |
+| [rs-graph-llm](https://github.com/a-agmon/rs-graph-llm) | Full graph execution engine inspired by LangGraph. 278 stars, 71 commits. Stateful sessions, conditional routing, human-in-the-loop. | **Most promising.** Closest to LangGraph in Rust. Gap: no explicit parallel fan-out — would need tokio tasks for our multi-agent pattern. |
+| [rrag-graph](https://docs.rs/rrag-graph/latest/rrag_graph/) | Graph workflow orchestration for AI agents. Async, conditional routing. | v0.1.0-alpha.1, 66% documented. Not production-ready. |
+| [langgraph-api](https://crates.io/crates/langgraph-api) | HTTP client SDK for hosted LangGraph Cloud. Community-maintained, auto-generated from OpenAPI spec. | **Not a graph engine** — just an API client. Only useful if hosting on LangGraph Cloud. |
+
+**Conclusion:** None of these have GPU dependencies — they all call LLM providers over HTTP (GPU is the provider's concern). The hybrid approach (Python LangGraph for I/O-bound orchestration, Rust via PyO3 for CPU-bound math) remains the pragmatic choice. rs-graph-llm is worth revisiting if a full Rust rewrite becomes desirable.
+
 ---
 
 ## Phase 5: Extensions
