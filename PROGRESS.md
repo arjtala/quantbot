@@ -72,22 +72,93 @@
 ---
 
 ## Phase 4: Rust Port
-> **Status: Not started**
+> **Status: Not started** | Approach updated: **full Rust rewrite** (not hybrid PyO3)
 
-- [ ] `quantbot-core/` Rust crate via PyO3/maturin
-- [ ] Candidates: BacktestEngine loop, TSMOM signals, EWMA vol, SignalCombiner, portfolio accounting
+### Updated Recommendation: Full Rust Over Hybrid
 
-### Rust Ecosystem Research
-Evaluated Rust crates for potential full Rust rewrite vs hybrid PyO3 approach:
+After deeper analysis, the Rust ecosystem has matured enough that maintaining a PyO3 FFI boundary is more overhead than benefit. A pure Rust codebase is cleaner to maintain, test, and deploy.
+
+**Approach:**
+1. Port Phase 1 (backtest engine + TSMOM) first — pure numerical computation, massive speedups (~1-2 weeks)
+2. Build Phase 2 (LLM agents) in Rust using `rig-core` + `tokio` — skip graph frameworks, hand-roll with `tokio::join!` (~1 week)
+3. Web dashboard with `axum` — single binary serving API + trading engine
+
+### Portability Assessment
+
+No hard Python-only blockers. LangGraph's fan-out/fan-in is trivially `tokio::join!`:
+```rust
+let (tsmom, indicator, pattern, trend) = tokio::join!(
+    tsmom_agent.generate_signal(&bars),
+    indicator_agent.generate_signal(&bars),
+    pattern_agent.generate_signal(&bars),
+    trend_agent.generate_signal(&bars),
+);
+let decision = combiner.combine(vec![tsmom, indicator, pattern, trend]);
+```
+
+### Crate Mapping
+
+| Python | Rust Crate | Maturity | Notes |
+|--------|-----------|----------|-------|
+| `pandas` | `polars` | Production | Faster, columnar, excellent for OHLCV |
+| `numpy` | `ndarray` / native iterators | Production | EWMA is ~20 lines of Rust |
+| `yfinance` | `yahoo_finance_api` | OK | Less polished but functional |
+| `plotly` | `plotly-rs` / export JSON | OK | Or serve from web frontend |
+| `pydantic` | `serde` + Rust structs | Production | Type system already strict |
+| `langgraph` | `tokio::join!` + hand-rolled | N/A | Our graph is simple enough |
+| `langchain-*` | `rig-core` | Good | OpenAI, Anthropic, structured output, tools |
+| `TA-Lib` | `ta` crate / FFI to C lib | OK | RSI, MACD, Stochastic, Bollinger |
+| `fastapi` | `axum` / `actix-web` | Production | Both excellent for REST APIs |
+| `ccxt` | `reqwest` + exchange APIs | Manual | No Rust ccxt port exists |
+| `scipy` | `statrs` | OK | Only used minimally |
+| `argparse` | `clap` | Production | Best-in-class CLI parsing |
+
+### Effort Estimate
+
+| Component | Effort | Expected Speedup |
+|-----------|--------|------------------|
+| Core types (signal, portfolio) | ~1 day | Negligible (already fast) |
+| Data layer (polars + yahoo) | ~2 days | 5-10x on data processing |
+| TSMOM agent + volatility | ~2 days | 10-50x on computation |
+| Backtest engine | ~3-4 days | **50-100x** (hot loop) |
+| LLM agents (rig-core + tokio) | ~3-4 days | Network-bound (similar speed) |
+| Metrics + plotting | ~1-2 days | Moderate |
+| **Total** | **~2-3 weeks** | |
+
+### Trade-off Analysis
+
+| Factor | Full Rust | Hybrid (PyO3) | Stay Python |
+|--------|-----------|---------------|-------------|
+| Backtest performance | 10-100x faster | 5-50x on hot paths | Baseline |
+| Development speed | Slower initially | Medium | Fastest |
+| LLM agent iteration | Load prompts from files* | Python for prompts | Fastest |
+| Deployment | Single binary | Python + Rust ext | Python env needed |
+| Maintenance | One language | FFI boundary overhead | One language |
+
+*Prompt changes don't need recompile if loaded from `.md`/`.txt` at runtime.
+
+### Rust Graph Framework Research
 
 | Crate | What it is | Verdict |
 |-------|-----------|---------|
-| [langchain-rust](https://github.com/Abraxas-365/langchain-rust) | Rust port of LangChain (chains, agents, vector stores). Supports OpenAI, Anthropic, Ollama. 532 commits. | No graph orchestration (no fan-out/fan-in). Useful for LLM API calls only. |
-| [rs-graph-llm](https://github.com/a-agmon/rs-graph-llm) | Full graph execution engine inspired by LangGraph. 278 stars, 71 commits. Stateful sessions, conditional routing, human-in-the-loop. | **Most promising.** Closest to LangGraph in Rust. Gap: no explicit parallel fan-out — would need tokio tasks for our multi-agent pattern. |
-| [rrag-graph](https://docs.rs/rrag-graph/latest/rrag_graph/) | Graph workflow orchestration for AI agents. Async, conditional routing. | v0.1.0-alpha.1, 66% documented. Not production-ready. |
-| [langgraph-api](https://crates.io/crates/langgraph-api) | HTTP client SDK for hosted LangGraph Cloud. Community-maintained, auto-generated from OpenAPI spec. | **Not a graph engine** — just an API client. Only useful if hosting on LangGraph Cloud. |
+| [langchain-rust](https://github.com/Abraxas-365/langchain-rust) | Rust port of LangChain. OpenAI, Anthropic, Ollama. 532 commits. | No graph orchestration. LLM API calls only. |
+| [rs-graph-llm](https://github.com/a-agmon/rs-graph-llm) | Graph execution engine inspired by LangGraph. 278 stars. Stateful sessions, conditional routing. | Most promising framework. Gap: no parallel fan-out built-in. |
+| [rrag-graph](https://docs.rs/rrag-graph/latest/rrag_graph/) | Graph workflow for AI agents. Async, conditional routing. | v0.1.0-alpha. Not production-ready. |
+| [langgraph-api](https://crates.io/crates/langgraph-api) | HTTP client SDK for hosted LangGraph Cloud. | Not a graph engine — just an API client. |
 
-**Conclusion:** None of these have GPU dependencies — they all call LLM providers over HTTP (GPU is the provider's concern). The hybrid approach (Python LangGraph for I/O-bound orchestration, Rust via PyO3 for CPU-bound math) remains the pragmatic choice. rs-graph-llm is worth revisiting if a full Rust rewrite becomes desirable.
+**Verdict:** Skip graph frameworks. `tokio::join!` + pattern matching covers our needs. `rig-core` for LLM calls.
+
+### Implementation Plan
+- [ ] Scaffold `quantbot-rs/` with `Cargo.toml` (polars, ndarray, rig-core, tokio, clap, axum, ta, plotly, chrono, serde)
+- [ ] Port core types: Signal, Portfolio, Position, Order
+- [ ] Port data layer: polars BarDataFrame, yahoo_finance_api provider, Instrument universe
+- [ ] Port TSMOM agent + EWMA volatility
+- [ ] Port backtest engine (main speedup target: 50-100x)
+- [ ] Port metrics + plotly-rs charting
+- [ ] Port paper trading engine
+- [ ] Build LLM agents with rig-core (indicator, pattern, trend)
+- [ ] Build signal combiner + decision agent with tokio::join! fan-out/fan-in
+- [ ] CLI via clap, web dashboard via axum
 
 ---
 
