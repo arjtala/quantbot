@@ -47,39 +47,60 @@
 ---
 
 ## Phase 2: LangGraph + LLM Agents
-> **Status: Not started**
+> **Status: Code complete** | Requires API keys for end-to-end testing | 22/22 Phase 1 tests still passing
 
 ### Core Infrastructure
-- [ ] `quantbot/graph/state.py` — `TradingGraphState` with signal accumulation reducer
-- [ ] `quantbot/graph/builder.py` — Fan-out/fan-in graph builder with configurable agents
-- [ ] `quantbot/config.py` — Pydantic Settings from `.env`
+- [x] `quantbot/config.py` — Pydantic Settings from `.env`, per-agent model selection, risk limits
+- [x] `.env.example` — Template with all configuration options
+- [x] `quantbot/graph/state.py` — `TradingGraphState` with signal accumulation reducer
+- [x] `quantbot/graph/builder.py` — Fan-out/fan-in graph builder with configurable agents
+
+### Prompt Templates (runtime-loaded, CoT-structured)
+- [x] `quantbot/prompts/indicator_system.md` — 5-step CoT: identify → assess → contradict → confidence → conclude
+- [x] `quantbot/prompts/pattern_system.md` — Visual pattern recognition with CoT reasoning
+- [x] `quantbot/prompts/trend_system.md` — Support/resistance analysis with CoT reasoning
+- [x] `quantbot/prompts/bull_advocate.md` — Structured bullish argument template
+- [x] `quantbot/prompts/bear_advocate.md` — Structured bearish argument template
+- [x] `quantbot/prompts/decision_system.md` — Multi-signal synthesis with decision rules
+
+### Shared Utilities
+- [x] `quantbot/agents/shared/llm.py` — LLM client routing (OpenAI/Anthropic), JSON signal parsing with fallback
+- [x] `quantbot/agents/shared/chart_renderer.py` — Candlestick chart rendering to BytesIO (fix: save before `plt.close()`)
 
 ### LLM Agents
-- [ ] `quantbot/agents/indicator/agent.py` + `tools.py` — RSI, MACD, Stoch via TA-Lib → LLM interpretation
-- [ ] `quantbot/agents/pattern/agent.py` + `charts.py` — Candlestick chart → vision LLM pattern recognition
-- [ ] `quantbot/agents/trend/agent.py` + `trendlines.py` — Support/resistance fitting → annotated chart
+- [x] `quantbot/agents/tsmom/graph_adapter.py` — Phase 1 TSMOM wrapped as graph node (no LLM, deterministic anchor)
+- [x] `quantbot/agents/indicator/tools.py` — Pure numpy/pandas: RSI, MACD, Stochastic, ROC, Williams %R
+- [x] `quantbot/agents/indicator/agent.py` — TA indicators → LLM interpretation via CoT
+- [x] `quantbot/agents/pattern/charts.py` — Candlestick chart rendering with SMA overlays
+- [x] `quantbot/agents/pattern/agent.py` — Vision LLM chart pattern recognition
+- [x] `quantbot/agents/trend/trendlines.py` — Support/resistance detection + linear trendline fitting
+- [x] `quantbot/agents/trend/agent.py` — Annotated chart → vision LLM trend analysis
 
 ### Decision Layer
-- [ ] `quantbot/agents/decision/combiner.py` — Confidence-weighted signal ensemble
-- [ ] `quantbot/agents/decision/agent.py` — Combined decision + risk checks
+- [x] `quantbot/agents/decision/combiner.py` — Confidence-weighted signal ensemble: `Σ(w×s×c) / Σ(w×c)`
+- [x] `quantbot/agents/decision/agent.py` — LLM-based decision synthesis with debate + memory context
+- [x] `quantbot/agents/risk/agent.py` — Risk manager with veto authority (leverage, confidence floor)
 
-### Research-Informed Enhancements
+### Bull/Bear Debate *(from TradingAgents, JOURNAL.md §H)*
+- [x] `quantbot/agents/debate/bull.py` — Bull advocate with structured argument output
+- [x] `quantbot/agents/debate/bear.py` — Bear advocate with structured argument output
+- [x] `quantbot/agents/debate/moderator.py` — Runs debate, structures arguments for Decision Agent
+- [x] Configurable via `DEBATE_ENABLED` — can disable and fall back to pure numeric combiner
 
-**Bull/Bear Debate Pattern** *(from TradingAgents, JOURNAL.md §H)*
-- [ ] Add bull and bear advocate agents to the graph that argue opposing positions before the Decision Agent adjudicates
-- [ ] Decision Agent receives structured arguments (not just numeric signals) for better conflict resolution
-- [ ] Configurable: can disable debate and fall back to pure numeric `SignalCombiner`
+### Agent Decision Memory *(from FinMem, JOURNAL.md §G)*
+- [x] `quantbot/memory/store.py` — SQLite-backed memory at `~/.quantbot/memory.db`
+- [x] Tables: `signal_log`, `decision_log` (with outcome tracking), `agent_memory` (lessons)
+- [x] `build_memory_context()` — generates text summary for LLM prompt injection
+- [x] Win/loss analytics via `get_win_rate()`
 
-**Chain-of-Thought Structured Prompts** *(from MarketSenseAI, JOURNAL.md §N)*
-- [ ] All LLM agent prompts must enforce step-by-step reasoning: identify signal → assess strength → consider contradicting evidence → state confidence → conclude with direction
-- [ ] Use structured output parsing (Pydantic models) to extract `Signal` from CoT reasoning
-- [ ] Target: 70%+ directional accuracy on held-out data (MarketSenseAI achieved 72.3%)
+### Evaluation Harness
+- [x] `quantbot/eval/backtest_llm.py` — Run agents on historical data, measure directional accuracy
+- [x] `quantbot/eval/agent_ablation.py` — Compare agent combinations, measure marginal contribution
 
-**Agent Decision Memory via SQLite** *(from FinMem, JOURNAL.md §G)*
-- [ ] `quantbot/memory/store.py` — SQLite-backed memory store at `~/.quantbot/memory.db`
-- [ ] Tables: `signal_log` (every signal produced), `decision_log` (combiner outputs + actual P&L outcomes), `agent_memory` (condensed lessons injected into LLM prompts)
-- [ ] On each LLM agent invocation, inject recent decision history + win/loss record into the system prompt
-- [ ] SQLite chosen over JSON/parquet: ACID transactions for concurrent writes during live trading, SQL queries for analysis ("all BTC-USD signals where confidence > 0.8 that were wrong"), zero config, stdlib `sqlite3`, clean migration path to Postgres, and Rust has excellent support (`rusqlite`/`sqlx`) for Phase 4
+### Validation
+- [ ] Run full graph on SPY for one day — all agents produce signals, combiner output is reasonable
+- [ ] Compare TSMOM-only vs TSMOM+LLM Sharpe on held-out data
+- [ ] Target: 70%+ directional accuracy for LLM agents (MarketSenseAI achieved 72.3%)
 
 ---
 
