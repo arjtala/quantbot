@@ -19,16 +19,25 @@ class QuantbotSettings(BaseSettings):
         extra="ignore",
     )
 
-    # --- LLM API Keys (optional if using Ollama) ---
+    # --- LLM API Keys (optional if using Ollama/SGLang) ---
     openai_api_key: str = ""
     anthropic_api_key: str = ""
 
     # --- Ollama ---
     ollama_base_url: str = "http://localhost:11434"
 
+    # --- SGLang / Custom OpenAI-compatible endpoint ---
+    # For self-hosted models via SGLang, vLLM, TGI, etc.
+    # Set this to your endpoint URL; uses OpenAI client with custom base_url.
+    openai_base_url: str = ""  # e.g. "http://slurm-node:30000/v1"
+
     # --- Per-Agent Model Selection ---
-    # Use "ollama:<model>" prefix for explicit Ollama routing,
-    # or just the model name (non-gpt/claude names default to Ollama).
+    # Routing rules:
+    #   "ollama:<model>"  → Ollama (local)
+    #   "claude*"         → Anthropic API
+    #   "gpt*"/"o1*"/"o3" → OpenAI API
+    #   "sglang:<model>"  → Custom OpenAI-compatible endpoint (SGLang/vLLM)
+    #   anything else     → Ollama (default)
     indicator_model: str = "qwen3:14b"
     pattern_model: str = "qwen3-vl"
     trend_model: str = "qwen3-vl"
@@ -36,7 +45,7 @@ class QuantbotSettings(BaseSettings):
     decision_model: str = "qwen3:14b"
 
     # --- LLM Provider (for routing) ---
-    default_provider: Literal["openai", "anthropic", "ollama"] = "ollama"
+    default_provider: Literal["openai", "anthropic", "ollama", "sglang"] = "ollama"
 
     # --- TSMOM Parameters ---
     tsmom_lookbacks: tuple[int, ...] = (21, 63, 126, 252)

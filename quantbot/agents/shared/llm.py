@@ -87,16 +87,20 @@ def get_llm_client(model: str) -> Any:
     """Get the appropriate LangChain LLM client based on model name.
 
     Routing:
-      - "ollama:" prefix or settings.default_provider == "ollama" → Ollama (local)
-      - "claude" prefix → Anthropic API
-      - anything else → OpenAI API
+      - "ollama:<model>"  → Ollama (local Mac)
+      - "sglang:<model>"  → Custom OpenAI-compatible endpoint (SGLang/vLLM on GPU cluster)
+      - "claude*"         → Anthropic API
+      - "gpt*"/"o1*"/"o3" → OpenAI API
+      - anything else     → Ollama (default)
     """
-    # Explicit ollama prefix: "ollama:qwen3:14b" → model = "qwen3:14b"
+    # Explicit prefix routing
     if model.startswith("ollama:"):
-        ollama_model = model[len("ollama:"):]
-        return _get_ollama_client(ollama_model)
+        return _get_ollama_client(model[len("ollama:"):])
 
-    # Route by model name or default provider
+    if model.startswith("sglang:"):
+        return _get_sglang_client(model[len("sglang:"):])
+
+    # Route by model name
     if model.startswith("claude"):
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
@@ -106,11 +110,17 @@ def get_llm_client(model: str) -> Any:
         )
     elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
         from langchain_openai import ChatOpenAI
-        return ChatOpenAI(
-            model=model,
-            api_key=settings.openai_api_key,
-            max_tokens=2048,
-        )
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 2048,
+        }
+        # If custom base_url is set, use it (SGLang/vLLM served as OpenAI-compatible)
+        if settings.openai_base_url:
+            kwargs["base_url"] = settings.openai_base_url
+            kwargs["api_key"] = settings.openai_api_key or "not-needed"
+        else:
+            kwargs["api_key"] = settings.openai_api_key
+        return ChatOpenAI(**kwargs)
     else:
         # Default: treat as Ollama model name
         return _get_ollama_client(model)
@@ -122,5 +132,29 @@ def _get_ollama_client(model: str) -> Any:
     return ChatOllama(
         model=model,
         base_url=settings.ollama_base_url,
+        temperature=0.2,
+    )
+
+
+def _get_sglang_client(model: str) -> Any:
+    """Create a client for SGLang/vLLM via OpenAI-compatible API.
+
+    SGLang serves models at an OpenAI-compatible /v1/chat/completions endpoint.
+    We use ChatOpenAI with a custom base_url.
+    """
+    from langchain_openai import ChatOpenAI
+
+    base_url = settings.openai_base_url
+    if not base_url:
+        raise ValueError(
+            "OPENAI_BASE_URL must be set for sglang: models "
+            "(e.g., http://slurm-node:30000/v1)"
+        )
+
+    return ChatOpenAI(
+        model=model,
+        base_url=base_url,
+        api_key=settings.openai_api_key or "not-needed",
+        max_tokens=2048,
         temperature=0.2,
     )
