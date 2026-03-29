@@ -86,8 +86,17 @@ def image_to_base64(buf: io.BytesIO) -> str:
 def get_llm_client(model: str) -> Any:
     """Get the appropriate LangChain LLM client based on model name.
 
-    Routes to OpenAI or Anthropic based on model prefix.
+    Routing:
+      - "ollama:" prefix or settings.default_provider == "ollama" → Ollama (local)
+      - "claude" prefix → Anthropic API
+      - anything else → OpenAI API
     """
+    # Explicit ollama prefix: "ollama:qwen3:14b" → model = "qwen3:14b"
+    if model.startswith("ollama:"):
+        ollama_model = model[len("ollama:"):]
+        return _get_ollama_client(ollama_model)
+
+    # Route by model name or default provider
     if model.startswith("claude"):
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
@@ -95,10 +104,23 @@ def get_llm_client(model: str) -> Any:
             api_key=settings.anthropic_api_key,
             max_tokens=2048,
         )
-    else:
+    elif model.startswith("gpt") or model.startswith("o1") or model.startswith("o3"):
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(
             model=model,
             api_key=settings.openai_api_key,
             max_tokens=2048,
         )
+    else:
+        # Default: treat as Ollama model name
+        return _get_ollama_client(model)
+
+
+def _get_ollama_client(model: str) -> Any:
+    """Create an Ollama LangChain client."""
+    from langchain_ollama import ChatOllama
+    return ChatOllama(
+        model=model,
+        base_url=settings.ollama_base_url,
+        temperature=0.2,
+    )

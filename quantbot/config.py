@@ -19,19 +19,24 @@ class QuantbotSettings(BaseSettings):
         extra="ignore",
     )
 
-    # --- LLM API Keys ---
+    # --- LLM API Keys (optional if using Ollama) ---
     openai_api_key: str = ""
     anthropic_api_key: str = ""
 
+    # --- Ollama ---
+    ollama_base_url: str = "http://localhost:11434"
+
     # --- Per-Agent Model Selection ---
-    indicator_model: str = "gpt-4o"
-    pattern_model: str = "gpt-4o"
-    trend_model: str = "gpt-4o"
-    debate_model: str = "claude-sonnet-4-20250514"
-    decision_model: str = "claude-opus-4-20250514"
+    # Use "ollama:<model>" prefix for explicit Ollama routing,
+    # or just the model name (non-gpt/claude names default to Ollama).
+    indicator_model: str = "qwen3:14b"
+    pattern_model: str = "qwen3-vl"
+    trend_model: str = "qwen3-vl"
+    debate_model: str = "qwen3:14b"
+    decision_model: str = "qwen3:14b"
 
     # --- LLM Provider (for routing) ---
-    default_provider: Literal["openai", "anthropic"] = "openai"
+    default_provider: Literal["openai", "anthropic", "ollama"] = "ollama"
 
     # --- TSMOM Parameters ---
     tsmom_lookbacks: tuple[int, ...] = (21, 63, 126, 252)
@@ -63,7 +68,7 @@ class QuantbotSettings(BaseSettings):
     debate_max_rounds: int = 2
 
     # --- Backtest Cost Control ---
-    backtest_model: str = "gpt-4o-mini"
+    backtest_model: str = "qwen3:14b"
     cache_llm_responses: bool = True
 
     @property
