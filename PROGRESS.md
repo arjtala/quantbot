@@ -49,14 +49,37 @@
 ## Phase 2: LangGraph + LLM Agents
 > **Status: Not started**
 
+### Core Infrastructure
 - [ ] `quantbot/graph/state.py` — `TradingGraphState` with signal accumulation reducer
 - [ ] `quantbot/graph/builder.py` — Fan-out/fan-in graph builder with configurable agents
+- [ ] `quantbot/config.py` — Pydantic Settings from `.env`
+
+### LLM Agents
 - [ ] `quantbot/agents/indicator/agent.py` + `tools.py` — RSI, MACD, Stoch via TA-Lib → LLM interpretation
 - [ ] `quantbot/agents/pattern/agent.py` + `charts.py` — Candlestick chart → vision LLM pattern recognition
 - [ ] `quantbot/agents/trend/agent.py` + `trendlines.py` — Support/resistance fitting → annotated chart
+
+### Decision Layer
 - [ ] `quantbot/agents/decision/combiner.py` — Confidence-weighted signal ensemble
 - [ ] `quantbot/agents/decision/agent.py` — Combined decision + risk checks
-- [ ] `quantbot/config.py` — Pydantic Settings from `.env`
+
+### Research-Informed Enhancements
+
+**Bull/Bear Debate Pattern** *(from TradingAgents, JOURNAL.md §H)*
+- [ ] Add bull and bear advocate agents to the graph that argue opposing positions before the Decision Agent adjudicates
+- [ ] Decision Agent receives structured arguments (not just numeric signals) for better conflict resolution
+- [ ] Configurable: can disable debate and fall back to pure numeric `SignalCombiner`
+
+**Chain-of-Thought Structured Prompts** *(from MarketSenseAI, JOURNAL.md §N)*
+- [ ] All LLM agent prompts must enforce step-by-step reasoning: identify signal → assess strength → consider contradicting evidence → state confidence → conclude with direction
+- [ ] Use structured output parsing (Pydantic models) to extract `Signal` from CoT reasoning
+- [ ] Target: 70%+ directional accuracy on held-out data (MarketSenseAI achieved 72.3%)
+
+**Agent Decision Memory via SQLite** *(from FinMem, JOURNAL.md §G)*
+- [ ] `quantbot/memory/store.py` — SQLite-backed memory store at `~/.quantbot/memory.db`
+- [ ] Tables: `signal_log` (every signal produced), `decision_log` (combiner outputs + actual P&L outcomes), `agent_memory` (condensed lessons injected into LLM prompts)
+- [ ] On each LLM agent invocation, inject recent decision history + win/loss record into the system prompt
+- [ ] SQLite chosen over JSON/parquet: ACID transactions for concurrent writes during live trading, SQL queries for analysis ("all BTC-USD signals where confidence > 0.8 that were wrong"), zero config, stdlib `sqlite3`, clean migration path to Postgres, and Rust has excellent support (`rusqlite`/`sqlx`) for Phase 4
 
 ---
 
@@ -165,7 +188,16 @@ let decision = combiner.combine(vec![tsmom, indicator, pattern, trend]);
 ## Phase 5: Extensions
 > **Status: Not started**
 
+### New Agents & Strategies
 - [ ] Cross-sectional momentum, mean reversion, carry agents
+- [ ] **Chronos Agent** *(JOURNAL.md §O)* — Zero-shot time series forecasting via Amazon's Chronos foundation model. Tokenizes price series into probabilistic forecasts. Especially valuable for new instruments lacking TSMOM lookback history.
+- [ ] **AlphaGen Agent** *(JOURNAL.md §F, §J)* — Self-improving alpha discovery loop. LLM generates mathematical factor code, runs it through `BacktestEngine`, evaluates Sharpe, iteratively refines. Promotes winners to production.
+
+### Risk & Sizing
 - [ ] Correlation-aware sizing, drawdown deleveraging
+- [ ] **RL-based dynamic agent weighting** *(JOURNAL.md §Q)* — Replace fixed `SignalCombiner` weights with a bandit/PPO agent that learns optimal agent weights per market regime. RL survey shows hybrid methods outperform by 15-20%.
+
+### Infrastructure
 - [ ] CCXT crypto provider
 - [ ] Alerting (Slack/email)
+- [ ] **Local Fin-R1 model via Ollama** *(JOURNAL.md §K)* — 7B model matching GPT-4 on financial reasoning. Replace API calls with local inference for near-zero cost paper trading. Supported by `rig-core` (Rust) and `langchain` (Python) via Ollama.
