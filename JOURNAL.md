@@ -154,6 +154,21 @@ The following papers address gaps in the original literature review, covering mu
 - **Core Concept:** Survey of 250+ papers. Key finding: hybrid methods (LSTM-DQN, CNN-PPO, Attention-DDPG) outperform pure RL by 15-20%.
 - **Utility:** Validates quantbot's hybrid architecture. Maps which RL algorithms work best per trading task (execution, allocation, market making).
 
+### R. Geometric Algebra for Neural Feature Interaction
+**Paper:** *CliffordNet: All You Need is Geometric Algebra* (Ji - Feb 2026)
+**Link:** [arXiv:2601.06793v2](https://arxiv.org/abs/2601.06793v2)
+- **Core Concept:** Replaces the standard spatial mixer + FFN block with a single Geometric Product (uv = u·v + u∧v). The inner product captures feature coherence; the wedge product captures structural variation via oriented bivectors. Eliminates FFN layers entirely while matching or exceeding standard architectures on CIFAR-100.
+- **Key Mechanism — Sparse Rolling Interaction:** Approximates the full geometric product via cyclic channel shifts at exponential offsets {1, 2, 4, 8, 16}, yielding O(N·D) complexity. For financial time series, these shifts could map directly to trading timescales (daily, weekly, monthly, quarterly).
+- **Financial Relevance — Clifford TSMOM:**
+  - Standard TSMOM computes scalar momentum: `price_now / price_lookback - 1`
+  - Clifford TSMOM would compute the full geometric product between multi-feature vectors (price, volume, volatility) at different timepoints
+  - The **inner product** captures trend continuation (feature coherence over time)
+  - The **wedge product** captures regime changes — markets still rising but with fundamentally different volatility structure (pre-crash divergence)
+  - The wedge product is **anti-symmetric** (u∧v = −v∧u), meaning trend reversals produce sign flips — a natural momentum reversal detector
+  - Differential mode (working with returns instead of prices) maps directly to the paper's best-performing variant
+- **Limitations:** Only validated on CIFAR-100 (32×32 images). No ImageNet, no time series, no financial benchmarks. Single author, no peer review. Outdated baselines. Novel theory but immature validation (7/10 novelty, 4/10 empirical maturity).
+- **Utility:** Research direction for Phase 5. A Clifford-enhanced signal generator could detect regime changes that scalar momentum misses. Worth exploring once the core system is stable — potentially a novel publishable contribution if it outperforms standard TSMOM on regime change detection.
+
 ### Phase Relevance Map
 
 | QuantBot Phase | Most Relevant Papers |
@@ -161,7 +176,7 @@ The following papers address gaps in the original literature review, covering mu
 | Phase 2 (LangGraph + LLM agents) | TradingAgents (H), StockAgent (I), MarketSenseAI (N), FinAgent (L) |
 | Phase 3 (Paper trading + dashboard) | FinRobot (M) |
 | Phase 4 (Rust port) | MambaStock (P) — simpler architecture for Rust |
-| Phase 5 (Extensions) | Chronos (O), Fin-R1 (K), QuantAgent-HKUST (J) |
+| Phase 5 (Extensions) | Chronos (O), Fin-R1 (K), QuantAgent-HKUST (J), CliffordNet (R) |
 | General reference | RL survey (Q) |
 
 ---
@@ -215,7 +230,7 @@ Triangulating across traditional stats, enterprise machine learning, and modern 
 - Yang, H., Liu, X. Y., & Wang, C. D. (2023). "FinGPT: Open-Source Financial Large Language Models." *arXiv preprint arXiv:2306.06031*.
 - Yu, B., et al. (2023). "FinMem: A Performance-Enhanced LLM Trading Agent with Layered Memory and Character Design." *arXiv preprint arXiv:2311.13743*.
 
-### 2024–2025 Update
+### 2024–2026 Update
 - Ansari, A. F., et al. (2024). "Chronos: Learning the Language of Time Series." *arXiv preprint arXiv:2403.07815*.
 - Fatouros, G., et al. (2024). "Can Large Language Models Beat Wall Street? Unveiling the Potential of AI in Stock Selection." *arXiv preprint arXiv:2401.03737*.
 - Liu, Z., et al. (2025). "Fin-R1: Financial Reasoning through Reinforcement Learning." *arXiv preprint arXiv:2503.16252*.
@@ -225,4 +240,5 @@ Triangulating across traditional stats, enterprise machine learning, and modern 
 - Yang, H., et al. (2024). "FinRobot: An Open-Source AI Agent Platform for Financial Applications using Large Language Models." *arXiv preprint arXiv:2405.14767*.
 - Zhang, C., et al. (2024). "StockAgent: LLM-based Stock Trading in Simulated Real-world Environments." *arXiv preprint arXiv:2407.18957*.
 - Zhang, W., et al. (2024). "FinAgent: A Multimodal Foundation Agent for Financial Trading." *arXiv preprint arXiv:2402.18485*.
+- Ji, Z. (2026). "CliffordNet: All You Need is Geometric Algebra." *arXiv preprint arXiv:2601.06793v2*.
 - (2024). "Reinforcement Learning in Financial Decision Making: A Systematic Review." *arXiv preprint arXiv:2411.07585*.

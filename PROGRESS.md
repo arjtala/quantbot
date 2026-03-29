@@ -213,6 +213,7 @@ let decision = combiner.combine(vec![tsmom, indicator, pattern, trend]);
 - [ ] Cross-sectional momentum, mean reversion, carry agents
 - [ ] **Chronos Agent** *(JOURNAL.md §O)* — Zero-shot time series forecasting via Amazon's Chronos foundation model. Tokenizes price series into probabilistic forecasts. Especially valuable for new instruments lacking TSMOM lookback history.
 - [ ] **AlphaGen Agent** *(JOURNAL.md §F, §J)* — Self-improving alpha discovery loop. LLM generates mathematical factor code, runs it through `BacktestEngine`, evaluates Sharpe, iteratively refines. Promotes winners to production.
+- [ ] **Clifford TSMOM** *(JOURNAL.md §R)* — Geometric algebra-enhanced momentum. Replace scalar momentum (`price_now/price_lookback - 1`) with the full geometric product between multi-feature vectors (price, volume, volatility). Inner product captures trend continuation; wedge product (bivector) captures regime changes via structural variation. Anti-symmetric wedge means trend reversals produce sign flips — a natural reversal detector. Sparse rolling shifts at {1, 5, 21, 63} days map to daily/weekly/monthly/quarterly timescales. Research direction — potentially publishable if it outperforms standard TSMOM on regime change detection.
 
 ### Risk & Sizing
 - [ ] Correlation-aware sizing, drawdown deleveraging
