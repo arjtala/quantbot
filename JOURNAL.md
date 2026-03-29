@@ -168,17 +168,35 @@ The following papers address gaps in the original literature review, covering mu
 
 ## 6. Architectural Blueprint for `quantbot`
 
-Triangulating across traditional stats, enterprise machine learning, and modern LLM agents suggests a comprehensive, four-layer architecture for `quantbot`:
+Triangulating across traditional stats, enterprise machine learning, and modern LLM agents — now updated with 2024–2025 research — suggests a comprehensive, five-layer architecture for `quantbot`:
 
-1. **The Fast Execution Layer (Math/Stat-Arb & FinRL):** 
-   - Implement fixed *101 Formulaic Alphas* for high-speed, intraday mean-reversion.
-   - Use Reinforcement Learning (*FinRL*) purely for execution scheduling and optimal portfolio sizing.
-2. **The Medium Forecasting Layer (Deep Learning via Qlib):** 
-   - Implement LSTMs and LightGBM (*Gu et al., Lim et al.*) on daily/hourly data to capture multi-week macro trends and non-linear patterns.
-3. **The Generative Alpha Layer (AlphaGPT Loop):** 
-   - An asynchronous LLM multi-agent loop that continually writes, backtests, and validates new numpy-based mathematical alpha formulas, promoting successful ones to the Fast Execution layer.
-4. **The Slow Risk & Reflection Layer (LLM with FinMem):** 
-   - A reflective agent that ingests raw macroeconomic news (*Lopez-Lira*), acts as a fundamental risk kill-switch, and maintains a ledger of past agent decisions to continuously prompt and tune the other layers.
+### Layer 1: Fast Execution (Math/Stat-Arb)
+- Implement fixed *101 Formulaic Alphas* (B) for high-speed, intraday mean-reversion.
+- Use Reinforcement Learning (*FinRL*) purely for execution scheduling and optimal portfolio sizing.
+- **Updated:** RL survey (Q) shows hybrid methods (LSTM-DQN, CNN-PPO) outperform pure RL by 15-20%. Use hybrid architecture, not pure DRL.
+
+### Layer 2: Medium Forecasting (Deep Learning + Foundation Models)
+- Implement LSTMs and LightGBM (*Gu et al.* (C), *Lim et al.* (A)) on daily/hourly data to capture multi-week macro trends and non-linear patterns.
+- **New — Chronos zero-shot forecasting (O):** Replace per-asset trained models with Amazon's Chronos foundation model for zero-shot time series prediction. Especially valuable for new instruments lacking training history.
+- **New — MambaStock state space models (P):** Mamba's linear complexity (vs. transformer's quadratic) makes it amenable to Rust implementation. Consider hybrid TFT-Mamba for 10%+ forecast improvement.
+
+### Layer 3: Agentic Signal Generation (Multi-Agent LLM)
+- Fan-out/fan-in multi-agent architecture: TSMOM (quant), Indicator, Pattern, Trend agents run in parallel, merge at Decision node.
+- **New — Bull/bear debate (H):** Extend the Decision node with bull and bear advocate agents that argue opposing positions (*TradingAgents*). Risk manager adjudicates. Better conflict resolution than pure numeric signal averaging.
+- **New — Agent behavioral diversity (I):** Assign agents different risk personas (conservative, aggressive, trend-following) per *StockAgent*. Weight in `SignalCombiner` should account for persona type, not just signal confidence.
+- **New — Chain-of-thought prompting (N):** All LLM agents use structured CoT reasoning per *MarketSenseAI* (72.3% directional accuracy). Prompt template: identify signal → assess strength → consider contradicting evidence → state confidence → conclude.
+- **New — Multimodal tool use (L):** Per *FinAgent*, Pattern and Trend agents should process both text and visual data (candlestick charts) and be able to call external tools (code execution, data APIs).
+- **New — Local inference via Fin-R1 (K):** 7B model matching GPT-4 on financial reasoning. Run via Ollama for near-zero cost paper trading. Supported by both `langchain` (Python) and `rig-core` (Rust).
+
+### Layer 4: Generative Alpha Discovery (AlphaGPT + Self-Improvement)
+- An asynchronous LLM multi-agent loop that continually writes, backtests, and validates mathematical alpha formulas, promoting successful ones to the Fast Execution layer.
+- **Updated — Validated by QuantAgent-HKUST (J):** Concrete implementation showing LLM generates factors, backtests them, evaluates results, and iteratively refines. Confirms *AlphaGPT* (F) concept works in practice.
+
+### Layer 5: Risk, Reflection & Memory
+- A reflective agent that ingests raw macroeconomic news (*Lopez-Lira* (D)), acts as a fundamental risk kill-switch.
+- **New — SQLite-backed layered memory (G):** Per *FinMem*, maintain a decision ledger in SQLite (`~/.quantbot/memory.db`) with tables: `signal_log` (every signal), `decision_log` (combiner outputs + actual P&L), `agent_memory` (condensed lessons injected into LLM prompts). SQLite chosen for ACID transactions during live trading, SQL queryability, zero config, and clean migration to Postgres/`rusqlite` for Rust port.
+- **New — RL-based dynamic agent weighting (Q):** Replace fixed `SignalCombiner` weights with a bandit/PPO agent that learns optimal weights per market regime. RL survey shows 15-20% improvement over static methods.
+- **New — Architecture patterns from FinRobot (M):** Leverage data adapter and agent orchestration patterns for the paper trading + dashboard layer.
 
 ---
 
