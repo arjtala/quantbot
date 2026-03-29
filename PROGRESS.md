@@ -97,14 +97,30 @@
 - [x] `quantbot/eval/backtest_llm.py` — Run agents on historical data, measure directional accuracy
 - [x] `quantbot/eval/agent_ablation.py` — Compare agent combinations, measure marginal contribution
 
-### Validation
+### Validation — Functional (Complete)
 - [x] Run full graph on SPY — all agents produce signals, combiner output is reasonable
   - TSMOM: LONG (s=+0.50, c=0.75) | Indicator: LONG (s=+0.40, c=0.60) | Pattern: SHORT (s=-0.80, c=0.80)
   - Combined: LONG (s=+0.23, c=0.72) — correctly handled conflicting signals via weighted ensemble
   - All running on local Ollama models (qwen3:14b text, qwen3-vl vision) — no API keys needed
   - SQLite memory logged all signals + decision with outcome tracking
-- [ ] Compare TSMOM-only vs TSMOM+LLM Sharpe on held-out data
-- [ ] Target: 70%+ directional accuracy for LLM agents (MarketSenseAI achieved 72.3%)
+
+### Validation — Alpha (Pre-Phase 3 Gate)
+
+Round 1 experiments must pass before committing to Rust rewrite. If LLM agents don't meaningfully improve Sharpe over plain TSMOM, rethink the architecture.
+
+**Round 1 — Go/No-Go for Phase 3**
+- [ ] **TSMOM-only vs TSMOM+LLM Sharpe comparison** — THE critical experiment. Run both on held-out data (2023-2025), compare Sharpe, return, drawdown. If LLM adds <0.1 Sharpe, architecture needs rethinking.
+- [ ] **Agent ablation study** — Run `eval/agent_ablation.py`. Which agents contribute? If Pattern agent adds nothing, don't port it to Rust. Measure marginal Sharpe contribution of each.
+- [ ] **Multi-instrument validation** — Run full graph on BTC-USD, ES=F, GC=F (not just SPY). Crypto and commodities behave very differently from equities.
+- [ ] **Directional accuracy** — Run `eval/backtest_llm.py` on each LLM agent. Target: 70%+ (MarketSenseAI achieved 72.3%).
+
+**Round 2 — Optimization (if Round 1 passes)**
+- [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner? Justify the 2 extra LLM calls per decision.
+- [ ] **Memory effectiveness** — Run 50+ sequential decisions on one instrument. Does SQLite memory injection improve win rate vs memoryless? If not, simplify before porting.
+- [ ] **Model quality comparison** — Same eval with GPT-4o / Claude Sonnet vs local Ollama. Quantify the quality gap to know if local backtest results reflect production.
+- [ ] **Prompt sensitivity analysis** — Tweak prompts (reorder CoT steps, change wording), re-run eval. If results swing wildly, prompts are fragile and need hardening.
+- [ ] **Latency profiling** — End-to-end time for one full graph execution. Matters for IBKR live trading — if 30+ seconds, can't react to fast markets.
+- [ ] **Cost per decision** — Actual token usage × pricing for one full cycle. Project monthly bill at scale (multiple instruments, daily).
 
 ---
 
