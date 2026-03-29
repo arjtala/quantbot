@@ -91,7 +91,7 @@ See [PROGRESS.md](PROGRESS.md) for detailed status.
 |-------|-------------|--------|
 | 1 | Quant Core — TSMOM agent + backtest engine (Python) | Done |
 | 2 | LLM agents — LangGraph, debate, memory, eval (Python prototype) | Done |
-| 3 | Rust rewrite + IBKR execution — polars, rig-core, tokio, ibapi ([details](PROGRESS.md#phase-3-rust-rewrite--ibkr-execution)) | Planned |
+| 3 | Rust rewrite + IG execution — polars, rig-core, tokio, ig_trading_api ([details](PROGRESS.md#phase-3-rust-rewrite--ig-trading-execution)) | Planned |
 | 4 | Extensions — Chronos, AlphaGen, Clifford TSMOM, RL weights | Planned |
 
 ## Testing

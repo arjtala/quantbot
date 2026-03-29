@@ -170,45 +170,54 @@ Also available: Claude API (no GPU needed) — Opus/Sonnet for highest quality b
 - [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner? Justify the 2 extra LLM calls per decision.
 - [ ] **Memory effectiveness** — Run 50+ sequential decisions on one instrument. Does SQLite memory injection improve win rate vs memoryless? If not, simplify before porting.
 - [ ] **Prompt sensitivity analysis** — Tweak prompts (reorder CoT steps, change wording), re-run eval. If results swing wildly, prompts are fragile and need hardening.
-- [ ] **Latency profiling** — End-to-end time for one full graph execution. Matters for IBKR live trading — if 30+ seconds, can't react to fast markets.
+- [ ] **Latency profiling** — End-to-end time for one full graph execution. Matters for IG live trading — if 30+ seconds, can't react to fast markets.
 - [ ] **Cost per decision** — Actual token usage × pricing for one full cycle. Project monthly bill at scale (multiple instruments, daily).
 
 ---
 
-## Phase 3: Rust Rewrite + IBKR Execution
-> **Status: Not started** | Full Rust implementation with live IBKR trading
+## Phase 3: Rust Rewrite + IG Trading Execution
+> **Status: Not started** | Full Rust implementation with IG spread betting (tax-free in UK)
 
-Merges the previous Phase 3 (paper trading), Phase 4 (Rust port), and adds IBKR execution. Single Rust binary: `tokio` for async, `rig-core` for LLM, `ibapi` for execution, `polars` for data, `rusqlite` for memory.
+Single Rust binary: `tokio` for async, `rig-core` for LLM, `ig_trading_api` for execution, `polars` for data, `rusqlite` for memory. IG demo account ready (Z69YJL, £10K paper).
+
+### Why IG Over IBKR
+- **Tax-free profits** via spread betting (UK: no CGT, no stamp duty)
+- **Rust crate** `ig_trading_api` v0.3.0 — REST + Lightstreamer streaming, async/Tokio
+- **Demo account** identical to live API — zero-risk paper trading
+- **19,500+ markets** — indices, forex, commodities, stocks, crypto
+- **Demo→Live = one config change** (just the base URL)
+- IBKR can be added later via same `ExecutionEngine` trait if needed for DMA/options
 
 ### Crate Ecosystem
 
 | Dependency | Crate | Purpose |
 |---|---|---|
-| Async runtime | `tokio` | Fan-out parallelism, IBKR streaming |
+| Async runtime | `tokio` | Fan-out parallelism, streaming |
 | DataFrames | `polars` | OHLCV data, feature computation |
 | Numeric | `ndarray` | Volatility, rolling stats |
-| LLM client | `rig-core` | OpenAI, Anthropic, Ollama |
-| IBKR API | `ibapi` | TWS connection, orders, market data |
+| LLM client | `rig-core` | OpenAI, Anthropic, Ollama, SGLang |
+| **IG Trading** | **`ig_trading_api`** | **REST + Lightstreamer, orders, market data** |
 | Technical analysis | `ta` | RSI, MACD, Bollinger, EMA |
 | Database | `rusqlite` | Agent memory, decision logs, order logs |
 | Charting | `plotters` | Candlestick charts for vision agents |
 | CLI | `clap` | CLI interface |
-| Config | `config` | Layered config from TOML + env |
-| HTTP | `reqwest` | IBKR Client Portal REST fallback |
+| Config | `config` + `dotenvy` | Layered config from TOML + env |
+| HTTP | `reqwest` | Custom REST calls if needed |
 | Logging | `tracing` | Structured logging |
 | Errors | `anyhow` + `thiserror` | Application + library errors |
 | Serialization | `serde` + `serde_json` | Config, signals, prompts |
+| Async trait | `async-trait` | For ExecutionEngine trait |
 
 ### Phase 3a: Core Infrastructure (Week 1-2)
 - [ ] Scaffold `Cargo.toml` with all dependencies
 - [ ] `src/core/signal.rs` — Signal struct + Direction enum
 - [ ] `src/core/portfolio.rs` — Position, Order, Fill, AccountSummary
 - [ ] `src/core/bar.rs` — OHLCV DataFrame wrapper (polars)
-- [ ] `src/config.rs` — Layered config from TOML + env vars
+- [ ] `src/config.rs` — Layered config from TOML + env vars (IG credentials, LLM models)
 - [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
 - [ ] `src/agents/traits.rs` — `SignalAgent` trait + `PromptLoader`
-- [ ] `src/data/yahoo.rs` — Yahoo Finance fetcher
-- [ ] `src/data/universe.rs` — Instrument definitions
+- [ ] `src/data/yahoo.rs` — Yahoo Finance fetcher (backtest data)
+- [ ] `src/data/universe.rs` — Instrument definitions + IG epic mapping
 
 ### Phase 3b: Signal Agents (Week 2-3)
 - [ ] `src/agents/tsmom/` — TSMOM agent + EWMA volatility (pure Rust, no LLM)
@@ -218,46 +227,57 @@ Merges the previous Phase 3 (paper trading), Phase 4 (Rust port), and adds IBKR 
 - [ ] `prompts/` — All prompt templates (ported from Python)
 
 ### Phase 3c: Decision Layer (Week 3-4)
-- [ ] `src/agents/debate/` — Bull/bear advocates + moderator
+- [ ] `src/agents/debate/` — Bull/bear advocates + moderator (compare with TradingAgents repo implementation)
 - [ ] `src/agents/decision/` — Signal combiner + decision agent
-- [ ] `src/agents/risk/` — Position sizing, drawdown limits, veto authority
+- [ ] `src/agents/risk/` — Position sizing, drawdown limits, veto authority, **circuit breaker** (from nofx pattern)
 - [ ] `src/graph/` — Fan-out/fan-in via `tokio::join!` (no framework needed)
 
 ### Phase 3d: Execution Layer (Week 4-5)
-- [ ] `src/execution/traits.rs` — `ExecutionEngine` trait (submit_order, positions, account_summary, fill_stream)
+- [ ] `src/execution/traits.rs` — `ExecutionEngine` trait (submit_order, close_position, positions, account_summary, fill_stream)
 - [ ] `src/execution/paper.rs` — Local paper simulation
-- [ ] `src/execution/ibkr.rs` — IBKR via `ibapi` (paper port 4002, live port 4001)
+- [ ] `src/execution/ig/` — IG via `ig_trading_api` (demo: `demo-api.ig.com`, live: `api.ig.com`)
+- [ ] `src/execution/ig/auth.rs` — Session management (CST + X-SECURITY-TOKEN), auto-refresh
+- [ ] `src/execution/ig/orders.rs` — Open/close spread bet positions, working orders
+- [ ] `src/execution/ig/streaming.rs` — Lightstreamer for real-time prices + fill confirmations
+- [ ] `src/execution/ig/epics.rs` — Instrument → IG epic code mapping
+- [ ] `src/execution/ig/rate_limiter.rs` — 15 trades/min, 60 data/min
 - [ ] `src/execution/recording.rs` — Wraps any engine, logs all orders/fills to SQLite
-- [ ] `src/data/ibkr_feed.rs` — IBKR real-time + historical market data
+- [ ] `src/data/ig_feed.rs` — IG historical prices + real-time streaming as DataProvider
 
 ### Phase 3e: Evaluation + CLI (Week 5-6)
 - [ ] `src/eval/backtest_llm.rs` — Historical agent evaluation
 - [ ] `src/eval/agent_ablation.rs` — Per-agent contribution analysis
 - [ ] `src/eval/metrics.rs` — Sharpe, Sortino, Calmar, directional accuracy
 - [ ] `src/main.rs` — CLI via `clap` (backtest, paper-trade, live-trade modes)
-- [ ] Integration tests: paper trading round-trip, full graph signal → order flow
+- [ ] Integration tests: IG demo paper trading round-trip, full graph signal → order → fill
+- [ ] Benchmark against ai-hedge-fund (49.6K ★) Sharpe ratios
 
 ### Key Design Decisions
 
-**Graph orchestration:** `tokio::join!` for parallel fan-out, no framework needed:
-```rust
-let signals: Vec<Signal> = {
-    let futures: Vec<_> = agents.iter().map(|a| a.generate_signal(bars, memory)).collect();
-    futures::future::join_all(futures).await.into_iter().filter_map(|r| r.ok()).collect()
-};
-```
+**Graph orchestration:** `tokio::join!` for parallel fan-out, no framework needed.
 
-**Execution engine trait:** Same interface for paper/IBKR/recording — switch via config:
+**Execution engine trait:** Same interface for paper/IG/IBKR — switch via config:
 ```toml
 [execution]
-engine = "paper"   # or "ibkr" or "recording"
-[execution.ibkr]
-port = 4002        # 4002=paper, 4001=live — one config change
+engine = "ig"      # "paper", "ig", or "ibkr"
+[execution.ig]
+environment = "DEMO"    # "DEMO" or "LIVE" — one config change
+account_id = "Z69YJL"
 ```
+
+**Circuit breaker** *(from nofx repo)*: Auto-flatten positions and disable trading after 3 consecutive failures. Cooldown period, graceful degradation to TSMOM-only, drawdown breaker, model health monitoring.
 
 **Recording engine:** Decorator pattern wrapping any engine + logging to SQLite. All paper/live trades get full audit trail.
 
-**Cost control:** Prompts loaded from `.md` files at runtime (no recompile). Per-agent model selection in config. Use Haiku/mini for backtesting, Opus for live.
+**Cost control:** Prompts loaded from `.md` files at runtime (no recompile). Per-agent model selection in config.
+
+### Competitive Benchmarks (from trending repos)
+
+| Repo | Stars | Use |
+|------|-------|-----|
+| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | Study debate pipeline, inform moderator.rs |
+| [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) | 49.6K | Benchmark Sharpe, compare prompt templates |
+| [nofx](https://github.com/NoFxAiOS/nofx) | 11.2K | Circuit breaker / safe mode pattern for risk module |
 
 ### Rust Graph Framework Research (Previous)
 
@@ -285,7 +305,11 @@ port = 4002        # 4002=paper, 4001=live — one config change
 - [ ] Correlation-aware sizing, drawdown deleveraging
 - [ ] **RL-based dynamic agent weighting** *(JOURNAL.md §Q)* — Replace fixed `SignalCombiner` weights with a bandit/PPO agent that learns optimal agent weights per market regime. RL survey shows hybrid methods outperform by 15-20%.
 
+### Alternative Signal Sources
+- [ ] **PredictionMarketAgent** — Polymarket/Kalshi probability estimates as macro sentiment signal. Use [prediction-market-analysis](https://github.com/Jon-Becker/prediction-market-analysis) dataset (36GB) for backtesting. Execution via [pmxt](https://github.com/pmxt-dev/pmxt) if trading prediction markets directly.
+
 ### Infrastructure
 - [ ] CCXT crypto provider
-- [ ] Alerting (Slack/email)
+- [ ] IBKR execution engine — re-add via same `ExecutionEngine` trait for DMA/options/futures if needed
+- [ ] Alerting (Slack/Telegram/email)
 - [ ] **Local Fin-R1 model via Ollama** *(JOURNAL.md §K)* — 7B model matching GPT-4 on financial reasoning. Replace API calls with local inference for near-zero cost paper trading. Supported by `rig-core` (Rust) and `langchain` (Python) via Ollama.
