@@ -108,11 +108,39 @@
 
 Round 1 experiments must pass before committing to Rust rewrite. If LLM agents don't meaningfully improve Sharpe over plain TSMOM, rethink the architecture.
 
-**Round 1 — Go/No-Go for Phase 3**
-- [ ] **TSMOM-only vs TSMOM+LLM Sharpe comparison** — THE critical experiment. Run both on held-out data (2023-2025), compare Sharpe, return, drawdown. If LLM adds <0.1 Sharpe, architecture needs rethinking.
-- [ ] **Agent ablation study** — Run `eval/agent_ablation.py`. Which agents contribute? If Pattern agent adds nothing, don't port it to Rust. Measure marginal Sharpe contribution of each.
-- [ ] **Multi-instrument validation** — Run full graph on BTC-USD, ES=F, GC=F (not just SPY). Crypto and commodities behave very differently from equities.
-- [ ] **Directional accuracy** — Run `eval/backtest_llm.py` on each LLM agent. Target: 70%+ (MarketSenseAI achieved 72.3%).
+**Round 1 — Go/No-Go for Phase 3** *(Completed 2026-03-29, 240 LLM calls, 339 min on local Ollama qwen3:14b)*
+
+- [x] **TSMOM-only vs TSMOM+LLM Sharpe comparison**
+- [x] **Multi-instrument validation** — SPY, BTC-USD, ES=F, GC=F (60 days each)
+- [x] **Directional accuracy** — Measured per agent
+
+**Results (60-day eval, Oct-Dec 2024):**
+
+| | TSMOM-only | Indicator-only | TSMOM+Indicator |
+|---|---|---|---|
+| Accuracy | 54.9% | 51.0% | 55.9% |
+| Sharpe | 1.37 | 0.05 | 1.44 |
+| Ann. Return | 36.0% | 1.0% | 37.8% |
+| Max DD | -36.8% | -13.6% | -36.8% |
+
+**Per-instrument:**
+- SPY: Indicator slightly improved accuracy (57.9%→59.3%), Sharpe 0.93→0.94
+- BTC-USD: No difference — TSMOM dominates, Indicator FLAT 57% of the time
+- ES=F: Indicator harmful standalone (Sharpe -3.51), but TSMOM weight overrode it
+- GC=F: Indicator helped on worst instrument — accuracy 54.5%→57.9%
+
+**Verdict: MARGINAL (+0.07 Sharpe delta)**
+- TSMOM is doing the heavy lifting (Sharpe 1.37 standalone)
+- Indicator agent goes FLAT 30-57% of the time, reducing influence
+- When Indicator takes a position, accuracy is barely above coin flip (51%)
+- Combiner's 0.50/0.20 weighting correctly protects TSMOM from bad LLM signals
+- Directional accuracy 51% is far below the 70% MarketSenseAI target
+
+**Implications for Phase 3:**
+- TSMOM port to Rust is clearly worth it (Sharpe 1.37 → 50-100x backtest speedup)
+- LLM Indicator agent in current form does not justify the complexity/cost of porting
+- Before porting LLM agents: try better models (GPT-4o/Claude), better prompts, or different agent types (Pattern/Trend vision agents may add more value than text-only Indicator)
+- [ ] **Agent ablation study** — Still needed: test Pattern and Trend agents (vision) separately. They may capture different alpha than text-based indicators.
 
 **Round 2 — Optimization (if Round 1 passes)**
 - [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner? Justify the 2 extra LLM calls per decision.
