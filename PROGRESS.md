@@ -176,119 +176,131 @@ Also available: Claude API (no GPU needed) — Opus/Sonnet for highest quality b
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: Not started** | Full Rust implementation with IG spread betting (tax-free in UK)
+> **Status: Not started** | Parallel tracks — proven alpha ships immediately, LLM agents gated on model eval
 
-Single Rust binary: `tokio` for async, `rig-core` for LLM, `ig_trading_api` for execution, `polars` for data, `rusqlite` for memory. IG demo account ready (Z69YJL, £10K paper).
+### Strategy: Parallel Tracks with Go/No-Go Gates
+
+Based on Round 1 results (TSMOM Sharpe 1.37 vs LLM +0.07 marginal), Phase 3 splits into parallel tracks:
+
+- **Track A** (unconditional): Port TSMOM + IG execution to Rust. Ships proven alpha.
+- **Track B** (conditional): Port LLM agents IF model upgrade eval shows ≥ 0.20 Sharpe delta.
+- **Track C** (fallback): If LLM agents remain marginal, invest in new quant signal sources instead.
 
 ### Why IG Over IBKR
 - **Tax-free profits** via spread betting (UK: no CGT, no stamp duty)
 - **Rust crate** `ig_trading_api` v0.3.0 — REST + Lightstreamer streaming, async/Tokio
-- **Demo account** identical to live API — zero-risk paper trading
-- **19,500+ markets** — indices, forex, commodities, stocks, crypto
+- **Demo account** ready (Z69YJL, £10K paper), identical API to live
 - **Demo→Live = one config change** (just the base URL)
-- IBKR can be added later via same `ExecutionEngine` trait if needed for DMA/options
+- IBKR can be added later via same `ExecutionEngine` trait if needed
+
+### Track A — Proven Alpha (Weeks 1-3) — START IMMEDIATELY
+
+| Week | Deliverable |
+|---|---|
+| **1** | Core types (signal, portfolio, bar) + config + SQLite memory + `Cargo.toml` |
+| **1** | Data layer: Yahoo via `yahoo_finance_api` + polars DataFrame wrapper + IG epic mapping |
+| **2** | TSMOM agent + EWMA volatility (pure Rust, ndarray) |
+| **2** | Backtest engine + metrics (Sharpe, Sortino, Calmar, equity curve) — validate matches Python Sharpe 1.37 |
+| **3** | IG execution engine (`ig_trading_api`) + Paper engine + Recording engine |
+| **3** | Risk manager + circuit breaker + CLI via `clap` (backtest, paper-trade modes) |
+
+Track A checklist:
+- [ ] `Cargo.toml` — Track A deps (tokio, polars, ndarray, rusqlite, ig_trading_api, yahoo_finance_api, clap, config, serde, tracing, anyhow/thiserror, chrono, async-trait)
+- [ ] `src/core/signal.rs` — Signal struct + Direction enum
+- [ ] `src/core/portfolio.rs` — Position, Order, Fill, AccountSummary
+- [ ] `src/core/bar.rs` — OHLCV polars DataFrame wrapper
+- [ ] `src/config.rs` — Layered config (TOML + env), IG credentials, model selection
+- [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
+- [ ] `src/data/yahoo.rs` — Yahoo Finance fetcher
+- [ ] `src/data/universe.rs` — Instrument definitions + IG epic mapping
+- [ ] `src/data/ig_feed.rs` — IG historical prices + Lightstreamer streaming
+- [ ] `src/agents/traits.rs` — `SignalAgent` trait
+- [ ] `src/agents/tsmom/agent.rs` — Multi-lookback momentum
+- [ ] `src/agents/tsmom/volatility.rs` — EWMA vol (ndarray)
+- [ ] `src/backtest/engine.rs` — Event-driven backtest, next-open execution
+- [ ] `src/backtest/metrics.rs` — Sharpe, Sortino, Calmar, max DD, equity curve
+- [ ] `src/execution/traits.rs` — `ExecutionEngine` trait
+- [ ] `src/execution/paper.rs` — Local paper simulation
+- [ ] `src/execution/ig/` — IG REST API (auth, orders, streaming, epics, rate_limiter)
+- [ ] `src/execution/recording.rs` — Decorator: logs all orders/fills to SQLite
+- [ ] `src/risk/agent.rs` — Position sizing, drawdown limits, veto authority
+- [ ] `src/risk/circuit_breaker.rs` — Auto-flatten after 3 failures, daily loss limit, graceful degradation to TSMOM-only
+- [ ] `src/main.rs` — CLI (backtest, paper-trade, live-trade modes)
+- [ ] Integration tests: IG demo round-trip, backtest Sharpe matches Python 1.37
+
+### Track B — LLM Agents (Weeks 3-5) — CONDITIONAL
+
+**Gate:** Only start after Round 1b model eval confirms ≥ 0.20 Sharpe delta and ≥ 58% standalone accuracy.
+
+- [ ] `rig-core` LLM client (OpenAI/Anthropic/Ollama/SGLang routing)
+- [ ] `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
+- [ ] `src/agents/indicator/` — `ta` crate computations → LLM interpretation
+- [ ] `src/agents/pattern/` — `plotters` candlestick charts → vision LLM
+- [ ] `src/agents/trend/` — Trendline fitting + S/R → vision LLM
+- [ ] `src/agents/debate/` — Bull/bear advocates + moderator
+- [ ] `src/agents/decision/` — Signal combiner + decision agent
+- [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in
+- [ ] `src/eval/` — Backtest LLM + agent ablation (Rust port)
+- [ ] `prompts/` — All .md templates (ported from Python)
+- [ ] Benchmark against [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) (49.6K ★) Sharpe
+
+### Track C — Alternative Signals (Weeks 5-8) — IF TRACK B FAILS
+
+If LLM agents remain marginal even with better models:
+
+| Signal Source | Approach | Expected Value |
+|---|---|---|
+| Cross-sectional momentum | Pure Rust (polars) — rank by relative strength | Diversification with TSMOM |
+| Mean reversion | Bollinger/z-score based | Complements TSMOM on range-bound instruments |
+| Chronos | Zero-shot time series via ONNX | Works without lookback history |
+| Carry | Futures roll yield, rate differentials | Uncorrelated with momentum |
+| Prediction markets | Polymarket/Kalshi sentiment | Macro risk overlay |
 
 ### Crate Ecosystem
 
-| Dependency | Crate | Purpose |
-|---|---|---|
-| Async runtime | `tokio` | Fan-out parallelism, streaming |
-| DataFrames | `polars` | OHLCV data, feature computation |
-| Numeric | `ndarray` | Volatility, rolling stats |
-| LLM client | `rig-core` | OpenAI, Anthropic, Ollama, SGLang |
-| **IG Trading** | **`ig_trading_api`** | **REST + Lightstreamer, orders, market data** |
-| Technical analysis | `ta` | RSI, MACD, Bollinger, EMA |
-| Database | `rusqlite` | Agent memory, decision logs, order logs |
-| Charting | `plotters` | Candlestick charts for vision agents |
-| CLI | `clap` | CLI interface |
-| Config | `config` + `dotenvy` | Layered config from TOML + env |
-| HTTP | `reqwest` | Custom REST calls if needed |
-| Logging | `tracing` | Structured logging |
-| Errors | `anyhow` + `thiserror` | Application + library errors |
-| Serialization | `serde` + `serde_json` | Config, signals, prompts |
-| Async trait | `async-trait` | For ExecutionEngine trait |
-
-### Phase 3a: Core Infrastructure (Week 1-2)
-- [ ] Scaffold `Cargo.toml` with all dependencies
-- [ ] `src/core/signal.rs` — Signal struct + Direction enum
-- [ ] `src/core/portfolio.rs` — Position, Order, Fill, AccountSummary
-- [ ] `src/core/bar.rs` — OHLCV DataFrame wrapper (polars)
-- [ ] `src/config.rs` — Layered config from TOML + env vars (IG credentials, LLM models)
-- [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
-- [ ] `src/agents/traits.rs` — `SignalAgent` trait + `PromptLoader`
-- [ ] `src/data/yahoo.rs` — Yahoo Finance fetcher (backtest data)
-- [ ] `src/data/universe.rs` — Instrument definitions + IG epic mapping
-
-### Phase 3b: Signal Agents (Week 2-3)
-- [ ] `src/agents/tsmom/` — TSMOM agent + EWMA volatility (pure Rust, no LLM)
-- [ ] `src/agents/indicator/` — TA computations via `ta` crate → LLM interpretation
-- [ ] `src/agents/pattern/` — Chart rendering via `plotters` → vision LLM
-- [ ] `src/agents/trend/` — Trendline fitting + S/R detection → LLM
-- [ ] `prompts/` — All prompt templates (ported from Python)
-
-### Phase 3c: Decision Layer (Week 3-4)
-- [ ] `src/agents/debate/` — Bull/bear advocates + moderator (compare with TradingAgents repo implementation)
-- [ ] `src/agents/decision/` — Signal combiner + decision agent
-- [ ] `src/agents/risk/` — Position sizing, drawdown limits, veto authority, **circuit breaker** (from nofx pattern)
-- [ ] `src/graph/` — Fan-out/fan-in via `tokio::join!` (no framework needed)
-
-### Phase 3d: Execution Layer (Week 4-5)
-- [ ] `src/execution/traits.rs` — `ExecutionEngine` trait (submit_order, close_position, positions, account_summary, fill_stream)
-- [ ] `src/execution/paper.rs` — Local paper simulation
-- [ ] `src/execution/ig/` — IG via `ig_trading_api` (demo: `demo-api.ig.com`, live: `api.ig.com`)
-- [ ] `src/execution/ig/auth.rs` — Session management (CST + X-SECURITY-TOKEN), auto-refresh
-- [ ] `src/execution/ig/orders.rs` — Open/close spread bet positions, working orders
-- [ ] `src/execution/ig/streaming.rs` — Lightstreamer for real-time prices + fill confirmations
-- [ ] `src/execution/ig/epics.rs` — Instrument → IG epic code mapping
-- [ ] `src/execution/ig/rate_limiter.rs` — 15 trades/min, 60 data/min
-- [ ] `src/execution/recording.rs` — Wraps any engine, logs all orders/fills to SQLite
-- [ ] `src/data/ig_feed.rs` — IG historical prices + real-time streaming as DataProvider
-
-### Phase 3e: Evaluation + CLI (Week 5-6)
-- [ ] `src/eval/backtest_llm.rs` — Historical agent evaluation
-- [ ] `src/eval/agent_ablation.rs` — Per-agent contribution analysis
-- [ ] `src/eval/metrics.rs` — Sharpe, Sortino, Calmar, directional accuracy
-- [ ] `src/main.rs` — CLI via `clap` (backtest, paper-trade, live-trade modes)
-- [ ] Integration tests: IG demo paper trading round-trip, full graph signal → order → fill
-- [ ] Benchmark against ai-hedge-fund (49.6K ★) Sharpe ratios
+| Dependency | Crate | Track | Purpose |
+|---|---|---|---|
+| `tokio` | 1.x | A | Async runtime, streaming |
+| `polars` | 0.46+ | A | OHLCV DataFrames |
+| `ndarray` | 0.16+ | A | EWMA, rolling stats |
+| `ig_trading_api` | 0.3+ | A | IG REST + Lightstreamer |
+| `yahoo_finance_api` | 2.x | A | Backtest data |
+| `rusqlite` | 0.32+ | A | SQLite memory/logs |
+| `clap` | 4.x | A | CLI |
+| `config` + `dotenvy` | latest | A | Layered config |
+| `serde` + `serde_json` | 1.x | A | Serialization |
+| `tracing` | 0.1+ | A | Structured logging |
+| `anyhow` + `thiserror` | latest | A | Error handling |
+| `chrono` | 0.4+ | A | Time handling |
+| `async-trait` | 0.1+ | A | ExecutionEngine trait |
+| `reqwest` | 0.12+ | A | HTTP fallback |
+| `rig-core` | 0.11+ | B | LLM client (multi-provider) |
+| `ta` | 0.5+ | B | Technical analysis |
+| `plotters` | 0.3+ | B | Chart rendering for vision agents |
+| `image` + `base64` | latest | B | Image encoding for vision LLM |
 
 ### Key Design Decisions
-
-**Graph orchestration:** `tokio::join!` for parallel fan-out, no framework needed.
 
 **Execution engine trait:** Same interface for paper/IG/IBKR — switch via config:
 ```toml
 [execution]
-engine = "ig"      # "paper", "ig", or "ibkr"
+engine = "ig"               # "paper", "ig", or "ibkr"
 [execution.ig]
-environment = "DEMO"    # "DEMO" or "LIVE" — one config change
+environment = "DEMO"        # "DEMO" or "LIVE" — one config change
 account_id = "Z69YJL"
 ```
 
-**Circuit breaker** *(from nofx repo)*: Auto-flatten positions and disable trading after 3 consecutive failures. Cooldown period, graceful degradation to TSMOM-only, drawdown breaker, model health monitoring.
+**Circuit breaker** *(from [nofx](https://github.com/NoFxAiOS/nofx))*: Trip conditions: 3 consecutive failures, -5% daily loss, -15% max drawdown. Actions: flatten positions, disable new entries, alert, fall back to TSMOM-only. Auto-reset after cooldown.
 
-**Recording engine:** Decorator pattern wrapping any engine + logging to SQLite. All paper/live trades get full audit trail.
+**Cargo features:** `default = ["track-a"]`, `track-b = ["rig-core", "ta", "plotters", ...]` — LLM agents are opt-in.
 
-**Cost control:** Prompts loaded from `.md` files at runtime (no recompile). Per-agent model selection in config.
-
-### Competitive Benchmarks (from trending repos)
+**Competitive benchmarks:**
 
 | Repo | Stars | Use |
 |------|-------|-----|
-| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | Study debate pipeline, inform moderator.rs |
-| [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) | 49.6K | Benchmark Sharpe, compare prompt templates |
-| [nofx](https://github.com/NoFxAiOS/nofx) | 11.2K | Circuit breaker / safe mode pattern for risk module |
-
-### Rust Graph Framework Research (Previous)
-
-| Crate | Verdict |
-|-------|---------|
-| [langchain-rust](https://github.com/Abraxas-365/langchain-rust) | No graph orchestration. LLM API calls only. |
-| [rs-graph-llm](https://github.com/a-agmon/rs-graph-llm) | Most promising but no parallel fan-out. |
-| [rrag-graph](https://docs.rs/rrag-graph/latest/rrag_graph/) | v0.1.0-alpha. Not production-ready. |
-| [langgraph-api](https://crates.io/crates/langgraph-api) | Just an API client, not a graph engine. |
-
-**Verdict:** Skip graph frameworks. `tokio::join!` + pattern matching covers our needs.
+| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | Debate pipeline reference |
+| [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) | 49.6K | Sharpe benchmark |
+| [nofx](https://github.com/NoFxAiOS/nofx) | 11.2K | Circuit breaker pattern |
 
 ---
 
