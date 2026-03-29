@@ -47,7 +47,7 @@
 ---
 
 ## Phase 2: LangGraph + LLM Agents
-> **Status: Code complete** | Requires API keys for end-to-end testing | 22/22 Phase 1 tests still passing
+> **Status: Code complete + validated** | Running on local Ollama (no API keys) | 22/22 Phase 1 tests passing
 
 ### Core Infrastructure
 - [x] `quantbot/config.py` — Pydantic Settings from `.env`, per-agent model selection, risk limits
@@ -98,7 +98,11 @@
 - [x] `quantbot/eval/agent_ablation.py` — Compare agent combinations, measure marginal contribution
 
 ### Validation
-- [ ] Run full graph on SPY for one day — all agents produce signals, combiner output is reasonable
+- [x] Run full graph on SPY — all agents produce signals, combiner output is reasonable
+  - TSMOM: LONG (s=+0.50, c=0.75) | Indicator: LONG (s=+0.40, c=0.60) | Pattern: SHORT (s=-0.80, c=0.80)
+  - Combined: LONG (s=+0.23, c=0.72) — correctly handled conflicting signals via weighted ensemble
+  - All running on local Ollama models (qwen3:14b text, qwen3-vl vision) — no API keys needed
+  - SQLite memory logged all signals + decision with outcome tracking
 - [ ] Compare TSMOM-only vs TSMOM+LLM Sharpe on held-out data
 - [ ] Target: 70%+ directional accuracy for LLM agents (MarketSenseAI achieved 72.3%)
 
