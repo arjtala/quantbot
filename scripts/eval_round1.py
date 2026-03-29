@@ -226,6 +226,7 @@ def main():
     parser.add_argument("--instruments", type=str, default="SPY,BTC-USD,ES=F,GC=F")
     parser.add_argument("--start", type=str, default="2022-01-01", help="Data start date")
     parser.add_argument("--end", type=str, default="2025-01-01", help="Data end date")
+    parser.add_argument("--data-dir", type=str, default=None, help="Load bars from CSV files in this directory instead of Yahoo Finance")
     args = parser.parse_args()
 
     instruments = [s.strip() for s in args.instruments.split(",")]
@@ -241,11 +242,20 @@ def main():
 
     # Fetch data
     print("\nFetching data...")
-    provider = YahooProvider()
     all_bars: dict[str, pd.DataFrame] = {}
+    if not args.data_dir:
+        provider = YahooProvider()
     for sym in instruments:
         try:
-            bars = provider.fetch_bars(sym, start, end)
+            if args.data_dir:
+                csv_path = Path(args.data_dir) / f"{sym}.csv"
+                bars = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+                # Ensure expected column names
+                for col in ["Open", "High", "Low", "Close", "Volume"]:
+                    if col not in bars.columns:
+                        raise ValueError(f"Missing column {col} in {csv_path}")
+            else:
+                bars = provider.fetch_bars(sym, start, end)
             all_bars[sym] = bars
             print(f"  {sym}: {len(bars)} bars")
         except Exception as e:

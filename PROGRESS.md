@@ -151,7 +151,7 @@ Recommended models for eval (priority order):
 | Model | Size | H200s | Why |
 |---|---|---|---|
 | DeepSeek-R1-Distill-Qwen-32B | 32B | 1 | R1 reasoning distilled into small model — best quality/GPU ratio |
-| Qwen3-235B-A22B | 235B MoE (~22B active) | 2-4 | Excellent reasoning + structured JSON, efficient MoE |
+| Qwen3-235B-A22B | 235B MoE (~22B active) | 8 | Excellent reasoning + structured JSON, efficient MoE |
 | Qwen3-32B | 32B | 1 | Strong reasoning, big brother of the qwen3:14b we tested |
 | DeepSeek-V3.2 | 685B MoE (~37B active) | 4-8 | Current open-source SOTA (Dec 2025) |
 | DeepSeek-R1 | 671B MoE | 4-8 | Best explicit chain-of-thought reasoning |
@@ -160,9 +160,22 @@ Recommended models for eval (priority order):
 
 Also available: Claude API (no GPU needed) — Opus/Sonnet for highest quality baseline.
 
-- [ ] Set up SGLang on SLURM cluster with H200s
-- [ ] Rerun `eval_round1.py` with DeepSeek-R1-Distill-Qwen-32B (1 H200)
-- [ ] Rerun with Qwen3-235B-A22B if 32B shows improvement (2-4 H200s)
+**Cluster setup learnings (2026-03-29):**
+- Partition: inferred from QOS prefix, `--partition` flag is ignored
+- Account: `dream`, QOS: `h200_comm_shared`
+- Qwen3-235B-A22B requires **8 H200s** (not 2-4), **1TB system RAM**, and these SGLang flags:
+  - `--host 0.0.0.0` (default binds to localhost only)
+  - `--disable-cuda-graph` (flashinfer JIT compilation fails on cluster CUDA toolkit)
+  - `--disable-custom-all-reduce` (same flashinfer incompatibility)
+  - `--attention-backend triton --sampling-backend pytorch` (bypass flashinfer entirely)
+  - `--mem-fraction-static 0.80` (leave headroom for activations)
+- Cluster proxy blocks outbound HTTPS — yfinance cannot download data. Use `scripts/download_data.py` locally, then `--data-dir data/` on cluster.
+- Use `NO_PROXY=<node>` when running eval to bypass proxy for SGLang server.
+
+- [x] Set up SGLang on SLURM cluster with H200s
+- [ ] Download OHLCV data locally via `scripts/download_data.py`, scp to cluster
+- [ ] Rerun `eval_round1.py` with Qwen3-235B-A22B (8 H200s) — `--data-dir data/`
+- [ ] Rerun with DeepSeek-R1-Distill-Qwen-32B (1 H200) for comparison
 - [ ] Compare accuracy/Sharpe across model tiers: local 14B → cluster 32B → cluster 235B → Claude API
 - [ ] If best model achieves >55% standalone accuracy and >+0.15 Sharpe delta → GO for LLM agent Rust port
 

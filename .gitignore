@@ -23,3 +23,5 @@ Thumbs.db
 *.html
 *.png
 .pytest_cache/
+eval_results/
+logs/
