@@ -108,109 +108,104 @@
 
 ---
 
-## Phase 3: Paper Trading + Web Dashboard
-> **Status: Not started**
+## Phase 3: Rust Rewrite + IBKR Execution
+> **Status: Not started** | Full Rust implementation with live IBKR trading
 
-- [ ] `quantbot/core/clock.py` — `LiveClock` vs `BacktestClock`
-- [ ] `quantbot/execution/risk.py` — Position/exposure limits
-- [ ] `quantbot/data/cache.py` — Local parquet cache at `~/.quantbot/data/`
-- [ ] `scripts/run_paper_trading.py` — Async live trading loop
-- [ ] `quantbot/web/app.py` — FastAPI dashboard
+Merges the previous Phase 3 (paper trading), Phase 4 (Rust port), and adds IBKR execution. Single Rust binary: `tokio` for async, `rig-core` for LLM, `ibapi` for execution, `polars` for data, `rusqlite` for memory.
 
----
+### Crate Ecosystem
 
-## Phase 4: Rust Port
-> **Status: Not started** | Approach updated: **full Rust rewrite** (not hybrid PyO3)
+| Dependency | Crate | Purpose |
+|---|---|---|
+| Async runtime | `tokio` | Fan-out parallelism, IBKR streaming |
+| DataFrames | `polars` | OHLCV data, feature computation |
+| Numeric | `ndarray` | Volatility, rolling stats |
+| LLM client | `rig-core` | OpenAI, Anthropic, Ollama |
+| IBKR API | `ibapi` | TWS connection, orders, market data |
+| Technical analysis | `ta` | RSI, MACD, Bollinger, EMA |
+| Database | `rusqlite` | Agent memory, decision logs, order logs |
+| Charting | `plotters` | Candlestick charts for vision agents |
+| CLI | `clap` | CLI interface |
+| Config | `config` | Layered config from TOML + env |
+| HTTP | `reqwest` | IBKR Client Portal REST fallback |
+| Logging | `tracing` | Structured logging |
+| Errors | `anyhow` + `thiserror` | Application + library errors |
+| Serialization | `serde` + `serde_json` | Config, signals, prompts |
 
-### Updated Recommendation: Full Rust Over Hybrid
+### Phase 3a: Core Infrastructure (Week 1-2)
+- [ ] Scaffold `Cargo.toml` with all dependencies
+- [ ] `src/core/signal.rs` — Signal struct + Direction enum
+- [ ] `src/core/portfolio.rs` — Position, Order, Fill, AccountSummary
+- [ ] `src/core/bar.rs` — OHLCV DataFrame wrapper (polars)
+- [ ] `src/config.rs` — Layered config from TOML + env vars
+- [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
+- [ ] `src/agents/traits.rs` — `SignalAgent` trait + `PromptLoader`
+- [ ] `src/data/yahoo.rs` — Yahoo Finance fetcher
+- [ ] `src/data/universe.rs` — Instrument definitions
 
-After deeper analysis, the Rust ecosystem has matured enough that maintaining a PyO3 FFI boundary is more overhead than benefit. A pure Rust codebase is cleaner to maintain, test, and deploy.
+### Phase 3b: Signal Agents (Week 2-3)
+- [ ] `src/agents/tsmom/` — TSMOM agent + EWMA volatility (pure Rust, no LLM)
+- [ ] `src/agents/indicator/` — TA computations via `ta` crate → LLM interpretation
+- [ ] `src/agents/pattern/` — Chart rendering via `plotters` → vision LLM
+- [ ] `src/agents/trend/` — Trendline fitting + S/R detection → LLM
+- [ ] `prompts/` — All prompt templates (ported from Python)
 
-**Approach:**
-1. Port Phase 1 (backtest engine + TSMOM) first — pure numerical computation, massive speedups (~1-2 weeks)
-2. Build Phase 2 (LLM agents) in Rust using `rig-core` + `tokio` — skip graph frameworks, hand-roll with `tokio::join!` (~1 week)
-3. Web dashboard with `axum` — single binary serving API + trading engine
+### Phase 3c: Decision Layer (Week 3-4)
+- [ ] `src/agents/debate/` — Bull/bear advocates + moderator
+- [ ] `src/agents/decision/` — Signal combiner + decision agent
+- [ ] `src/agents/risk/` — Position sizing, drawdown limits, veto authority
+- [ ] `src/graph/` — Fan-out/fan-in via `tokio::join!` (no framework needed)
 
-### Portability Assessment
+### Phase 3d: Execution Layer (Week 4-5)
+- [ ] `src/execution/traits.rs` — `ExecutionEngine` trait (submit_order, positions, account_summary, fill_stream)
+- [ ] `src/execution/paper.rs` — Local paper simulation
+- [ ] `src/execution/ibkr.rs` — IBKR via `ibapi` (paper port 4002, live port 4001)
+- [ ] `src/execution/recording.rs` — Wraps any engine, logs all orders/fills to SQLite
+- [ ] `src/data/ibkr_feed.rs` — IBKR real-time + historical market data
 
-No hard Python-only blockers. LangGraph's fan-out/fan-in is trivially `tokio::join!`:
+### Phase 3e: Evaluation + CLI (Week 5-6)
+- [ ] `src/eval/backtest_llm.rs` — Historical agent evaluation
+- [ ] `src/eval/agent_ablation.rs` — Per-agent contribution analysis
+- [ ] `src/eval/metrics.rs` — Sharpe, Sortino, Calmar, directional accuracy
+- [ ] `src/main.rs` — CLI via `clap` (backtest, paper-trade, live-trade modes)
+- [ ] Integration tests: paper trading round-trip, full graph signal → order flow
+
+### Key Design Decisions
+
+**Graph orchestration:** `tokio::join!` for parallel fan-out, no framework needed:
 ```rust
-let (tsmom, indicator, pattern, trend) = tokio::join!(
-    tsmom_agent.generate_signal(&bars),
-    indicator_agent.generate_signal(&bars),
-    pattern_agent.generate_signal(&bars),
-    trend_agent.generate_signal(&bars),
-);
-let decision = combiner.combine(vec![tsmom, indicator, pattern, trend]);
+let signals: Vec<Signal> = {
+    let futures: Vec<_> = agents.iter().map(|a| a.generate_signal(bars, memory)).collect();
+    futures::future::join_all(futures).await.into_iter().filter_map(|r| r.ok()).collect()
+};
 ```
 
-### Crate Mapping
+**Execution engine trait:** Same interface for paper/IBKR/recording — switch via config:
+```toml
+[execution]
+engine = "paper"   # or "ibkr" or "recording"
+[execution.ibkr]
+port = 4002        # 4002=paper, 4001=live — one config change
+```
 
-| Python | Rust Crate | Maturity | Notes |
-|--------|-----------|----------|-------|
-| `pandas` | `polars` | Production | Faster, columnar, excellent for OHLCV |
-| `numpy` | `ndarray` / native iterators | Production | EWMA is ~20 lines of Rust |
-| `yfinance` | `yahoo_finance_api` | OK | Less polished but functional |
-| `plotly` | `plotly-rs` / export JSON | OK | Or serve from web frontend |
-| `pydantic` | `serde` + Rust structs | Production | Type system already strict |
-| `langgraph` | `tokio::join!` + hand-rolled | N/A | Our graph is simple enough |
-| `langchain-*` | `rig-core` | Good | OpenAI, Anthropic, structured output, tools |
-| `TA-Lib` | `ta` crate / FFI to C lib | OK | RSI, MACD, Stochastic, Bollinger |
-| `fastapi` | `axum` / `actix-web` | Production | Both excellent for REST APIs |
-| `ccxt` | `reqwest` + exchange APIs | Manual | No Rust ccxt port exists |
-| `scipy` | `statrs` | OK | Only used minimally |
-| `argparse` | `clap` | Production | Best-in-class CLI parsing |
+**Recording engine:** Decorator pattern wrapping any engine + logging to SQLite. All paper/live trades get full audit trail.
 
-### Effort Estimate
+**Cost control:** Prompts loaded from `.md` files at runtime (no recompile). Per-agent model selection in config. Use Haiku/mini for backtesting, Opus for live.
 
-| Component | Effort | Expected Speedup |
-|-----------|--------|------------------|
-| Core types (signal, portfolio) | ~1 day | Negligible (already fast) |
-| Data layer (polars + yahoo) | ~2 days | 5-10x on data processing |
-| TSMOM agent + volatility | ~2 days | 10-50x on computation |
-| Backtest engine | ~3-4 days | **50-100x** (hot loop) |
-| LLM agents (rig-core + tokio) | ~3-4 days | Network-bound (similar speed) |
-| Metrics + plotting | ~1-2 days | Moderate |
-| **Total** | **~2-3 weeks** | |
+### Rust Graph Framework Research (Previous)
 
-### Trade-off Analysis
+| Crate | Verdict |
+|-------|---------|
+| [langchain-rust](https://github.com/Abraxas-365/langchain-rust) | No graph orchestration. LLM API calls only. |
+| [rs-graph-llm](https://github.com/a-agmon/rs-graph-llm) | Most promising but no parallel fan-out. |
+| [rrag-graph](https://docs.rs/rrag-graph/latest/rrag_graph/) | v0.1.0-alpha. Not production-ready. |
+| [langgraph-api](https://crates.io/crates/langgraph-api) | Just an API client, not a graph engine. |
 
-| Factor | Full Rust | Hybrid (PyO3) | Stay Python |
-|--------|-----------|---------------|-------------|
-| Backtest performance | 10-100x faster | 5-50x on hot paths | Baseline |
-| Development speed | Slower initially | Medium | Fastest |
-| LLM agent iteration | Load prompts from files* | Python for prompts | Fastest |
-| Deployment | Single binary | Python + Rust ext | Python env needed |
-| Maintenance | One language | FFI boundary overhead | One language |
-
-*Prompt changes don't need recompile if loaded from `.md`/`.txt` at runtime.
-
-### Rust Graph Framework Research
-
-| Crate | What it is | Verdict |
-|-------|-----------|---------|
-| [langchain-rust](https://github.com/Abraxas-365/langchain-rust) | Rust port of LangChain. OpenAI, Anthropic, Ollama. 532 commits. | No graph orchestration. LLM API calls only. |
-| [rs-graph-llm](https://github.com/a-agmon/rs-graph-llm) | Graph execution engine inspired by LangGraph. 278 stars. Stateful sessions, conditional routing. | Most promising framework. Gap: no parallel fan-out built-in. |
-| [rrag-graph](https://docs.rs/rrag-graph/latest/rrag_graph/) | Graph workflow for AI agents. Async, conditional routing. | v0.1.0-alpha. Not production-ready. |
-| [langgraph-api](https://crates.io/crates/langgraph-api) | HTTP client SDK for hosted LangGraph Cloud. | Not a graph engine — just an API client. |
-
-**Verdict:** Skip graph frameworks. `tokio::join!` + pattern matching covers our needs. `rig-core` for LLM calls.
-
-### Implementation Plan
-- [ ] Scaffold `quantbot-rs/` with `Cargo.toml` (polars, ndarray, rig-core, tokio, clap, axum, ta, plotly, chrono, serde)
-- [ ] Port core types: Signal, Portfolio, Position, Order
-- [ ] Port data layer: polars BarDataFrame, yahoo_finance_api provider, Instrument universe
-- [ ] Port TSMOM agent + EWMA volatility
-- [ ] Port backtest engine (main speedup target: 50-100x)
-- [ ] Port metrics + plotly-rs charting
-- [ ] Port paper trading engine
-- [ ] Build LLM agents with rig-core (indicator, pattern, trend)
-- [ ] Build signal combiner + decision agent with tokio::join! fan-out/fan-in
-- [ ] CLI via clap, web dashboard via axum
+**Verdict:** Skip graph frameworks. `tokio::join!` + pattern matching covers our needs.
 
 ---
 
-## Phase 5: Extensions
+## Phase 4: Extensions
 > **Status: Not started**
 
 ### New Agents & Strategies
