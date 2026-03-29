@@ -139,13 +139,36 @@ Round 1 experiments must pass before committing to Rust rewrite. If LLM agents d
 **Implications for Phase 3:**
 - TSMOM port to Rust is clearly worth it (Sharpe 1.37 → 50-100x backtest speedup)
 - LLM Indicator agent in current form does not justify the complexity/cost of porting
-- Before porting LLM agents: try better models (GPT-4o/Claude), better prompts, or different agent types (Pattern/Trend vision agents may add more value than text-only Indicator)
+- Before porting LLM agents: try better models on GPU cluster, better prompts, or different agent types (Pattern/Trend vision agents may add more value than text-only Indicator)
 - [ ] **Agent ablation study** — Still needed: test Pattern and Trend agents (vision) separately. They may capture different alpha than text-based indicators.
 
-**Round 2 — Optimization (if Round 1 passes)**
+**Round 1b — Model Quality Rerun (SGLang on H200 cluster)**
+
+Round 1 used local Ollama qwen3:14b (51% accuracy). Rerun with stronger reasoning models via SGLang on 2-8 H200 GPUs to determine if model quality is the bottleneck.
+
+Recommended models for eval (priority order):
+
+| Model | Size | H200s | Why |
+|---|---|---|---|
+| DeepSeek-R1-Distill-Qwen-32B | 32B | 1 | R1 reasoning distilled into small model — best quality/GPU ratio |
+| Qwen3-235B-A22B | 235B MoE (~22B active) | 2-4 | Excellent reasoning + structured JSON, efficient MoE |
+| Qwen3-32B | 32B | 1 | Strong reasoning, big brother of the qwen3:14b we tested |
+| DeepSeek-V3.2 | 685B MoE (~37B active) | 4-8 | Current open-source SOTA (Dec 2025) |
+| DeepSeek-R1 | 671B MoE | 4-8 | Best explicit chain-of-thought reasoning |
+| Fin-R1 | 7B | 1 | Finance-specialized, matches GPT-4 on financial tasks |
+| Qwen3-Coder-Next | 80B | 1-2 | Latest Qwen3 (2026), strong structured output |
+
+Also available: Claude API (no GPU needed) — Opus/Sonnet for highest quality baseline.
+
+- [ ] Set up SGLang on SLURM cluster with H200s
+- [ ] Rerun `eval_round1.py` with DeepSeek-R1-Distill-Qwen-32B (1 H200)
+- [ ] Rerun with Qwen3-235B-A22B if 32B shows improvement (2-4 H200s)
+- [ ] Compare accuracy/Sharpe across model tiers: local 14B → cluster 32B → cluster 235B → Claude API
+- [ ] If best model achieves >55% standalone accuracy and >+0.15 Sharpe delta → GO for LLM agent Rust port
+
+**Round 2 — Optimization (if Round 1b passes)**
 - [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner? Justify the 2 extra LLM calls per decision.
 - [ ] **Memory effectiveness** — Run 50+ sequential decisions on one instrument. Does SQLite memory injection improve win rate vs memoryless? If not, simplify before porting.
-- [ ] **Model quality comparison** — Same eval with GPT-4o / Claude Sonnet vs local Ollama. Quantify the quality gap to know if local backtest results reflect production.
 - [ ] **Prompt sensitivity analysis** — Tweak prompts (reorder CoT steps, change wording), re-run eval. If results swing wildly, prompts are fragile and need hardening.
 - [ ] **Latency profiling** — End-to-end time for one full graph execution. Matters for IBKR live trading — if 30+ seconds, can't react to fast markets.
 - [ ] **Cost per decision** — Actual token usage × pricing for one full cycle. Project monthly bill at scale (multiple instruments, daily).
