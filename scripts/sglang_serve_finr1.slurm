@@ -22,7 +22,8 @@ PORT=30000
 TP=1
 
 # --- Activate environment ---
-source activate quantbot-cluster || conda activate quantbot-cluster
+eval "$(conda shell.bash hook 2>/dev/null)"
+conda activate quantbot-cluster
 
 # --- Print connection info ---
 echo "============================================"

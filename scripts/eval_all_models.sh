@@ -62,8 +62,9 @@ for key in deepseek finr1 qwen3; do
         --time=24:00:00 \
         --output="${LOG_DIR}/sglang-${key}-%j.out" \
         --error="${LOG_DIR}/sglang-${key}-%j.err" \
-        --wrap="
-source activate quantbot-cluster || conda activate quantbot-cluster
+        --wrap="#!/bin/bash
+eval \"\$(conda shell.bash hook 2>/dev/null)\"
+conda activate quantbot-cluster
 echo \"NODE=\$(hostname) PORT=${PORT} MODEL=${MODEL}\"
 python -m sglang.launch_server \
     --model-path '${MODEL}' \
