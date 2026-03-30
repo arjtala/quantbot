@@ -2,17 +2,19 @@
 # QuantBot — Run eval against SGLang server
 #
 # Usage:
-#   bash scripts/sglang_eval.sh <sglang-node> [model-name] [port]
+#   bash scripts/sglang_eval.sh <sglang-node> [model-name] [port] [workers] [days]
 #
-# Example:
-#   bash scripts/sglang_eval.sh h200-137-002-043 deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+# Examples:
+#   bash scripts/sglang_eval.sh h200-node SUFE-AIFLM-Lab/Fin-R1              # 60 days (default)
+#   bash scripts/sglang_eval.sh h200-node SUFE-AIFLM-Lab/Fin-R1 30000 4 252  # 252-day full eval
 
 set -e
 
-NODE=${1:?"Usage: $0 <sglang-node> [model-name] [port]"}
-MODEL=${2:-"deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"}
+NODE=${1:?"Usage: $0 <sglang-node> [model-name] [port] [workers] [days]"}
+MODEL=${2:-"SUFE-AIFLM-Lab/Fin-R1"}
 PORT=${3:-30000}
 WORKERS=${4:-4}
+DAYS=${5:-60}
 
 # Bypass cluster proxy for compute node
 export no_proxy="$NODE"
@@ -50,6 +52,7 @@ curl -s --noproxy "$NODE" "http://$NODE:$PORT/v1/models" | python3 -m json.tool 
     exit 1
 }
 
+TOTAL_CALLS=$((21 * DAYS))
 echo ""
-echo "Connection OK. Running eval (21 instruments × 60 days = 1,260 LLM calls, $WORKERS workers)..."
-python scripts/eval_round1.py --days 60 --data-dir data/ --workers "$WORKERS"
+echo "Connection OK. Running eval (21 instruments × $DAYS days = $TOTAL_CALLS LLM calls, $WORKERS workers)..."
+python scripts/eval_round1.py --days "$DAYS" --data-dir data/ --workers "$WORKERS"
