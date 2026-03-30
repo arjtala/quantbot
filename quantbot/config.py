@@ -40,11 +40,11 @@ class QuantbotSettings(BaseSettings):
     #   "gpt*"/"o1*"/"o3" → OpenAI API
     #   "sglang:<model>"  → Custom OpenAI-compatible endpoint (SGLang/vLLM)
     #   anything else     → Ollama (default)
-    indicator_model: str = "qwen3:14b"
+    indicator_model: str = "mychen76/Fin-R1:Q5"
     pattern_model: str = "qwen3-vl"
     trend_model: str = "qwen3-vl"
-    debate_model: str = "qwen3:14b"
-    decision_model: str = "qwen3:14b"
+    debate_model: str = "mychen76/Fin-R1:Q5"
+    decision_model: str = "mychen76/Fin-R1:Q5"
 
     # --- LLM Provider (for routing) ---
     default_provider: Literal["openai", "anthropic", "ollama", "sglang"] = "ollama"
