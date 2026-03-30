@@ -232,15 +232,56 @@ The original Go/No-Go gate (>55% accuracy AND >+0.15 Sharpe delta) was designed 
 3. **Drop EEM and EFA** — negative Sharpe across every model and strategy. Pure noise.
 4. **Use Fin-R1 as default model** — 7B, runs on Mac Mini M4 Pro, free, best performer. No API costs needed.
 
-**Round 2 — Optimization**
-- [ ] **Dynamic combiner** — Implement instrument-type weighted combiner, re-eval. Target: combined Sharpe > indicator-only (currently being destroyed).
-- [ ] **FLAT-aware position sizing** — When indicator is FLAT, reduce position to 50% of TSMOM-only size.
-- [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner? Justify the 2 extra LLM calls per decision.
-- [ ] **Memory effectiveness** — Run 50+ sequential decisions on one instrument. Does SQLite memory injection improve win rate vs memoryless? If not, simplify before porting.
-- [ ] **Prompt sensitivity analysis** — Tweak prompts to reduce FLAT rate on forex/crypto (where indicator has edge). If results swing wildly, prompts are fragile and need hardening.
-- [ ] **Pattern + Trend agent ablation** — Vision agents may capture different alpha than text-only Indicator. Test separately.
-- [ ] **Latency profiling** — End-to-end time for one full graph execution. Matters for IG live trading — if 30+ seconds, can't react to fast markets.
-- [ ] **Cost per decision** — Actual token usage × pricing for one full cycle. Project monthly bill at scale (multiple instruments, daily).
+**Round 2 — Combiner Simulation** *(Completed 2026-03-30, zero GPU, replayed Fin-R1 CSVs)*
+
+Tested 5 combiner strategies on existing Round 1b data. Key question: can a smart combiner unlock the alpha being destroyed by fixed weights?
+
+- [x] **Dynamic combiner simulation** — Replayed with instrument-type weights (forex 80% indicator, equity 80% TSMOM, etc.)
+- [x] **FLAT-aware position sizing** — Tested reducing to 50% TSMOM when indicator is FLAT
+- [x] **Drop EEM/EFA** — Re-computed excluding negative-Sharpe instruments
+- [x] **Transaction cost sensitivity** — IG spread costs (fixed: only on position changes, not hold days)
+
+**Results (clean 19-instrument universe, 60 days):**
+
+| Strategy | Sharpe | w/IG costs | Δ cost | Ann.Ret | MaxDD |
+|---|---|---|---|---|---|
+| TSMOM-only | 0.508 | 0.383 | -0.125 | 14.4% | -33.4% |
+| Indicator-only (Fin-R1) | 0.765 | 0.422 | -0.343 | 17.0% | -18.8% |
+| Fixed combiner (0.50/0.20) | 0.623 | 0.444 | -0.179 | 18.2% | -29.9% |
+| **Dynamic combiner** | **0.793** | **0.643** | **-0.150** | **16.9%** | **-17.1%** |
+| Dynamic + FLAT-aware | 0.714 | 0.533 | -0.181 | 17.1% | -23.7% |
+
+**Key findings:**
+1. **Dynamic combiner (0.793) is the best strategy** — beats indicator-only (0.765) and TSMOM-only (0.508). First evidence that combining is actually additive.
+2. **Survives IG transaction costs** — Dynamic combiner drops only 0.150 Sharpe (to 0.643) vs indicator-only losing 0.343 (to 0.422). The combiner's lower turnover helps.
+3. **FLAT-aware sizing hurts** — 0.714 < 0.793. When indicator goes FLAT, TSMOM at half-size still drags. Better to just trust the dynamic weights.
+4. **Indicator-only is worst after costs** — Sharpe 0.765→0.422 (-0.343). High turnover from frequent FLAT→LONG/SHORT transitions kills it.
+5. **Dropping EEM/EFA is free alpha** — ~0.1-0.2 Sharpe improvement across all strategies.
+
+**Transaction cost implications for IG live trading:**
+- Dynamic combiner (Sharpe 0.643 after costs) is viable
+- Crypto's 80bps spread is painful but tolerated by strong crypto alpha
+- Forex (3bps) and equity (5bps) spreads are negligible
+- Consider dropping commodity positions (GC=F, GLD negative Sharpe even before costs)
+
+**Per instrument-type (Dynamic + FLAT-aware):**
+
+| Type | Sharpe | Best instruments |
+|---|---|---|
+| Crypto | 1.653 | BTC-USD (3.07), SOL-USD (1.64), BNB-USD (1.18) |
+| Forex | 0.387 | EURUSD (1.75), USDJPY (1.53) — but GBPUSD, AUDUSD negative |
+| Equity | 0.345 | QQQ (0.70), IWM (0.54) |
+| Bonds | -0.218 | ZB=F good (1.66), TLT terrible (-1.75) |
+| Commodity | -0.467 | All negative |
+
+**Round 2 — Remaining Experiments**
+- [ ] **252-day in-sample + 60-day out-of-sample** — Single cluster run with Fin-R1. In-sample: Oct 2023–Dec 2024. Out-of-sample: Jan–Mar 2025. If OOS Sharpe within 0.15 of IS → not overfitting.
+- [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner?
+- [ ] **Memory effectiveness** — 50+ sequential decisions, memory vs memoryless.
+- [ ] **Pattern + Trend agent ablation** — Vision agents (needs Qwen3.5-VL or similar on cluster).
+- [ ] **Prompt sensitivity analysis** — Tweak prompts to reduce FLAT rate on forex/crypto.
+- [ ] **Latency profiling** — End-to-end time for full graph execution on Mac M4 with local Fin-R1.
+- [ ] **Pull Fin-R1 into local Ollama** — Verify it works locally for free dev/testing.
 
 ---
 

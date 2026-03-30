@@ -149,11 +149,19 @@ def strategy_dynamic_flat_aware(row: pd.Series) -> tuple[str, float]:
 # ---------------------------------------------------------------------------
 
 def compute_returns(df: pd.DataFrame, strategy_fn, apply_costs: bool = False) -> pd.Series:
-    """Compute daily returns for a strategy."""
+    """Compute daily returns for a strategy.
+
+    Transaction costs are only charged when the position changes
+    (open, close, or flip direction) — not on hold days.
+    """
     returns = []
+    # Track previous direction per instrument to detect position changes
+    prev_direction: dict[str, str] = {}
+
     for _, row in df.iterrows():
         direction, size = strategy_fn(row)
         actual = row["actual_return"]
+        instrument = row["instrument"]
 
         if direction == "LONG":
             ret = actual * size
@@ -162,11 +170,26 @@ def compute_returns(df: pd.DataFrame, strategy_fn, apply_costs: bool = False) ->
         else:
             ret = 0.0
 
-        # Subtract transaction costs if position changed
-        if apply_costs and direction != "FLAT":
-            inst_type = INSTRUMENT_TYPE.get(row["instrument"], "equity")
-            cost_bps = IG_SPREAD_BPS[inst_type]
-            ret -= cost_bps / 10_000 * size  # one-way cost per rebalance
+        # Only charge spread cost when position changes
+        if apply_costs:
+            prev = prev_direction.get(instrument, "FLAT")
+            position_changed = (direction != prev)
+
+            if position_changed:
+                inst_type = INSTRUMENT_TYPE.get(instrument, "equity")
+                cost_bps = IG_SPREAD_BPS[inst_type]
+
+                if prev != "FLAT" and direction != "FLAT":
+                    # Flip (close old + open new) → double spread
+                    ret -= 2 * cost_bps / 10_000 * size
+                elif prev == "FLAT" and direction != "FLAT":
+                    # New entry → single spread
+                    ret -= cost_bps / 10_000 * size
+                elif prev != "FLAT" and direction == "FLAT":
+                    # Close → single spread (applied to previous day's return)
+                    ret -= cost_bps / 10_000  # close cost at unit size
+
+            prev_direction[instrument] = direction
 
         returns.append(ret)
 
