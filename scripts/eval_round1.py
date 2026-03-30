@@ -4,10 +4,10 @@
 Tests:
 1. TSMOM-only vs TSMOM+LLM Sharpe comparison
 2. Per-agent directional accuracy
-3. Multi-instrument validation (SPY, BTC-USD, ES=F, GC=F)
+3. Multi-instrument validation
 
 Usage:
-    python scripts/eval_round1.py [--days 60] [--instruments SPY,BTC-USD,ES=F,GC=F]
+    python scripts/eval_round1.py [--days 60] [--instruments SPY,BTC-USD,ES=F,GC=F] [--workers 4]
 """
 
 from __future__ import annotations
@@ -17,6 +17,8 @@ import json
 import logging
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from pathlib import Path
@@ -37,6 +39,9 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 RESULTS_DIR = Path("eval_results")
+
+# Thread-safe print lock
+_print_lock = threading.Lock()
 
 
 @dataclass
@@ -93,6 +98,7 @@ def evaluate_instrument(
     instrument: str,
     bars: pd.DataFrame,
     eval_days: int,
+    results_dir: Path | None = None,
     min_history: int = 252,
 ) -> list[DayResult]:
     """Run day-by-day evaluation on one instrument."""
@@ -102,10 +108,10 @@ def evaluate_instrument(
 
     total_bars = len(bars)
     start_idx = max(min_history, total_bars - eval_days - 1)
+    n_days = total_bars - start_idx - 1
 
-    print(f"\n  Evaluating {instrument}: {total_bars - start_idx - 1} days")
-    print(f"  {'Day':>4} {'Date':>12} {'Actual':>8} {'TSMOM':>8} {'Indicator':>10} {'Combined':>10}")
-    print(f"  {'-'*4} {'-'*12} {'-'*8} {'-'*8} {'-'*10} {'-'*10}")
+    with _print_lock:
+        print(f"\n  [{instrument}] Starting eval: {n_days} days")
 
     for i in range(start_idx, total_bars - 1):
         today = bars.index[i]
@@ -164,12 +170,21 @@ def evaluate_instrument(
         t_mark = "✓" if tsmom_correct else ("·" if tsmom_sig.direction == SignalDirection.FLAT else "✗")
         i_mark = "✓" if ind_correct else ("·" if ind_sig.direction == SignalDirection.FLAT else "✗")
         c_mark = "✓" if comb_correct else ("·" if combined.direction == SignalDirection.FLAT else "✗")
-        print(
-            f"  {day_num:>4} {today.date()} {actual_return:>+7.2%} "
-            f"{tsmom_sig.direction.value:>6}{t_mark} "
-            f"{ind_sig.direction.value:>8}{i_mark} "
-            f"{combined.direction.value:>8}{c_mark}"
-        )
+        with _print_lock:
+            print(
+                f"  [{instrument:>8}] {day_num:>3}/{n_days} {today.date()} {actual_return:>+7.2%} "
+                f"{tsmom_sig.direction.value:>6}{t_mark} "
+                f"{ind_sig.direction.value:>8}{i_mark} "
+                f"{combined.direction.value:>8}{c_mark}"
+            )
+
+    # Save results for this instrument immediately (don't wait for all to finish)
+    if results_dir:
+        rows = [vars(r) for r in results]
+        df = pd.DataFrame(rows)
+        df.to_csv(results_dir / f"round1_{instrument}.csv", index=False)
+        with _print_lock:
+            print(f"  [{instrument}] Done — saved {len(results)} results")
 
     return results
 
@@ -232,6 +247,7 @@ def main():
     parser.add_argument("--end", type=str, default="2025-01-01", help="Data end date")
     parser.add_argument("--data-dir", type=str, default=None, help="Load bars from CSV files in this directory instead of Yahoo Finance")
     parser.add_argument("--run-name", type=str, default=None, help="Name for this eval run (e.g. model name). Results saved to eval_results/<run-name>/")
+    parser.add_argument("--workers", type=int, default=4, help="Number of parallel instrument evaluations (default: 4)")
     args = parser.parse_args()
 
     instruments = [s.strip() for s in args.instruments.split(",")]
@@ -255,6 +271,7 @@ def main():
     print(f"  Data range:  {start} → {end}")
     print(f"  Model:       {settings.indicator_model}")
     print(f"  Results dir: {results_dir}")
+    print(f"  Workers:     {args.workers}")
 
     # Fetch data
     print("\nFetching data...")
@@ -277,22 +294,26 @@ def main():
         except Exception as e:
             print(f"  {sym}: FAILED — {e}", file=sys.stderr)
 
-    # Run evaluation
+    # Run evaluation — parallel across instruments
     all_results: dict[str, list[DayResult]] = {}
     start_time = time.time()
+    n_workers = min(args.workers, len(all_bars))
 
-    for sym, bars in all_bars.items():
-        results = evaluate_instrument(sym, bars, args.days)
-        all_results[sym] = results
+    print(f"\nRunning eval with {n_workers} parallel workers...")
+
+    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+        futures = {
+            executor.submit(evaluate_instrument, sym, bars, args.days, results_dir): sym
+            for sym, bars in all_bars.items()
+        }
+        for future in as_completed(futures):
+            sym = futures[future]
+            try:
+                all_results[sym] = future.result()
+            except Exception as e:
+                print(f"  {sym}: EVAL FAILED — {e}", file=sys.stderr)
 
     elapsed = time.time() - start_time
-
-    # Save raw results
-    results_dir.mkdir(parents=True, exist_ok=True)
-    for sym, results in all_results.items():
-        rows = [vars(r) for r in results]
-        df = pd.DataFrame(rows)
-        df.to_csv(results_dir / f"round1_{sym}.csv", index=False)
 
     # Summary
     print("\n" + "=" * 70)
