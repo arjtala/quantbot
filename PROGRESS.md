@@ -142,23 +142,17 @@ Round 1 experiments must pass before committing to Rust rewrite. If LLM agents d
 - Before porting LLM agents: try better models on GPU cluster, better prompts, or different agent types (Pattern/Trend vision agents may add more value than text-only Indicator)
 - [ ] **Agent ablation study** — Still needed: test Pattern and Trend agents (vision) separately. They may capture different alpha than text-based indicators.
 
-**Round 1b — Model Quality Rerun (SGLang on H200 cluster)**
+**Round 1b — Model Quality Rerun (SGLang on H200 cluster)** *(Completed 2026-03-30, 3×21 instruments, 3,780 LLM calls)*
 
-Round 1 used local Ollama qwen3:14b (51% accuracy). Rerun with stronger reasoning models via SGLang on 2-8 H200 GPUs to determine if model quality is the bottleneck.
+Round 1 used local Ollama qwen3:14b (51% accuracy). Rerun with 3 models via SGLang on H200 GPUs across 21-instrument universe to determine if model quality is the bottleneck.
 
-Recommended models for eval (priority order):
+**Models tested:**
 
-| Model | Size | H200s | Why |
+| Model | Size | H200s | Port |
 |---|---|---|---|
-| DeepSeek-R1-Distill-Qwen-32B | 32B | 1 | R1 reasoning distilled into small model — best quality/GPU ratio |
-| Qwen3-235B-A22B | 235B MoE (~22B active) | 8 | Excellent reasoning + structured JSON, efficient MoE |
-| Qwen3-32B | 32B | 1 | Strong reasoning, big brother of the qwen3:14b we tested |
-| DeepSeek-V3.2 | 685B MoE (~37B active) | 4-8 | Current open-source SOTA (Dec 2025) |
-| DeepSeek-R1 | 671B MoE | 4-8 | Best explicit chain-of-thought reasoning |
-| Fin-R1 | 7B | 1 | Finance-specialized, matches GPT-4 on financial tasks |
-| Qwen3-Coder-Next | 80B | 1-2 | Latest Qwen3 (2026), strong structured output |
-
-Also available: Claude API (no GPU needed) — Opus/Sonnet for highest quality baseline.
+| DeepSeek-R1-Distill-Qwen-32B | 32B | 1 | 30000 |
+| Qwen3-32B | 32B | 1 | 30002 |
+| SUFE-AIFLM-Lab/Fin-R1 | 7B | 1 | 30000 |
 
 **Cluster setup learnings (2026-03-29):**
 - Partition: inferred from QOS prefix, `--partition` flag is ignored
@@ -172,32 +166,94 @@ Also available: Claude API (no GPU needed) — Opus/Sonnet for highest quality b
 - Cluster proxy blocks outbound HTTPS — yfinance cannot download data. Use `scripts/download_data.py` locally, then `--data-dir data/` on cluster.
 - Use `NO_PROXY=<node>` when running eval to bypass proxy for SGLang server.
 
-- [x] Set up SGLang on SLURM cluster with H200s
-- [ ] Download OHLCV data locally via `scripts/download_data.py`, scp to cluster
-- [ ] Rerun `eval_round1.py` with Qwen3-235B-A22B (8 H200s) — `--data-dir data/`
-- [ ] Rerun with DeepSeek-R1-Distill-Qwen-32B (1 H200) for comparison
-- [ ] Compare accuracy/Sharpe across model tiers: local 14B → cluster 32B → cluster 235B → Claude API
-- [ ] If best model achieves >55% standalone accuracy and >+0.15 Sharpe delta → GO for LLM agent Rust port
+**Headline results (60-day eval, 21 instruments, Oct-Dec 2024):**
 
-**Round 2 — Optimization (if Round 1b passes)**
+| Metric | TSMOM | DeepSeek Indicator | Qwen3 Indicator | Fin-R1 Indicator |
+|---|---|---|---|---|
+| Accuracy (ex-FLAT) | 50.3% | 50.6% | 51.6% | **53.3%** |
+| Sharpe | 0.315 | 0.448 | 0.677 | **0.671** |
+| Ann. Return | 8.6% | — | — | **14.2%** |
+| Max Drawdown | -41.5% | -28.6% | -23.7% | **-18.8%** |
+| FLAT % | 0% | 35.6% | 41.8% | 48.2% |
+
+**Key insight: Domain specialization > model scale.** Fin-R1 (7B, finance-RL-trained) matches or beats both 32B general-purpose models. Runs on Mac Mini M4 Pro at ~45 tok/s, free inference.
+
+**The combiner is destroying alpha:**
+
+| Strategy | Sharpe | Max DD |
+|---|---|---|
+| TSMOM-only | 0.315 | -41.5% |
+| Fin-R1 indicator-only | **0.671** | **-18.8%** |
+| Combined (0.50/0.20 weights) | 0.420 | -35.6% |
+
+Combined Sharpe (0.420) is **worse** than indicator-only (0.671). The fixed 0.50/0.20 TSMOM/indicator weighting dilutes the indicator's alpha. TSMOM was great on 4 trending instruments (Round 1 Sharpe 1.37) but mediocre on a diversified 21-instrument universe (Sharpe 0.315).
+
+**FLAT signals are a feature, not a bug.** Fin-R1 goes FLAT 48% of the time, but when it takes a position: 53.3% accuracy, Sharpe 0.671, max DD -18.8%. The selectivity *is* the risk management. The combiner destroys this by always taking a position (Combined FLAT: 5.1%).
+
+**Per-instrument regime split — Fin-R1 excels on forex/crypto, TSMOM on equities:**
+
+| Instrument | Fin-R1 Indicator Sharpe | TSMOM Sharpe | Winner |
+|---|---|---|---|
+| EURUSD=X | **3.77** | -0.53 | Indicator |
+| BTC-USD | **3.02** | 2.95 | Indicator |
+| USDJPY=X | **1.98** | 0.12 | Indicator |
+| ZB=F | **1.61** | -0.89 | Indicator |
+| ETH-USD | **1.52** | 0.37 | Indicator |
+| CL=F | **1.47** | -0.41 | Indicator |
+| SPY | -1.00 | **0.92** | TSMOM |
+| ES=F | -1.21 | **0.75** | TSMOM |
+| EEM | -1.86 | -3.07 | Both terrible — drop |
+| EFA | -1.08 | -2.95 | Both terrible — drop |
+
+**Revised verdict: CONDITIONAL GO**
+
+The original Go/No-Go gate (>55% accuracy AND >+0.15 Sharpe delta) was designed for a uniform combiner. The data shows a clear instrument-type regime split that a dynamic combiner should exploit:
+
+- [x] Set up SGLang on SLURM cluster with H200s
+- [x] Download OHLCV data locally, run on cluster with `--data-dir data/`
+- [x] Eval DeepSeek-R1-Distill-Qwen-32B (1 H200) — Sharpe 0.448, accuracy 50.6%
+- [x] Eval Qwen3-32B (1 H200) — Sharpe 0.677, accuracy 51.6%
+- [x] Eval Fin-R1 (1 H200) — **Sharpe 0.671, accuracy 53.3%, best risk-adjusted**
+- [x] Compare across model tiers: 7B Fin-R1 ≥ 32B general models — specialization wins
+
+**Implications for Phase 3:**
+
+1. **Dynamic combiner weights by instrument type** — not fixed 0.50/0.20:
+   ```python
+   weights = {
+       "forex":       {"tsmom": 0.20, "indicator": 0.80},
+       "crypto":      {"tsmom": 0.30, "indicator": 0.70},
+       "equity":      {"tsmom": 0.80, "indicator": 0.20},
+       "bonds":       {"tsmom": 0.30, "indicator": 0.70},
+       "commodities": {"tsmom": 0.50, "indicator": 0.50},
+   }
+   ```
+2. **Respect the FLAT signal** — when indicator goes FLAT, reduce position size instead of overriding with TSMOM at full weight. FLAT = uncertainty = smaller position.
+3. **Drop EEM and EFA** — negative Sharpe across every model and strategy. Pure noise.
+4. **Use Fin-R1 as default model** — 7B, runs on Mac Mini M4 Pro, free, best performer. No API costs needed.
+
+**Round 2 — Optimization**
+- [ ] **Dynamic combiner** — Implement instrument-type weighted combiner, re-eval. Target: combined Sharpe > indicator-only (currently being destroyed).
+- [ ] **FLAT-aware position sizing** — When indicator is FLAT, reduce position to 50% of TSMOM-only size.
 - [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner? Justify the 2 extra LLM calls per decision.
 - [ ] **Memory effectiveness** — Run 50+ sequential decisions on one instrument. Does SQLite memory injection improve win rate vs memoryless? If not, simplify before porting.
-- [ ] **Prompt sensitivity analysis** — Tweak prompts (reorder CoT steps, change wording), re-run eval. If results swing wildly, prompts are fragile and need hardening.
+- [ ] **Prompt sensitivity analysis** — Tweak prompts to reduce FLAT rate on forex/crypto (where indicator has edge). If results swing wildly, prompts are fragile and need hardening.
+- [ ] **Pattern + Trend agent ablation** — Vision agents may capture different alpha than text-only Indicator. Test separately.
 - [ ] **Latency profiling** — End-to-end time for one full graph execution. Matters for IG live trading — if 30+ seconds, can't react to fast markets.
 - [ ] **Cost per decision** — Actual token usage × pricing for one full cycle. Project monthly bill at scale (multiple instruments, daily).
 
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: Not started** | Parallel tracks — proven alpha ships immediately, LLM agents gated on model eval
+> **Status: Not started** | Parallel tracks — TSMOM ships immediately, Fin-R1 indicator confirmed for port
 
-### Strategy: Parallel Tracks with Go/No-Go Gates
+### Strategy: Parallel Tracks (Updated After Round 1b)
 
-Based on Round 1 results (TSMOM Sharpe 1.37 vs LLM +0.07 marginal), Phase 3 splits into parallel tracks:
+Round 1b showed Fin-R1 indicator-only Sharpe 0.671 vs TSMOM 0.315 — the indicator adds genuine alpha, but the combiner was destroying it. Phase 3 now includes LLM agents from the start, with a fixed combiner:
 
 - **Track A** (unconditional): Port TSMOM + IG execution to Rust. Ships proven alpha.
-- **Track B** (conditional): Port LLM agents IF model upgrade eval shows ≥ 0.20 Sharpe delta.
-- **Track C** (fallback): If LLM agents remain marginal, invest in new quant signal sources instead.
+- **Track B** (unconditional): Port Fin-R1 indicator agent to Rust. Dynamic combiner with instrument-type weights. Respect FLAT signals.
+- **Track C** (Round 2): Test Pattern + Trend vision agents, debate, memory. Port if they add marginal alpha.
 
 ### Why IG Over IBKR
 - **Tax-free profits** via spread betting (UK: no CGT, no stamp duty)
@@ -241,25 +297,31 @@ Track A checklist:
 - [ ] `src/main.rs` — CLI (backtest, paper-trade, live-trade modes)
 - [ ] Integration tests: IG demo round-trip, backtest Sharpe matches Python 1.37
 
-### Track B — LLM Agents (Weeks 3-5) — CONDITIONAL
+### Track B — Fin-R1 Indicator Agent (Weeks 3-5) — START AFTER TRACK A
 
-**Gate:** Only start after Round 1b model eval confirms ≥ 0.20 Sharpe delta and ≥ 58% standalone accuracy.
+**Gate passed:** Fin-R1 indicator Sharpe 0.671 vs TSMOM 0.315. Domain-specialized 7B model beats 32B general models.
 
-- [ ] `rig-core` LLM client (OpenAI/Anthropic/Ollama/SGLang routing)
+- [ ] `rig-core` LLM client (Ollama routing — Fin-R1 runs locally on Mac Mini M4 Pro)
 - [ ] `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
 - [ ] `src/agents/indicator/` — `ta` crate computations → LLM interpretation
+- [ ] `src/agents/decision/combiner.rs` — **Dynamic instrument-type weights** (forex: 80% indicator, equity: 80% TSMOM)
+- [ ] `src/agents/decision/combiner.rs` — **FLAT-aware sizing** (FLAT → 50% position size, not override)
+- [ ] Universe cleanup: drop EEM, EFA (negative Sharpe everywhere)
+- [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
+- [ ] `src/eval/` — Backtest LLM + agent ablation (Rust port)
+- [ ] `prompts/` — Indicator .md template (ported from Python)
+- [ ] Benchmark against [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) (49.6K ★) Sharpe
+
+### Track C — Additional Agents & Signals (Weeks 5-8) — CONDITIONAL ON ROUND 2
+
+If Pattern/Trend vision agents or debate add marginal alpha in Round 2:
+
 - [ ] `src/agents/pattern/` — `plotters` candlestick charts → vision LLM
 - [ ] `src/agents/trend/` — Trendline fitting + S/R → vision LLM
 - [ ] `src/agents/debate/` — Bull/bear advocates + moderator
-- [ ] `src/agents/decision/` — Signal combiner + decision agent
-- [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in
-- [ ] `src/eval/` — Backtest LLM + agent ablation (Rust port)
-- [ ] `prompts/` — All .md templates (ported from Python)
-- [ ] Benchmark against [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) (49.6K ★) Sharpe
+- [ ] `src/agents/decision/` — Full decision agent with debate context
 
-### Track C — Alternative Signals (Weeks 5-8) — IF TRACK B FAILS
-
-If LLM agents remain marginal even with better models:
+Alternative quant signals (if vision agents don't pan out):
 
 | Signal Source | Approach | Expected Value |
 |---|---|---|

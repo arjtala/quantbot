@@ -1,0 +1,588 @@
+date,instrument,actual_return,tsmom_direction,tsmom_strength,tsmom_confidence,indicator_direction,indicator_strength,indicator_confidence,indicator_reasoning,combined_direction,combined_strength,tsmom_correct,indicator_correct,combined_correct
+2024-11-01,SOL-USD,-0.001514387414643048,LONG,1.0,1.0,LONG,0.75,0.7,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. While the MACD histogram and ROC are negative, indicating weakening momentum, the RSI and Stochastic indicators are not overbought or oversold. The slight decline in price could be a temporary pullback, but the trend remains confirmed by positive momentum indicators. Thus, the trend should continue.",LONG,0.9453125,False,False,False
+2024-11-02,SOL-USD,-0.020836324390463123,LONG,1.0,1.0,FLAT,0.0,0.3,"The instrument is in a sideways trend regime. While the MACD histogram and ROC show bearish momentum, the price remains above the 50-day and 200-day SMAs, indicating the trend is not yet exhausted. The conflicting signals suggest a temporary pullback within the sideways pattern.",LONG,0.8928571428571428,False,False,False
+2024-11-03,SOL-USD,-0.029554972598231366,LONG,1.0,1.0,FLAT,-0.3,0.6,"The instrument is in a sideways trend. Negative MACD and ROC confirm bearish momentum, but no clear divergence or extreme oversold conditions exist. Remain flat.",LONG,0.7483870967741936,False,False,False
+2024-11-04,SOL-USD,0.0568967415139745,LONG,1.0,1.0,FLAT,-0.5,0.7,"The instrument is in a sideways trend regime. Negative momentum indicators (MACD histogram and ROC) suggest bearishness, but no strong divergence or overbought/oversold conditions confirm a trend reversal. Expected consolidation.",LONG,0.671875,True,False,True
+2024-11-05,SOL-USD,0.12135376973709078,LONG,1.0,1.0,FLAT,0.0,0.8,"The instrument SOL-USD is in a sideways trend regime. The price is below the 20-day SMA but above the 50-day and 200-day SMAs. Both the MACD histogram (-1.8788) and ROC (-5.89) indicate bearish momentum, aligning with the sideways trend. Oscillators like RSI (53.47) and Stochastic (41.46, 22.82) show no extreme overbought/oversold conditions, confirming no strong trend exhaustion. While minor price changes exist, there's no clear divergence or extreme oscillator readings. Thus, the trend is confirmed as sideways, and a flat position is appropriate.",LONG,0.7575757575757576,True,False,True
+2024-11-06,SOL-USD,0.05017152333171926,LONG,1.0,1.0,LONG,0.85,0.9,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram is negative, but the ROC_12 is positive, confirming the trend. No divergence or extreme overbought/oversold signals are present. Thus, the trend is likely to continue.",LONG,0.9602941176470587,True,True,True
+2024-11-07,SOL-USD,0.018358536856811103,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an UPTREND with price above all SMAs and positive SMA slopes. MACD histogram and ROC confirm bullish momentum. RSI is 69.9 (below 70), and Stochastic K is 96.33 (overbought but normal in an uptrend). No bearish divergences detected. Trend should continue.",LONG,0.9862318840579711,True,True,True
+2024-11-08,SOL-USD,0.0012799160632710471,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. Both MACD histogram (2.1858) and ROC_12 (13.25) confirm bullish momentum. RSI (71.3) is above 70, indicating strong momentum without overbought conditions. No divergences or exhaustion signals are present. The 5-day close change of 23.0 further supports the uptrend. Indicators strongly align with the trend.",LONG,0.9862318840579711,True,True,True
+2024-11-09,SOL-USD,0.05204331959804165,LONG,1.0,1.0,LONG,0.95,0.98,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all prices above their respective SMAs (20, 50, 200). The momentum indicators (MACD histogram and ROC) are both positive (2.7028 and 12.4), aligning with the uptrend. The RSI is 71.4, which is above 70 but not yet overbought, so it doesn't signal caution. The Stochastic K and D are at 90.41 and 92.22, respectively, indicating strong bullish momentum. There's no divergence noted between price and these oscillators. The Williams %R is -9.59, which is a neutral to slightly oversold level but doesn't contradict the uptrend. The close change over 5 days is positive (26.91), reinforcing the upward trend. All indicators confirm the continuation of the uptrend without showing signs of exhaustion. Therefore, the trend should continue, and the direction remains LONG.",LONG,0.9859195402298851,True,True,True
+2024-11-10,SOL-USD,0.05710907099083884,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend with all price positions above SMAs and positive annualized SMA slopes. Momentum indicators (MACD histogram, ROC) are positive, confirming the trend. RSI is above 70 but within a normal overbought range for a strong uptrend. No divergences or conflicting signals exist. Thus, the trend is confirmed to continue.",LONG,0.9862318840579711,True,True,True
+2024-11-11,SOL-USD,-0.046756143922522364,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators (MACD histogram and ROC) are both positive (4.5004 and 27.28 respectively), which align with the uptrend. The RSI is at 78.78, which is above 70, indicating strong bullish momentum. The Stochastic K is at 99.15, which is extremely high, suggesting overbought conditions but not yet diverging from price. The Williams %R is -0.85, indicating the instrument is not oversold. There is no bearish divergence noted here. The close change over 1 day and 5 days is positive, reinforcing the uptrend. The MACD histogram is expanding, which confirms the trend is gaining strength. Therefore, the indicators strongly support the continuation of the uptrend without any signs of exhaustion.",LONG,0.9862318840579711,False,False,False
+2024-11-12,SOL-USD,0.013912822536254588,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram and ROC are both positive, confirming the upward momentum. RSI and Stochastic indicators are in overbought territory but do not diverge from price. No bearish signals present.",LONG,0.9862318840579711,True,True,True
+2024-11-13,SOL-USD,-0.027722643094210908,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all prices above their respective SMAs (SMA20, SMA50, SMA200). The momentum indicators, such as the MACD histogram (3.8221) and ROC_12 (29.42), are both positive, aligning with the uptrend. The RSI is at 70.57, which is overbought but not extreme, and the Stochastic K and D are at 85.93 and 88.93, respectively, indicating strong upward momentum. There are no bearish divergences observed here. The Williams %R is -14.07, which is a neutral to positive reading, not signaling overvaluation. The close change over 1 day and 5 days is positive, reinforcing the uptrend. Therefore, all indicators confirm the continuation of the uptrend without any signs of exhaustion.",LONG,0.9862318840579711,False,False,False
+2024-11-14,SOL-USD,0.04242366250343421,LONG,1.0,1.0,LONG,0.95,0.95,The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. MACD histogram and ROC confirm strong bullish momentum. Oscillators like RSI and Stochastic are overbought but not diverging from price. No signs of trend exhaustion.,LONG,0.9862318840579711,True,True,True
+2024-11-15,SOL-USD,-0.010298628677901767,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. Positive MACD histogram (2.69) and ROC_12 (34.17) confirm bullish momentum. RSI (69.1) is above 70 but not overbought, and no bearish divergences exist. All indicators align with the uptrend.",LONG,0.9862318840579711,False,False,False
+2024-11-16,SOL-USD,0.10065701866742849,LONG,1.0,1.0,LONG,0.95,0.95,The instrument SOL-USD is in an uptrend with price above all SMAs and positive annualized SMA slopes. Positive MACD histogram (2.1425) and ROC_12 (36.83) confirm bullish momentum. Oscillators like RSI (67.24) and Stochastic K (86.88) are above overbought thresholds but not extreme. Minor price dip (-1.03) is temporary and does not indicate trend exhaustion. Alignment of trend and momentum confirms continuation.,LONG,0.9862318840579711,True,True,True
+2024-11-17,SOL-USD,0.009339006727789645,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators (MACD histogram and ROC) are both positive, aligning with the uptrend. The MACD histogram value of 2.9596 is above zero, confirming bullish momentum. The ROC_12 is 42.5, which is a strong positive value, further supporting the continuation of the uptrend. There are no bearish divergences observed here. The RSI is 74.39, which is above 70 but not yet overbought, so it doesn't signal exhaustion. The Stochastic K and D are at 95.75 and 90.91, respectively, indicating strong overbought conditions, but since the trend is up, this is expected and doesn't contradict the trend. The Williams %R is -4.25, which is a neutral to slightly oversold reading, but again, in an uptrend, this is not a sign of exhaustion. The close changes (1d and 5d) are positive, reinforcing the uptrend. Therefore, all indicators confirm the continuation of the uptrend without any signs of exhaustion.",LONG,0.9862318840579711,True,True,True
+2024-11-18,SOL-USD,-0.0070756535919846986,LONG,1.0,1.0,LONG,1.0,1.0,"The instrument SOL-USD is currently in an UPTREND as per the trend_regime. Let's analyze the indicators to confirm or contradict this trend.
+
+1. **Momentum Alignment**:
+   - The MACD histogram is positive (3.3374), indicating bullish momentum, which aligns with the uptrend.
+   - The ROC_12 is 28.26, a positive value, reinforcing the upward trend. Both indicators confirm the trend continuation.
+
+2. **Oscillator Analysis**:
+   - RSI_14 is 74.99, which is above the overbought threshold of 70. However, RSI alone doesn't trigger a sell signal in an uptrend unless there's a divergence. Since price is making new highs and RSI is also increasing, there's no divergence here.
+   - Stochastic K and D are both above 80, indicating overbought conditions. However, in a strong uptrend, this is expected as the asset continues to rise. No divergence is present here either.
+   - Williams %R is -9.21, which is a positive number, showing that the asset is not oversold. This supports the uptrend.
+
+3. **No Exhaustion Signals**:
+   - There are no bearish divergences (price making new highs while indicators make lower highs).
+   - The MACD histogram is expanding, not shrinking, which is a positive sign for the trend.
+   - The RSI is above 70 but hasn't yet shown a bearish divergence, so it's still confirming the trend.
+
+**Conclusion**: All indicators align with the uptrend. The positive momentum from MACD and ROC, along with the lack of divergence or overbought signals that would contradict the trend, confirm that the uptrend should continue. There's no credible evidence of trend exhaustion.
+
+**Direction**: LONG
+**Strength**: 1.0 (fully confirms trend)
+**Confidence**: 1.0 (all indicators support continuation)
+**Holding Period**: Suggested to hold until a clear reversal signal appears, which could be after a few days of consolidation or a bearish divergence.
+",LONG,1.0,False,False,False
+2024-11-19,SOL-USD,-0.011230225453652487,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. Key momentum indicators (MACD histogram and ROC) are positive, confirming the trend. Oscillators like RSI and Stochastic are above overbought levels but not extreme, showing strong buying pressure without exhaustion signals. No divergences or conflicting indicators are present. The trend is strongly confirmed to continue.",LONG,0.9862318840579711,False,False,False
+2024-11-20,SOL-USD,0.09192885348594904,LONG,1.0,1.0,LONG,0.95,0.98,The instrument is in an uptrend with all SMAs above price. Positive MACD histogram (2.5812) and ROC_12 (17.75) confirm upward momentum. RSI (71.28) is above 70 but aligns with the trend. No divergences or exhaustion signals present. Strong confirmation of trend continuation.,LONG,0.9859195402298851,True,True,True
+2024-11-21,SOL-USD,-0.0021286787554156694,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive annualized SMA slopes. The MACD histogram and ROC are both positive, confirming the trend. Oscillators like RSI and Stochastic K are overbought but align with the upward momentum. No bearish divergences exist. The trend is strongly confirmed.",LONG,0.9862318840579711,False,False,False
+2024-11-22,SOL-USD,-0.005224431224692516,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators (MACD histogram and ROC) are both positive, aligning with the uptrend. The MACD histogram value of 3.427 is above zero, confirming bullish momentum. The ROC_12 is 21.8, which is a strong positive, reinforcing the trend. The RSI is 76.97, which is above 70 but does not indicate overbought yet because the trend is up. The Stochastic K and D are both above 80, showing extreme overbought conditions, but since the trend is up, this is a positive sign of strong momentum. The Williams %R is -10.53, which is a positive number, indicating the instrument is not oversold. There are no bearish divergences observed here. The price change over 1 day is slightly negative (-0.21), but this is a minor fluctuation in an otherwise strong upward trend. The 5-day close change is positive (7.97), supporting the uptrend. Therefore, all indicators confirm the continuation of the uptrend without any signs of exhaustion.",LONG,0.9862318840579711,False,False,False
+2024-11-23,SOL-USD,-0.008852576982199434,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators align with the uptrend: the MACD histogram is positive (3.0713), indicating bullish momentum, and the ROC_12 is positive (14.61), reinforcing upward momentum. The RSI is at 75.81, which is above the overbought threshold of 70, but this is common in strong uptrends without divergence. The Stochastic K and D are at 86.66 and 91.0, respectively, showing extreme overbought conditions, but since the trend is confirmed by MACD and ROC, this is not a contradiction. The Williams %R is -13.34, indicating the instrument is not oversold, which supports the uptrend. There are no bearish divergences observed here. Therefore, the indicators strongly confirm the continuation of the uptrend.",LONG,0.9862318840579711,False,False,False
+2024-11-24,SOL-USD,-0.07303870920489453,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive annualized SMA slopes. Positive MACD histogram (2.3795) and ROC_12 (19.17) confirm bullish momentum. RSI (73.8) and Stochastic K (82.5) are above overbought levels, indicating strong buying pressure. No bearish divergences exist. Minor 1-day price dip (-0.89) is inconsequential. The trend is confirmed by multiple indicators.",LONG,0.9862318840579711,False,False,False
+2024-11-25,SOL-USD,-0.014794047625943496,LONG,1.0,1.0,LONG,0.95,0.98,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. MACD histogram and ROC are positive, confirming the trend. No divergence or overbought signals exist. Minor price declines are normal in an uptrend.",LONG,0.9859195402298851,False,False,False
+2024-11-26,SOL-USD,0.049026361022546316,LONG,1.0,1.0,LONG,0.7,0.6,"The instrument SOL-USD is in an uptrend with price above all SMAs and positive SMA slopes. While the MACD histogram is negative (bearish), the ROC_12 is positive (bullish), indicating conflicting momentum. However, the price remains above all SMAs, confirming the trend. The negative MACD histogram suggests potential weakness but not enough to reverse the uptrend. Thus, the trend is likely to continue.",LONG,0.9419354838709677,True,True,True
+2024-11-27,SOL-USD,-0.01872953574535463,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all prices above their respective SMAs (20, 50, 200). The momentum indicators (MACD histogram and ROC) are both positive, aligning with the uptrend. The MACD histogram is -1.5338, which is negative but still within a positive range, suggesting continued upward momentum. The ROC_12 is 11.1, further confirming the trend. While RSI is 62.48 (overbought), this is typical in an uptrend and doesn't indicate exhaustion unless combined with divergences. No divergences are present here. The Stochastic K and D are 63.51 and 54.57, respectively, which are also in a positive overbought range but don't contradict the trend. The Williams %R is -36.49, which is a neutral to slightly oversold reading, but since the trend is up, this isn't a signal of trend exhaustion. The close change over 1d is positive (4.9), reinforcing the uptrend. There's no evidence of multiple indicators converging to exhaustion. Therefore, the trend should continue.",LONG,0.9862318840579711,False,False,False
+2024-11-28,SOL-USD,0.024332917343244276,LONG,1.0,1.0,LONG,0.75,0.8,"The instrument is in an uptrend with price above all SMAs and positive SMA slopes. The ROC_12 is positive, confirming bullish momentum. While the MACD histogram is negative, indicating bearish momentum, the price remains above SMAs, suggesting consolidation rather than reversal. The weight of evidence slightly favors continuation.",LONG,0.9393939393939393,True,True,True
+2024-11-29,SOL-USD,-0.023838092982634063,LONG,1.0,1.0,LONG,0.75,0.8,"The instrument SOL-USD is in an uptrend supported by all SMAs and positive annualized SMA slopes. While the MACD histogram is negative (bearish), the ROC_12 remains positive (bullish), indicating a slight divergence. The RSI, Stochastic, and Williams %R do not yet show extreme overbought or divergence from price. The trend is confirmed by the broader alignment of SMAs and price position, so the default is to stay long with caution due to conflicting momentum signals.",LONG,0.9393939393939393,False,False,False
+2024-11-30,SOL-USD,-0.0028341980956787527,LONG,1.0,1.0,LONG,0.85,0.75,"The instrument is in an uptrend with all prices above SMAs and positive SMA slopes. While MACD and ROC show bearish momentum, only two indicators are negative. The trend is confirmed by positive SMAs and strong positive slopes. Reduced confidence due to weakening momentum.",LONG,0.9653846153846153,False,False,False
+2024-12-01,SOL-USD,-0.04772320096752103,LONG,1.0,1.0,LONG,0.85,0.75,"The instrument SOL-USD is in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators (MACD histogram and ROC) are negative (-3.0045 and -0.43), which contradicts the uptrend. However, in an uptrend, negative momentum can still occur due to temporary pullbacks. The RSI is 57.72, which is below overbought territory (70), so it doesn't signal exhaustion. The Stochastic K and D are 34.53 and 47.93, respectively, which are in a neutral to oversold range but not extreme. The Williams %R is -65.47, indicating the instrument is oversold, which could suggest a potential reversal but not strong enough to confirm trend exhaustion. The close change over 1 day is -0.28, a slight decline, but the 5-day change is +2.64, showing a positive trend. Given that the trend is confirmed by the SMAs and the trend_regime, but the momentum indicators are negative, there's a slight contradiction. However, since the trend is still supported by the SMAs and the negative momentum is a temporary dip, the trend is likely to continue. The weight of evidence slightly favors continuation, but the negative momentum is a minor caution.",LONG,0.9653846153846153,False,False,False
+2024-12-02,SOL-USD,0.037403723569562564,LONG,1.0,1.0,FLAT,-0.5,0.7,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the 'trend_regime' field. This is determined by the price's position relative to its 20-day SMA (below) and the conflicting 50-day and 200-day SMAs (above and above, respectively). The 20-day SMA has a positive annualized slope of 149.8%, while the 50-day SMA has a steeper positive slope of 246.4%. However, the price is below the 20-day SMA, suggesting a sideways or range-bound movement.
+
+### Momentum Alignment
+In a sideways trend, the default direction is neutral (FLAT). To confirm the trend, we look at the alignment of momentum indicators (MACD histogram and ROC). The MACD histogram is -3.9191, which is negative, indicating bearish momentum. The ROC_12 is -4.11, reinforcing the bearishness. These negative values suggest that the downward momentum is present, which aligns with the sideways trend if the price is consolidating.
+
+### Exhaustion Signals
+To determine if the trend is exhausting, we check for divergences or extreme oscillator readings. The RSI_14 is 50.7, which is neutral (not overbought or oversold). The Stochastic K and D are 12.03 and 31.83, respectively, which are within a normal range. The Williams %R is -87.97, indicating the instrument is oversold, but this is common in sideways markets as prices fluctuate within a range. There are no clear bearish divergences here. The price change over 1 day (-4.77) and 5 days (-6.83) shows a slight decline, but this is part of the sideways consolidation.
+
+### Conclusion
+The negative MACD histogram and ROC confirm the bearish momentum, which aligns with the sideways trend. However, since the trend is already sideways, the negative momentum reinforces the existing regime rather than signaling a reversal. There are no strong exhaustion signals (e.g., multiple overbought/oversold indicators diverging from price). Therefore, the trend is likely to continue sideways, and the appropriate action is to remain **FLAT**.
+
+### Final Signal
+- **Direction**: FLAT
+- **Strength**: -0.5 (negative momentum)
+- **Confidence**: 0.7 (moderate alignment with trend)
+- **Holding Period**: 3-5 days (short-term consolidation)
+",LONG,0.671875,True,False,True
+2024-12-03,SOL-USD,-0.021695206166679304,LONG,1.0,1.0,FLAT,-0.3,0.4,"The instrument is in a sideways trend regime. While MACD and ROC indicate bearish momentum, no clear divergence or multiple extreme oscillators confirm trend exhaustion. Thus, the safest action is to remain flat.",LONG,0.8206896551724137,False,False,False
+2024-12-04,SOL-USD,0.021296372390190887,LONG,1.0,1.0,FLAT,-0.6,0.7,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the 'trend_regime' field. This is determined by the price's position relative to its 20-day SMA (below) and the conflicting 50-day and 200-day SMAs (above and above, respectively). The 20-day SMA slope is positive (101.5%), and the 50-day SMA slope is even more positive (214.2%), which might suggest a potential upward bias despite the sideways classification. However, the price is below the 20-day SMA, which is a bearish signal.
+
+### Momentum Confirmation
+- **MACD Histogram**: Negative (-4.1005) indicates bearish momentum. This aligns with the price decline over the past day (-2.17) and the 5-day decline (-5.92). The MACD histogram is shrinking, which could be a sign of weakening bullish momentum.
+- **ROC (Rate of Change)**: Negative (-10.68) confirms the bearish trend. This metric measures the percentage change over 12 periods, showing a significant decline.
+
+### Oscillator Analysis
+- **RSI (52.09)**: Neutral value, neither overbought nor oversold. This doesn't provide strong evidence for trend continuation or exhaustion.
+- **Stochastic K (26.7)**: Below the midpoint (50), indicating a bearish condition. However, the D line (25.39) is also below, so there's no divergence here.
+- **Williams %R (-73.3)**: Deeply oversold, which could suggest a potential reversal, but this is more relevant in a trending market. In a sideways regime, this might not be a reliable signal.
+
+### Divergence Check
+No clear divergences are present. Price is declining, but the MACD histogram is also negative, so there's no conflicting signal.
+
+### Conclusion
+The negative MACD histogram and shrinking ROC confirm the bearish momentum, aligning with the price's decline. However, the RSI and Stochastic indicators are neutral, and the Williams %R is oversold but not in a trending context. The sideways trend regime is maintained by the conflicting SMAs, but the price is below the 20-day SMA, which is a bearish signal. The MACD and ROC are the primary drivers here, confirming the trend's weakness. While there's no strong evidence of exhaustion, the trend is likely to continue its sideways pattern with a slight bearish bias.
+
+**Direction**: FLAT
+**Strength**: -0.6
+**Confidence**: 0.7
+**Holding Period**: 3 days",LONG,0.65,True,False,True
+2024-12-05,SOL-USD,0.013044380694812174,LONG,1.0,1.0,FLAT,0.3,0.6,"The instrument is in a sideways trend regime. Negative MACD and ROC confirm bearish momentum, but price remains above the 50-day SMA. Only two out of five key indicators (MACD, ROC) show bearishness, so the trend is not strongly exhausted.",LONG,0.8645161290322582,True,False,True
+2024-12-06,SOL-USD,0.006314619038261027,LONG,1.0,1.0,FLAT,-0.3,0.6,"The instrument SOL-USD is in a sideways trend regime. While the MACD histogram and 12-day ROC are negative, indicating bearish momentum, the RSI and Williams %R are neutral to slightly oversold. This suggests a cautious sideways bias with minor bearishness. No strong signals for trend reversal exist.",LONG,0.7483870967741936,True,False,True
+2024-12-07,SOL-USD,-0.007862677271002871,LONG,1.0,1.0,FLAT,0.3,0.6,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the 'trend_regime' field. This is further supported by the price being **below** the 20-day SMA and **above** both the 50-day and 200-day SMAs. The 20-day SMA has a positive annualized slope of 82.2%, while the 50-day SMA has a steeper positive slope of 203.0%. These conflicting SMA positions (below 20-day vs. above 50-day/200-day) align with a sideways pattern.
+
+### Momentum Alignment
+The **MACD histogram** is **negative (-2.90)**, indicating bearish momentum. However, the **ROC_12** (1.75) is positive, suggesting some bullish momentum. This divergence between MACD and ROC could imply a lack of clear directional force, supporting the sideways trend.
+
+### Oscillator Analysis
+- **RSI_14** is at 57.01, which is neutral (not overbought or oversold). This does not signal exhaustion.
+- **Stochastic K** (51.16) and **Stochastic D** (43.87) are below their respective overbought thresholds (80), but they are not in extreme territory. No divergence is present here.
+- **Williams %R_14** is -48.84, indicating the instrument is oversold. However, this is within a normal range and does not strongly suggest trend exhaustion.
+
+### Convergence of Exhaustion Signals
+No single indicator is at extreme levels (e.g., RSI >70 or <20), and no divergences are observed. The MACD histogram’s negative value suggests bearishness, but the positive ROC_12 indicates some buying pressure. The lack of strong alignment or divergence points to a neutral state.
+
+### Conclusion
+Given the sideways trend regime and the mixed momentum signals (negative MACD vs. positive ROC), there is no strong evidence of trend exhaustion. The instrument is likely to continue its sideways movement unless new directional forces emerge.
+
+**Direction**: FLAT
+**Strength**: 0.3
+**Confidence**: 0.6
+**Holding Period**: 3 days",LONG,0.8645161290322582,False,False,False
+2024-12-08,SOL-USD,-0.08167778361036382,LONG,0.5,0.75,FLAT,0.0,0.3,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime. This is determined by the conflicting positions relative to the 20-day and 50-day SMAs: the price is below the 20-day SMA but above the 50-day SMA. The 20-day SMA has a positive annualized slope of 58.3%, while the 50-day SMA has a steeper positive slope of 201.6%. The 200-day SMA is also above the price, reinforcing the sideways pattern.
+
+### Momentum Alignment
+- **MACD Histogram**: Negative (-2.6691) indicates bearish momentum, which contradicts the sideways trend. In a sideways market, neutral momentum is expected, so the negative MACD suggests the trend may be weakening.
+- **ROC (12-day)**: Positive (2.47%) confirms the sideways trend by showing slight upward momentum, but this is weak compared to the negative MACD.
+
+### Oscillator Analysis
+- **RSI (14)**: 55.66 is neutral, neither overbought nor oversold. This aligns with the sideways trend.
+- **Stochastic K**: 50.56 is in the middle of the range, confirming no overbought/oversold condition.
+- **Williams %R**: -49.44 is oversold, but this is a temporary condition and does not strongly indicate trend exhaustion.
+
+### Divergence Check
+- **MACD Divergence**: Price made a new high, but the MACD histogram did not, indicating a bearish divergence. This suggests the trend may be losing strength.
+- **ROC Divergence**: Not applicable here since both price and ROC moved slightly upward.
+
+### Conclusion
+The negative MACD histogram and bearish divergence from price suggest the trend is weakening, even though the overall trend is technically sideways. However, since the trend is not clearly bullish or bearish, the safest action is to remain **FLAT**. The negative MACD and divergence provide weak evidence of trend exhaustion, but not enough to justify a directional trade. The sideways pattern remains intact, so no strong signal to enter a position.
+
+### Final Signal
+**Direction**: FLAT
+**Strength**: 0.0
+**Confidence**: 0.3
+**Holding Period**: 1-3 days (short-term)
+",LONG,0.4310344827586207,False,False,False
+2024-12-09,SOL-USD,-0.016181200236736637,LONG,0.5,0.75,FLAT,-0.7,0.8,"### Trend Analysis
+The instrument SOL-USD is currently in a **SIDeways** trend regime. This is determined by the conflicting positions relative to the 20-day and 50-day SMAs: the price is below the 20-day SMA but above the 50-day and 200-day SMAs. The 20-day SMA has a positive annualized slope of 15.0%, while the 50-day SMA has a very high positive slope of 188.1%, indicating strong upward momentum in the short-term. However, the price is below the 20-day SMA, which suggests a potential pullback or consolidation.
+
+### Momentum Confirmation
+- **MACD Histogram**: Negative (-3.7027) indicates bearish momentum, which contradicts the short-term upward trend suggested by the 50-day SMA. This divergence suggests that the upward momentum is fading.
+- **ROC (Rate of Change)**: -10.3% shows a decline in price growth rate, reinforcing the bearish momentum.
+- **RSI (14)**: 44.06 is within the neutral range (30-70), not indicating overbought or oversold conditions. However, the RSI does not diverge from price, so it does not contradict the trend.
+- **Stochastic K**: 20.6% and D**: 40.77% are in the middle of their ranges, neither confirming nor contradicting the trend.
+- **Williams %R**: -79.4% is in the oversold region, but since the price is still above the 50-day SMA, this oscillator is not conflicting with the trend.
+
+### Exhaustion Signals
+- The MACD histogram is negative, indicating bearish momentum. This is a key signal of trend exhaustion.
+- The ROC is negative, further confirming the weakening momentum.
+- The price is below the 20-day SMA, which is a bearish signal.
+
+### Conclusion
+While the 50-day SMA shows strong upward momentum, the price's position below the 20-day SMA and the negative MACD histogram and ROC indicate that the trend is likely to reverse. The combination of these indicators suggests that the upward trend is exhausting, and a potential correction is underway. However, since the trend regime is still technically sideways (not clearly defined), the evidence for exhaustion is strong but not overwhelming. The negative MACD histogram and ROC are the primary drivers here.
+
+### Final Signal
+Given the conflicting signals between the 50-day SMA (bullish) and the 20-day SMA (bearish), along with the negative momentum indicators, the trend is likely to continue sideways or reverse downward. However, the strength of the negative MACD and ROC suggests a cautious approach. Since the question asks whether the indicators confirm or contradict the trend, and the trend is technically sideways, the negative momentum indicators are contradicting the short-term upward trend implied by the 50-day SMA. Therefore, the trend is exhausting, and a short-term reversal is possible.
+
+**Direction**: FLAT
+**Strength**: -0.7
+**Confidence**: 0.8
+**Horizon Days**: 3
+",LONG,0.14112149532710283,False,False,False
+2024-12-10,SOL-USD,0.0637074588905755,LONG,0.5,0.75,FLAT,-0.6,0.7,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **SIDeways** trend regime. This is determined by the conflicting positions relative to the 20-day and 50-day SMAs: the price is below the 20-day SMA but above the 50-day and 200-day SMAs. The 20-day SMA has a negative annualized slope (-24.6%), while the 50-day SMA has a positive annualized slope (170.8%). This suggests a lack of clear directional momentum, hence the sideways classification.
+
+### Momentum Alignment
+- **MACD Histogram**: -4.4575 (negative) indicates bearish momentum. However, the price has decreased by -1.62% over 1 day and -8.62% over 5 days, which aligns with the negative MACD histogram. This confirms the bearish trend.
+- **ROC (Return on Close)**: -10.07% over 12 periods further supports the bearish momentum. Both the MACD and ROC are negative, reinforcing the downward trend.
+
+### Exhaustion Signals
+- **RSI (14)**: 42.33 is within the neutral range (30-70), showing no overbought/oversold conditions. No divergence is present here.
+- **Stochastic K**: 23.46 and **Stochastic D**: 31.54 are below 20, indicating the instrument is in a weak buying environment. However, this does not contradict the bearish trend.
+- **Williams %R (14)**: -76.54 is in the overbought region, but since the trend is bearish, this could be a temporary overbought condition rather than a reversal signal.
+
+### Conclusion
+The negative MACD histogram and ROC confirm the bearish trend. While the RSI and Williams %R are in overbought territory, this is not conflicting with the trend direction. The lack of strong divergences or multiple exhaustion indicators suggests the trend is likely to continue sideways or slightly downward. However, the negative momentum indicators are strong enough to warrant caution against a short-term reversal.
+
+### Final Signal
+Given the negative momentum and the lack of strong counter-trend indicators, the trend is expected to continue sideways or slightly bearish. The weight of evidence slightly favors a **FLAT** position, but with a cautious approach due to the negative momentum.
+
+**Direction**: FLAT
+**Strength**: -0.6
+**Confidence**: 0.7
+**Holding Period**: 3 days",LONG,0.20097087378640777,True,False,True
+2024-12-11,SOL-USD,-0.0018471139992630725,LONG,0.5,0.75,FLAT,0.3,0.7,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime. This is determined by the conflicting positions relative to the 20-day and 50-day SMAs: the price is below the 20-day SMA but above the 50-day SMA. The 20-day SMA has a negative annualized slope (-77.9%), indicating a bearish trend, while the 50-day SMA has a positive annualized slope (156.3%), suggesting a bullish trend. The combination of these conflicting slopes and the price's position above the 50-day SMA but below the 20-day SMA confirms a sideways trend.
+
+### Momentum Alignment
+- **MACD Histogram**: -3.8941 (negative) indicates bearish momentum. However, in a sideways trend, the MACD histogram can fluctuate without confirming a clear direction. The negative value here suggests a slight bearish bias, but it's not strong enough to contradict the sideways trend.
+- **ROC (12)**: -6.61 (negative) shows a decline in price over 12 days, reinforcing the bearish sentiment from the MACD histogram. However, in a sideways market, such a decline might be temporary and not indicative of a trend reversal.
+
+### Oscillator Analysis
+- **RSI (14)**: 50.44 is neutral, neither overbought nor oversold. This aligns with the sideways trend, as neutral RSI values are common in consolidations.
+- **Stochastic K**: 55.1 and **Stochastic D**: 33.05 indicate the price is in the upper half of its recent range, but not overbought. This suggests the price is in a consolidation phase rather than trending.
+- **Williams %R (14)**: -44.9 is a relatively low value, indicating the price is not oversold. This further supports the sideways trend.
+
+### Divergence Check
+- There is no clear divergence between price and any of the oscillators. For example, the RSI does not make a new high while the price makes a new high, which would indicate a bearish divergence. Similarly, the MACD histogram does not show a divergence from price action.
+
+### Conclusion
+The technical indicators confirm that the sideways trend is ongoing. While the MACD histogram and ROC show slight bearishness, these are not strong enough to outweigh the conflicting SMA slopes and the lack of divergences. The RSI and other oscillators remain neutral, reinforcing the consolidation pattern. Therefore, there is no credible evidence of trend exhaustion, and the trend should continue sideways.
+
+### Signal
+- **Direction**: FLAT
+- **Strength**: 0.3 (mild bearishness from MACD and ROC, but not enough to justify a short position)
+- **Confidence**: 0.7 (majority of indicators align with sideways, but conflicting SMAs make it less certain)
+- **Holding Period**: 5 days (short-term consolidation)
+",LONG,0.44563106796116503,False,False,False
+2024-12-12,SOL-USD,-0.009643898415846897,LONG,0.5,0.75,FLAT,-0.3,0.6,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to its SMAs. The price is **below** the 20-day SMA but **above** both the 50-day and 200-day SMAs. The 20-day SMA has a negative annualized slope (-109.9%), while the 50-day SMA has a positive slope (141.7%). This suggests a lack of clear directional momentum, aligning with a sideways trend.
+
+### Momentum Confirmation
+- **MACD Histogram**: -3.4212 (negative) indicates bearish momentum. However, the MACD Line (2.0428) is positive, which is a contradiction. This divergence suggests potential trend exhaustion.
+- **ROC (Rate of Change)**: -4.51% shows a decline in price momentum, reinforcing the bearish signal from the MACD.
+- **RSI (50.2)**: Neutral value, neither overbought nor oversold. No divergence from price.
+- **Williams %R (-45.87)**: Below -20, indicating oversold conditions, but this is a common level in sideways markets.
+
+### Oscillator Divergences
+- **Stochastic K (54.13)** and **D (44.23)** are below their respective overbought thresholds (80), but no clear divergence from price.
+- **No significant divergences** are present between price and oscillators, except for the MACD Line vs. Histogram.
+
+### Conclusion
+The negative MACD histogram and declining ROC confirm bearish momentum, but the positive MACD Line suggests a contradiction. However, the lack of strong overbought/oversold signals and the absence of multiple divergences mean the trend is not yet exhausted. The sideways regime remains intact, with potential for continuation or reversal.
+
+### Signal
+Given the conflicting indicators and the absence of strong exhaustion signals, the trend is likely to continue sideways. However, the negative MACD histogram and declining ROC indicate caution, warranting a **FLAT** position to avoid potential losses if the trend reverses.
+
+**Final Signal**: FLAT
+
+**Strength**: -0.3
+
+**Confidence**: 0.6
+
+**Holding Period**: 3-5 days",LONG,0.30606060606060603,False,False,False
+2024-12-13,SOL-USD,-0.02222289786512166,LONG,0.5,0.75,FLAT,-0.3,0.6,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to its SMAs. The price is below the 20-day SMA (price_vs_sma20: below), above the 50-day SMA (price_vs_sma50: above), and above the 200-day SMA (price_vs_sma200: above). The 20-day SMA has a negative annualized slope (-138.6%), while the 50-day SMA has a positive annualized slope (126.5%). This suggests a lack of clear directional momentum, aligning with the sideways classification.
+
+### Momentum Alignment
+- **MACD Histogram**: Negative (-3.135) indicates bearish momentum. However, the MACD Line (1.5452) is positive, conflicting with the histogram. This divergence suggests potential weakness in the upward trend.
+- **ROC (12)**: Negative (-5.16) confirms bearish momentum. The negative ROC indicates a decline in price growth rate, reinforcing the bearish sentiment.
+
+### Oscillator Analysis
+- **RSI (14)**: 48.93 is neutral, neither overbought nor oversold. No divergence from price.
+- **Stochastic K**: 49.45 and D**: 52.89 are in the middle range, showing no extreme overbought/oversold conditions.
+- **Williams %R (14)**: -50.55 is oversold, but this is a common level for many assets. No clear divergence.
+
+### Exhaustion Signals
+- The MACD histogram is negative, indicating bearish momentum. However, the MACD Line remains positive, creating a divergence. This suggests the trend may be weakening but not yet exhausted.
+- The negative ROC aligns with the bearish MACD histogram, reinforcing the possibility of a trend reversal.
+
+### Conclusion
+The indicators show conflicting signals. While the MACD histogram and negative ROC suggest bearish momentum, the positive MACD Line and neutral RSI indicate the trend is not yet exhausted. The sideways trend regime lacks a clear directional bias, and no single indicator strongly confirms exhaustion. However, the combination of bearish momentum indicators (MACD histogram and ROC) creates a cautious environment, slightly favoring a flat position.
+
+**Direction**: FLAT
+**Strength**: -0.3
+**Confidence**: 0.6
+**Horizon Days**: 3
+",LONG,0.30606060606060603,False,False,False
+2024-12-14,SOL-USD,0.017362157056707517,LONG,0.5,0.75,FLAT,-0.5,0.7,"The instrument SOL-USD is in a sideways trend regime. While negative momentum indicators (MACD histogram, ROC) suggest weakness, the price remains above the 50-day SMA and the 200-day SMA is still above the price. No strong divergence or overbought/oversold extremes are present. Thus, the trend is likely to continue sideways.",LONG,0.22815533980582525,True,False,True
+2024-12-15,SOL-USD,-0.03274069769401311,LONG,0.5,0.75,FLAT,0.0,0.7,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to its SMAs. The price is below the 20-day SMA (price_vs_sma20: below), above the 50-day SMA (price_vs_sma50: above), and above the 200-day SMA (price_vs_sma200: above). This suggests a lack of clear directional momentum. The negative annualized slope of the 20-day SMA (-141.4%) and the positive slope of the 50-day SMA (130.1%) further complicate the trend direction, reinforcing the sideways classification.
+
+### Momentum Alignment
+The **MACD histogram** is -2.7906, indicating bearish momentum. The **ROC_12** is -4.5, reinforcing the bearishness. These metrics align with the sideways trend, as they show a decline in price momentum without a clear directional shift. The RSI (48.54) is neutral, neither overbought nor oversold, which supports the sideways nature of the trend. The Stochastic K (46.69) and D (44.63) are also in a neutral range, not indicating overbought or oversold conditions.
+
+### Exhaustion Signals
+There are no clear divergence signals present. The price has not made new highs while RSI or other oscillators have made lower highs, which would typically indicate a bearish divergence. The MACD histogram is negative but not shrinking significantly, suggesting ongoing bearish momentum but not yet exhausted. The Williams %R (-53.31) is in the oversold region, but this is common in sideways markets where price oscillates within a range. No three or more indicators are simultaneously showing exhaustion, which is required to justify a trend reversal.
+
+### Conclusion
+The technical indicators confirm that the sideways trend is ongoing. While bearish momentum is present, there is no strong evidence of trend exhaustion. The default action remains **sideways**, with no clear directional bias. The lack of a clear trend direction and the absence of multiple exhaustion signals support maintaining a **FLAT** position.
+
+### Final Signal
+- **Direction**: FLAT
+- **Strength**: 0.0 (no clear directional momentum)
+- **Confidence**: 0.7 (sideways trend is confirmed by conflicting SMAs and neutral oscillators)
+- **Holding Period**: 3-5 days (short-term oscillations)
+",LONG,0.3640776699029126,False,False,False
+2024-12-16,SOL-USD,0.02996171177779683,LONG,0.5,0.75,FLAT,-0.3,0.6,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the negative SMA20 slope (-126.3%) and the positive SMA50 slope (119.7%). The price is below both the 20-day and 50-day SMAs but above the 200-day SMA. This suggests a lack of clear directional momentum, with the 50-day SMA showing a strong upward slope despite the overall sideways trend.
+
+### Momentum Alignment
+- **MACD Histogram**: -2.9137 (negative) indicates bearish momentum, which aligns with the sideways trend (no clear direction). However, the MACD Line (-0.4478) is slightly negative, reinforcing the bearish sentiment.
+- **ROC_12**: -5.58 (negative) confirms the decline over the past 12 days, supporting the bearish momentum.
+
+### Oscillator Analysis
+- **RSI_14**: 44.31 (mid-range) shows no overbought/oversold conditions, consistent with the sideways trend.
+- **Stochastic K**: 29.54 and **Stochastic D**: 37.99 are below 50, indicating the instrument is in a neutral to slightly oversold state but not extreme.
+- **Williams %R_14**: -70.46 (over 70) suggests the instrument is overbought, which contradicts the bearish momentum from MACD and ROC. This is a potential divergence.
+- **Close Change**: -3.27 (1-day) and -4.89 (5-day) show recent declines, reinforcing the bearish momentum.
+
+### Exhaustion Signals
+- The Williams %R_14 at -70.46 is above the overbought threshold (70), indicating potential exhaustion. However, this is the only strong divergence noted. The MACD and ROC are both negative, confirming bearish momentum.
+
+### Conclusion
+The majority of indicators (MACD, ROC, close changes) align with a bearish trend, while the Williams %R shows a potential overbought condition. However, since the trend is already sideways, the overbought signal from Williams %R could be a temporary condition rather than a strong reversal signal. The lack of multiple simultaneous exhaustion signals (e.g., multiple oscillators at extremes) means the trend is likely to continue sideways or slightly downward.
+
+### Final Signal
+Given the conflicting signals but the overall bearish momentum from MACD and ROC, the trend is expected to continue sideways or slightly decline. However, the Williams %R divergence suggests caution, but not enough to flat the position. The default action in a sideways trend is to remain **FLAT** unless strong evidence of exhaustion is present.
+
+**Direction**: FLAT
+**Strength**: -0.3
+**Confidence**: 0.6
+**Holding Period**: 3 days",LONG,0.30606060606060603,True,False,True
+2024-12-17,SOL-USD,-0.07376009218136859,LONG,0.5,0.75,FLAT,0.0,0.5,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to its SMAs. The price is **below** the 20-day SMA but **above** both the 50-day and 200-day SMAs. The 20-day SMA has a negative annualized slope (-116.3%), while the 50-day SMA has a positive annualized slope (113.6%). This suggests a lack of clear directional momentum, aligning with a sideways trend.
+
+### Momentum Alignment
+- **MACD Histogram**: -2.447 (negative) indicates bearish momentum. However, in a sideways trend, this is neutral. The MACD Line (-0.5928) and Signal (1.8542) are close to zero, reinforcing no strong directional bias.
+- **ROC_12**: -4.78% shows a decline in 12-day return, consistent with a bearish sentiment but not extreme.
+
+### Oscillator Analysis
+- **RSI_14**: 48.58% is in the neutral range, neither overbought nor oversold. This lacks divergence from price, so it doesn't signal trend exhaustion.
+- **Stochastic K**: 44.72% and D**: 40.32% are also in neutral territory, confirming no overbought/oversold conditions.
+- **Williams %R**: -55.28% is in the oversold region, but this is common in sideways markets as price consolidates.
+
+### Divergence Check
+No clear divergences are present. Price changes (1-day +3.0, 5-day -1.85) are minor and don't align with significant oscillator extremes.
+
+### Conclusion
+The indicators neither strongly confirm nor contradict the sideways trend. The MACD histogram's negative value suggests bearishness, but the overall lack of divergence and neutral oscillator readings indicate the trend is likely to continue sideways. There's no overwhelming evidence of trend exhaustion.
+
+**Direction**: FLAT
+**Strength**: 0.0
+**Confidence**: 0.5
+**Holding Period**: 5 days",LONG,0.39473684210526316,False,False,False
+2024-12-18,SOL-USD,-0.058615790073723306,LONG,0.5,0.75,FLAT,-0.5,0.7,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the negative SMA20 slope (-118.2%) and the positive SMA50 slope (103.4%). The price is below both the 20-day and 50-day SMAs but above the 200-day SMA. This suggests a lack of clear directional momentum, possibly due to consolidation or a temporary pause in the trend.
+
+### Momentum Alignment
+- **MACD Histogram**: -3.0919 (negative) indicates bearish momentum, which aligns with the sideways trend. However, the MACD Line (-2.0107) is also negative, reinforcing the bearish sentiment.
+- **ROC (12)**: -12.94% shows a decline in price over 12 days, further supporting bearishness. These indicators confirm the sideways trend.
+
+### Oscillator Analysis
+- **RSI (14)**: 40.17 is neutral, neither overbought nor oversold. This doesn't indicate exhaustion.
+- **Stochastic K**: 6.23 and D**: 26.83 are in the mid-range, also neutral. No divergence from price is observed here.
+- **Williams %R (14)**: -93.77 is extremely oversold, but in a sideways trend, this could be a temporary condition without directional significance.
+
+### Divergence Check
+No clear divergences are present. Price changes (-7.38% 1d, -8.21% 5d) are consistent with the negative momentum indicators.
+
+### Conclusion
+The negative MACD histogram and ROC confirm the sideways trend. While RSI is neutral, the other indicators align with the trend. There's no strong evidence of trend exhaustion. The sideways regime is likely to continue unless new divergences or extreme oscillator readings appear.
+
+**Direction**: FLAT
+**Strength**: -0.5 (negative momentum)
+**Confidence**: 0.7 (majority of indicators confirm sideways)
+**Holding Period**: 3-5 days (short-term consolidation)",LONG,0.22815533980582525,False,False,False
+2024-12-19,SOL-USD,-0.00039292746274710577,LONG,0.5,0.75,FLAT,-0.5,0.7,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **SIDeways** trend regime. This is determined by the following:
+- **SMA20_slope_ann_pct**: -136.7% (negative slope)
+- **SMA50_slope_ann_pct**: +86.1% (positive slope)
+- **Price vs. SMA20**: Below (price is below 20-day MA)
+- **Price vs. SMA50**: Below (price is below 50-day MA)
+- **Price vs. SMA200**: Above (price is above 200-day MA)
+
+The conflicting slopes between 20-day and 50-day MAs (negative vs. positive) indicate a lack of clear directional momentum, leading to a sideways regime.
+
+### Momentum Alignment
+
+#### MACD Histogram
+The MACD histogram is **-4.1159**, which is negative, indicating bearish momentum. This aligns with the sideways trend as the instrument is neither strongly bullish nor bearish.
+
+#### ROC (Rate of Change)
+The 12-day ROC is **-18.56**, a strong negative value, reinforcing the bearish momentum. This confirms that the trend is weakening but not yet exhausted.
+
+### Oscillator Analysis
+
+#### RSI (14)
+RSI is **35.33**, which is below the overbought threshold (70). This suggests the instrument is oversold but not yet in a state of extreme exhaustion.
+
+#### Stochastic K
+Stochastic K is **10.72**, indicating the instrument is in the oversold region (below 20). This supports the RSI’s oversold condition.
+
+#### Williams %R
+Williams %R is **-89.28**, a very extreme oversold level. This is a strong bearish divergence if price is still rising, but in a sideways trend, it’s less concerning.
+
+#### Stochastic D
+Stochastic D is **20.55**, which is above 20 but still in the oversold area. This aligns with the oversold conditions.
+
+### Divergence Check
+
+No clear divergences are present. Price changes (e.g., -5.86% 1-day close change) are minor and do not indicate a significant shift in trend direction.
+
+### Conclusion
+
+The indicators confirm the **SIDeways** trend regime. While there is bearish momentum (negative MACD and ROC), the instrument is not yet in a state of extreme exhaustion (e.g., RSI not hitting 90+). The strong oversold conditions (Williams %R at -89.28) suggest caution but not a definitive reversal signal. The lack of clear divergences and the conflicting MAs (20-day vs. 50-day) keep the trend in a neutral state.
+
+**Direction**: FLAT
+**Strength**: -0.5 (negative momentum)
+**Confidence**: 0.7 (moderate evidence of sideways continuation)
+**Horizon Days**: 5
+",LONG,0.22815533980582525,False,False,False
+2024-12-20,SOL-USD,-0.06645818580321372,LONG,0.5,0.75,FLAT,-0.5,0.7,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **SIDeways** trend regime. This is determined by the following:
+- **SMA20_slope_ann_pct**: -172.8% (negative slope, indicating downward pressure)
+- **SMA50_slope_ann_pct**: +73.0% (positive slope, upward)
+- **Price vs. SMAs**: Price is below both SMA20 and SMA50 but above SMA200, suggesting a lack of clear directional momentum.
+
+### Momentum Alignment
+The momentum indicators (MACD histogram and ROC) are both negative:
+- **MACD_histogram**: -4.5474 (bearish)
+- **ROC_12**: -17.94 (bearish)
+These confirm the sideways trend by showing negative momentum, meaning the price is not strongly trending up or down.
+
+### Exhaustion Signals
+Looking for signs of trend exhaustion (e.g., divergences, overbought/oversold extremes):
+- **RSI_14**: 35.3 (below 30, oversold but not extreme)
+- **Stochastic K**: 27.23 (oversold)
+- **Williams %R**: -72.77 (very oversold)
+- **Divergences**: No clear bearish divergences observed (price and indicators moving in the same direction).
+
+### Conclusion
+The negative momentum indicators align with the sideways trend. While RSI and Stochastic are oversold, this is consistent with a sideways market rather than a bearish reversal. The lack of divergences and the negative momentum confirm the trend is likely to continue sideways.
+
+**Direction**: FLAT
+**Strength**: -0.5 (negative momentum confirms trend continuation)
+**Confidence**: 0.7 (3 indicators confirm sideways: MACD, ROC, and price below SMAs)
+**Holding Period**: 3-5 days (short-term oscillations)
+",LONG,0.22815533980582525,False,False,False
+2024-12-21,SOL-USD,-0.006246711349115253,LONG,0.5,0.75,FLAT,0.0,0.5,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **SIDeways** trend regime. This is determined by the following:
+- **SMA20_slope_ann_pct**: -218.3% (very bearish)
+- **SMA50_slope_ann_pct**: +61.3% (bullish)
+- **Price vs SMA20**: Below (bearish)
+- **Price vs SMA50**: Below (bearish)
+- **Price vs SMA200**: Above (bullish)
+
+The conflicting slopes between SMA20 and SMA50 (negative vs positive) indicate a lack of clear directional momentum, leading to a sideways regime.
+
+### Momentum Alignment
+
+#### MACD Histogram
+The MACD histogram is **-5.3932**, which is negative, indicating bearish momentum. This aligns with the sideways trend if the instrument is consolidating or experiencing range-bound action.
+
+#### ROC (Rate of Change)
+The 12-day ROC is **-16.58**, negative, reinforcing the bearish momentum. This suggests the price is declining faster than its previous 12-day average.
+
+### Oscillator Analysis
+
+#### RSI (14)
+RSI is **30.72**, which is below the overbought threshold (70). This is neutral to slightly oversold, but not a strong signal for trend reversal.
+
+#### Stochastic (K)
+Stochastic K is **8.23**, indicating the price is near the lower bound of its 14-day range. This suggests the instrument is in a weak buying environment.
+
+#### Williams %R
+Williams %R is **-91.77**, extremely oversold. This is a strong bearish signal, but in a sideways trend, it might reflect a temporary dip rather than a trend reversal.
+
+#### Divergences
+
+- **RSI vs Price**: Price made a lower low (close change -16.19% over 5 days), while RSI made a higher low (from ~30 to ~28). This is a **bullish divergence**, suggesting potential upward momentum.
+- **MACD vs Price**: Price declined (-16.19% over 5 days), while MACD declined further (-5.3932 to -7.8261). No divergence here.
+
+### Conclusion
+
+The MACD histogram and ROC confirm the bearish momentum, aligning with the sideways trend. However, the RSI and Williams %R are oversold, which could indicate a potential bounce. The stochastic and RSI divergences suggest a possible upward move, but the overall trend remains sideways. Since the trend is not clearly bullish or bearish, the safest action is to remain **FLAT** with a neutral outlook.
+
+### Final Signal
+
+- **Direction**: FLAT
+- **Strength**: 0.0 (no clear directional momentum)
+- **Confidence**: 0.5 (ambiguous trend, but slight bearish bias)
+- **Holding Period**: 3 days (short-term)
+",LONG,0.39473684210526316,False,False,False
+2024-12-22,SOL-USD,0.053198843113092975,LONG,0.5,0.75,FLAT,0.0,0.7,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to its SMAs. The price is below the 20-day and 50-day SMAs but above the 200-day SMA. The 20-day SMA has a negative annualized slope (-247.9%), while the 50-day SMA has a positive slope (46.9%). This suggests a lack of clear directional momentum, aligning with the sideways classification.
+
+### Momentum Confirmation
+- **MACD Histogram**: -5.6907 (negative, indicating bearish momentum). This aligns with the sideways trend, as a negative histogram suggests downward pressure but not a strong bearish signal.
+- **ROC (12)**: -15.74 (negative, confirming bearish momentum). The Rate of Change (ROC) metric here shows a decline, reinforcing the sideways or potential downward movement.
+
+### Oscillator Divergences
+- **RSI (14)**: 30.35 (below 30, indicating oversold). However, in a sideways trend, RSI can fluctuate without signaling a clear direction. The RSI is not in extreme overbought/oversold territory, so it doesn't strongly contradict the trend.
+- **Stochastic K**: 6.93 (low, but not extreme). The Stochastic oscillator is below 20, suggesting the asset is in a weak buying environment, but again, this is consistent with a sideways trend.
+- **Williams %R (14)**: -93.07 (very oversold). This is a strong bearish signal, but in a sideways market, such extremes can occur without a clear directional move. The Williams %R is a momentum oscillator, and its extreme reading here could be a temporary condition rather than a trend reversal indicator.
+
+### Conclusion
+The primary indicators (MACD histogram and ROC) confirm the sideways trend. While the Williams %R is extremely oversold, this could be a temporary condition in a volatile sideways market. There is no strong evidence of trend exhaustion (e.g., multiple divergences or extreme overbought/oversold conditions). Therefore, the trend is likely to continue sideways or possibly reverse slightly downward, but the evidence is not overwhelming.
+
+### Signal
+Given the conflicting SMAs and the negative momentum indicators, the trend is confirmed as sideways. However, the negative MACD histogram and ROC suggest a slight bearish bias, but not enough to justify a short position. The RSI and Stochastic are in oversold territory, which could imply a potential bounce, but without a clear directional signal, the safest approach is to remain **FLAT**.",LONG,0.3640776699029126,True,False,True
+2024-12-23,SOL-USD,0.03813014757997513,LONG,0.5,0.75,FLAT,0.0,0.8,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime. This is determined by the price's position relative to its 20, 50, and 200-day moving averages (SMAs). Specifically, the price is below the 20-day SMA and 50-day SMA but above the 200-day SMA. The negative slopes of the 20-day (-264.1%) and 50-day (46.9%) SMAs further confirm the sideways trend. The 200-day SMA is above the price, which is typical in a sideways market.
+
+### Momentum Alignment
+To confirm the trend, we check the alignment of momentum indicators (MACD histogram and ROC). The MACD histogram is -4.932, which is negative, indicating bearish momentum. The ROC_12 is -16.57, also negative, reinforcing the bearishness. Both indicators are in line with the sideways trend, as neither shows strong bullish or bearish divergence. The negative values suggest that the downward momentum is present but not overwhelming.
+
+### Exhaustion Signals
+Looking for signs of trend exhaustion, such as divergences or extreme oscillator readings. The RSI_14 is 37.27, which is below the overbought threshold of 70, so it’s not indicating overbought conditions. The Stochastic K and D are 23.7 and 12.95, respectively, which are within a neutral range (typically 20-80 for Stochastic). The Williams %R is -76.3, which is in the oversold region, but this is common in sideways markets where the price range is compressed. There’s no clear divergence between price and these oscillators, as the price hasn’t made new lows while the oscillators are in oversold territory.
+
+### Conclusion
+The indicators confirm the sideways trend. While the MACD and ROC show bearish momentum, the negative values are not extreme, and there’s no divergence or overbought/oversold condition that would suggest a reversal. Therefore, the trend is likely to continue sideways, and the appropriate action is to remain **FLAT**.
+
+### Final Signal
+- **Direction**: FLAT
+- **Strength**: 0.0 (since the trend is neutral)
+- **Confidence**: 0.8 (80% confident in the sideways trend continuation)
+- **Holding Period**: 5 days (based on recent price changes)
+",LONG,0.35046728971962615,True,False,True
+2024-12-24,SOL-USD,0.0024877084383401193,LONG,0.5,0.75,FLAT,0.0,0.9,"The instrument SOL-USD is in a sideways trend regime. Key indicators include a negative 20-day SMA slope (-247.8%), a positive 50-day SMA slope (55.9%), and price below both 20-day and 50-day SMAs. Momentum confirms the sideways trend with a negative MACD histogram (-3.69) and negative ROC_12 (-13.23). Oscillators like RSI (41.96) and Stochastic (36.09) are neutral, while Williams %R (-63.91) is oversold but not conflicting. No divergences exist. The alignment of negative momentum and neutral oscillators strongly supports a flat position.",LONG,0.33783783783783783,True,False,True
+2024-12-25,SOL-USD,-0.046895960118649604,LONG,0.5,0.75,FLAT,-0.5,0.7,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to its SMAs. The price is below both the 20-day and 50-day SMAs but above the 200-day SMA. The 20-day SMA has a negative annualized slope (-242.3%), while the 50-day SMA has a positive slope (58.1%). This suggests a lack of clear directional momentum, aligning with the sideways classification.
+
+### Momentum Alignment
+- **MACD Histogram**: -2.6317 (negative, indicating bearish momentum). This is a key bearish signal.
+- **ROC (12)**: -12.17 (negative, reinforcing bearishness). Both indicators are negative, confirming the bearish sentiment.
+
+### Oscillator Analysis
+- **RSI (14)**: 42.28 (moderate). Not overbought or oversold, neutral.
+- **Stochastic K**: 36.92 (below 50, neutral). No divergence from price.
+- **Williams %R (14)**: -63.08 (overbought). However, this is in a sideways trend, so overbought does not immediately imply a reversal.
+- **Stochastic D**: 32.24 (below 50, neutral). No divergence.
+
+### Divergence Check
+No clear divergences are present. Price and MACD/ROC are moving in the same direction (down), so no conflicting signals.
+
+### Conclusion
+The negative MACD histogram and ROC strongly indicate bearish momentum, confirming the sideways trend. While RSI is not overbought, the bearish momentum indicators are aligned. There is no evidence of exhaustion, so the trend is likely to continue sideways or slightly downward.
+
+**Direction**: FLAT (since the trend is sideways and no strong reversal signals are present).",LONG,0.22815533980582525,False,False,False
+2024-12-26,SOL-USD,-0.02332205545460564,LONG,0.5,0.75,FLAT,-0.5,0.7,"The instrument is in a sideways trend regime. Negative MACD and ROC confirm bearish momentum, while RSI and Williams %R are oversold. No strong divergence exists, so the trend is likely to continue sideways.",LONG,0.22815533980582525,False,False,False
+2024-12-27,SOL-USD,0.06084508145876999,LONG,0.5,0.75,FLAT,-0.3,0.7,"The instrument is in a sideways trend regime. Negative MACD and ROC confirm bearish momentum, but no strong divergence or overbought/oversold signals exist. Remain flat.",LONG,0.2825242718446602,True,False,True
+2024-12-28,SOL-USD,-0.02702003152168786,LONG,0.5,0.75,FLAT,0.5,0.7,"### Trend Analysis
+The instrument SOL-USD is currently in a **sideways** trend regime, as indicated by the 'trend_regime' field. This is determined by the price's position relative to its 20, 50, and 200-day SMAs. Specifically, the price is below both the 20-day (SMA20) and 50-day (SMA50) SMAs but above the 200-day (SMA200) SMA. The negative slopes of the 20-day (-249.8%) and 50-day (24.6%) SMAs further confirm the sideways trend. The 200-day SMA is above the price, which is a neutral signal but does not dominate the trend classification.
+
+### Momentum Confirmation
+To confirm the trend, we check the alignment of momentum indicators (MACD histogram and ROC). The MACD histogram is -1.3265, which is negative, indicating bearish momentum. The ROC_12 is -9.86, also negative, reinforcing the bearish sentiment. Both metrics align with the sideways trend, as neither shows strong bullish or bearish divergence. The RSI_14 is 43.7, which is in the neutral range (overbought threshold is 70), so it doesn't contribute to trend confirmation or exhaustion.
+
+### Oscillator Divergence
+Oscillators like Stochastic K (36.2) and D (24.85) are below their respective overbought/oversold thresholds, but they are not diverging from price. For example, the price is moving up slightly (close_change_1d = +6.08), but the Stochastic D is still below 25, indicating no overbought condition. Similarly, Williams %R is -63.8, which is oversold but not signaling a strong bearish divergence. The ROC_12 and MACD histogram are the primary momentum indicators here, and they both support the sideways trend.
+
+### Conclusion
+The weight of evidence supports the continuation of the sideways trend. While the MACD histogram and ROC are negative, they are not extreme enough to trigger a trend reversal. The RSI and other oscillators are neutral or slightly bearish but do not provide strong divergence signals. Therefore, the trend is likely to continue sideways, and the appropriate action is to remain **FLAT**.
+
+### Key Metrics
+- **Trend Regime**: Sideways
+- **Momentum Alignment**: Negative (bearish) MACD and ROC confirm the trend.
+- **Oscillator Status**: No divergence or extreme overbought/oversold conditions.
+
+### Final Signal
+The trend is confirmed to continue sideways, so the direction remains **FLAT** with moderate confidence.
+
+",LONG,0.5,False,False,False
+2024-12-29,SOL-USD,0.0067658591661654555,LONG,0.5,0.75,FLAT,0.0,0.7,"### Trend Regime Analysis
+The instrument SOL-USD is currently in a **SIDEWAYS** trend regime. This is determined by the price's position relative to its 20, 50, and 200-day moving averages (SMAs). Specifically, the price is below both the 20-day (SMA20) and 50-day (SMA50) SMAs but above the 200-day (SMA200) SMA. The negative slopes of the 20-day (-246.4%) and 50-day (1.9%) SMAs further confirm the sideways trend, as they indicate downward and upward trends, respectively, but the price remains above the 200-day SMA, which is a longer-term support level.
+
+### Momentum Alignment
+To confirm the trend, we check the alignment between the **MACD histogram** and **ROC (Rate of Change)**. Both are negative (-0.9205 and -14.84, respectively), indicating bearish momentum. This aligns with the sideways trend, as the negative values suggest a lack of directional force. However, since the trend is sideways, the negative momentum doesn't inherently signal a reversal but rather a continuation of the current direction.
+
+### Exhaustion Signals
+We scan for divergence or extreme oscillator readings. The **RSI (41.25)** is below 50, indicating neutral to slightly oversold conditions. The **Stochastic K (26.22)** and **Stochastic D (25.81)** are also below 50, reinforcing the oversold state. The **Williams %R (-73.78)** is in extreme oversold territory, suggesting potential buying pressure. However, in a sideways trend, these overbought/oversold conditions are less critical unless they diverge from price action. The **ROC** is -14.84, which is a strong bearish indicator, but since the trend is sideways, this could be a temporary pullback rather than a trend reversal.
+
+### Conclusion
+The weight of evidence supports a **SIDEWAYS** trend continuation. The negative momentum indicators (MACD histogram and ROC) confirm the sideways direction, while the overbought/oversold oscillators (RSI, Stochastic, Williams %R) are in neutral to extreme oversold conditions but do not yet indicate a clear trend reversal. There is no strong divergence or multiple exhaustion signals converging. Therefore, the trend is likely to continue sideways, and the appropriate action is to remain **FLAT**.
+
+### Final Signal
+- **Direction**: FLAT
+- **Strength**: 0.0 (no strong directional pull)
+- **Confidence**: 0.7 (70% confident in the sideways trend continuation)
+- **Holding Period**: 5 days (short-term)
+",LONG,0.3640776699029126,True,False,True
+2024-12-30,SOL-USD,-0.009231969355264602,LONG,0.5,0.75,FLAT,0.95,1.0,"The instrument SOL-USD is currently in a DOWNTREND based on the trend regime analysis. Let's break down the indicators to confirm or contradict this trend.
+
+1. **Trend Regime**: The price is below both the 20-day and 50-day SMAs but above the 200-day SMA. The negative slopes of the 20-day (-232.2%) and 50-day (-21.0%) SMAs indicate a downtrend. This aligns with the trend regime.
+
+2. **Momentum Alignment**: The MACD histogram is -0.4593, which is negative, confirming bearish momentum. The ROC_12 is -7.44, also negative, reinforcing the downtrend. Both indicators are in line with the trend, providing strong confirmation.
+
+3. **Oscillator Analysis**: The RSI is 42.1, which is below the overbought threshold (70), indicating no overbought condition. The Stochastic K (28.65) and D (30.36) are below 50, showing oversold conditions. However, in a downtrend, these can still be bearish unless there's a divergence. The Williams %R is -71.35, which is extremely oversold, but this is common in strong downtrends as prices continue to fall.
+
+4. **Divergence Check**: There's no mention of price making new lows while the RSI or other oscillators are making higher lows, which would indicate a bearish divergence. The close change over 1 day is +0.68, but over 5 days it's -3.27, showing a slight recovery. However, this is minor and doesn't contradict the overall downtrend.
+
+5. **Conclusion**: All momentum indicators (MACD histogram, ROC) confirm the downtrend. The oscillators are in oversold territory but don't show divergence. Since the trend is confirmed by multiple strong indicators, there's no credible evidence of trend exhaustion yet. The downtrend is likely to continue.
+
+**Direction**: LONG is not appropriate here. The trend is down, so the default is to stay flat or short. However, since the question asks to confirm or contradict the trend, and the trend is confirmed by the indicators, the direction remains FLAT with strong confirmation.
+
+**Strength**: The strength is high because both MACD and ROC are strongly negative, aligning with the trend.
+
+**Confidence**: The confidence is 1.0 because all key momentum indicators confirm the trend, and there are no conflicting signals.
+
+**Holding Period**: Given the strong negative momentum, a short-term holding period (1-3 days) might be appropriate to capture any potential bounce, but since the trend is confirmed, a longer-term hold (5-10 days) could be considered.
+",LONG,0.6565217391304349,False,False,False

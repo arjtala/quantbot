@@ -1,0 +1,336 @@
+date,instrument,actual_return,tsmom_direction,tsmom_strength,tsmom_confidence,indicator_direction,indicator_strength,indicator_confidence,indicator_reasoning,combined_direction,combined_strength,tsmom_correct,indicator_correct,combined_correct
+2024-11-01,BNB-USD,-0.008250305808621516,LONG,0.5,0.75,FLAT,-0.3,0.7,"The instrument is in a sideways trend regime. Negative MACD and ROC confirm bearish momentum, but price remains above the 200-day SMA. No divergence or overbought/oversold extremes signal a trend reversal. Sideways continuation is likely.",LONG,0.2825242718446602,False,False,False
+2024-11-02,BNB-USD,-0.01830022730899139,FLAT,0.0,0.0,FLAT,0.0,0.7,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **sideways** trend regime, as indicated by the 'trend_regime' field. This is further supported by the price being below all three SMAs (20, 50, 200), and the SMA slopes (sma20_slope_ann_pct = 27.5%, sma50_slope_ann_pct = 44.0%) showing positive growth, which aligns with a sideways trend where the short-term and medium-term averages are rising but not strongly enough to establish a clear upward or downward trend.
+
+### Momentum Alignment
+The **MACD histogram** is **-3.4614**, which is negative, indicating bearish momentum. However, the **ROC_12** is **-5.14**, also negative, reinforcing the bearish sentiment. These metrics are in line with the sideways trend, as a sideways market can still exhibit periods of weakness or strength without a clear directional bias. The **RSI_14** is 43.51, which is neutral (not overbought or oversold), and the **Stochastic K** and **Stochastic D** are 10.43 and 14.42, respectively, also indicating a neutral position. There is no divergence between price and these oscillators, as the RSI and Stochastic values are within their typical ranges for a sideways market.
+
+### Exhaustion Signals
+Looking for signs of trend exhaustion, such as divergences or extreme oscillator readings. The **Williams %R_14** is -89.57, which is extremely oversold. However, in a sideways market, such oversold conditions can occur without signaling a trend reversal. Additionally, the **close_change_1d** is -0.83 and **close_change_5d** is -5.42, showing recent declines, but this is consistent with the bearish momentum from the MACD and ROC. There is no evidence of a bearish divergence here, as price is still below the SMAs despite the negative changes.
+
+### Conclusion
+The technical indicators confirm the **sideways trend**. The negative MACD histogram and ROC indicate bearish momentum, but they are not strong enough to signal a trend reversal. The RSI and Stochastic are neutral, and the Williams %R is oversold, which is common in sideways markets. There are no clear signs of exhaustion that would justify a directional trade. Therefore, the trend is likely to continue sideways, and the appropriate action is to remain **FLAT**.
+
+### Final Signal
+- **Direction**: FLAT
+- **Strength**: 0.0 (no clear directional bias)
+- **Confidence**: 0.7 (70% confident in the sideways trend continuing)
+- **Holding Period**: 3-5 days (short-term)
+",FLAT,0.0,False,False,False
+2024-11-03,BNB-USD,-0.009989383126833284,FLAT,0.0,0.0,FLAT,0.0,0.7,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **sideways** trend regime, as indicated by the `trend_regime` field. This is supported by the price being below all three SMAs (20, 50, 200), and the SMA200 slope being negative (-1.1%). The price is also below the SMA50, which has a positive slope (29.3%), suggesting a potential shift from a downtrend to a sideways pattern.
+
+### Momentum Alignment
+- **MACD Histogram**: -4.5284 (negative) indicates bearish momentum. This aligns with the sideways trend, as the negative histogram suggests the trend is losing strength.
+- **ROC (Rate of Change)**: -6.02 (negative) confirms the bearish momentum. The ROC measures the percentage change over 12 periods, which here shows a decline.
+
+### Oscillator Analysis
+- **RSI (14)**: 39.97 (neutral) is within the normal range, neither overbought nor oversold. This doesn't contradict the sideways trend.
+- **Stochastic K**: 15.36 and **Stochastic D**: 12.85 are both below 20, indicating the instrument is in a range-bound state, consistent with a sideways trend.
+- **Williams %R (14)**: -84.64 is extremely oversold, but this is a common occurrence in sideways markets as the price fluctuates within a range. However, the negative value here might suggest a potential buying opportunity if the trend were to reverse.
+
+### Divergence Check
+- There is no clear divergence between price and the indicators. For example, the MACD histogram is negative, but the price is not making new lows, which would be required for a bearish divergence. Similarly, the RSI is neutral, so no divergence here.
+
+### Conclusion
+The indicators confirm the sideways trend regime. The negative MACD histogram and negative ROC indicate bearish momentum, but the price remains above the SMAs, suggesting a lack of clear downward momentum. The RSI and Stochastic indicators are neutral, and Williams %R is oversold but not conflicting with the trend. There is no strong evidence of trend exhaustion, so the trend is likely to continue sideways.
+
+### Signal
+Given the sideways trend and the alignment of momentum indicators, the appropriate action is to remain **FLAT**. The negative MACD and ROC suggest caution, but the price hasn't broken below the SMAs, which would be a stronger signal for a trend reversal.
+
+### Final Signal
+**Direction**: FLAT
+**Strength**: 0.0 (no clear directional bias)
+**Confidence**: 0.7 (70% confident in the sideways trend continuing)
+**Holding Period**: 5 days (suggested to monitor for potential trend shifts)
+",FLAT,0.0,False,False,False
+2024-11-04,BNB-USD,0.02090483357182249,FLAT,0.0,0.0,FLAT,-0.5,0.6,"The instrument is in a sideways trend regime, as indicated by the price being below all SMAs and conflicting SMA slope trends. The negative MACD histogram (-5.3445) and negative ROC (-5.22) confirm bearish momentum. While the RSI (38.18) is neutral and no clear divergence exists, the bearish MACD and ROC suggest caution. Since the trend is sideways, the default direction is FLAT, with a slight bearish bias.",SHORT,-0.5,False,False,False
+2024-11-05,BNB-USD,0.0503594239686731,FLAT,0.0,0.0,FLAT,0.3,0.7,"The instrument is in a sideways trend regime. The MACD histogram and ROC are negative, confirming the sideways direction. While Williams %R is oversold, no three indicators show strong exhaustion. Thus, the trend is likely to continue sideways.",LONG,0.3,False,False,True
+2024-11-06,BNB-USD,0.01087960409310007,LONG,0.5,0.75,FLAT,0.3,0.7,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **sideways** trend regime. This is determined by the price being above all three SMAs (20, 50, 200) and the negative slopes of the 20-day and positive 50-day SMAs. The negative 20-day SMA slope (-48.8%) indicates a downward trend, but the positive 50-day SMA slope (15.5%) suggests a potential upward bias. However, the price is above all SMAs, which is typical of a sideways consolidation.
+
+### Momentum Alignment
+- **MACD Histogram**: -2.4903 (negative, indicating bearish momentum). This aligns with the sideways trend as the instrument is neither strongly bullish nor bearish.
+- **ROC (12)**: 3.09 (positive, confirming slight upward momentum). This is a minor positive force but not strong enough to break the sideways pattern.
+
+### Oscillator Analysis
+- **RSI (14)**: 54.71 (neutral, neither overbought nor oversold). No divergence from price, so no signal of trend exhaustion.
+- **Stochastic K**: 70.85 (overbought). However, since the trend is sideways, this is expected as the instrument is trading within a range. No divergence from price.
+- **Williams %R (14)**: -29.15 (oversold). This is a positive sign as the instrument is not overextended on the downside, but again, no divergence from price.
+
+### Divergence Check
+No significant divergences are present. Price and MACD histogram are moving together, confirming the sideways trend. The slight positive ROC and RSI overbought/oversold readings are minor and do not contradict the trend.
+
+### Conclusion
+The indicators confirm the sideways trend. While there is some positive momentum (ROC), the negative MACD histogram and neutral RSI/Williams %R do not provide strong evidence of trend exhaustion. The price remains above all SMAs, reinforcing the sideways regime.
+
+**Direction**: FLAT
+**Strength**: 0.3
+**Confidence**: 0.7
+**Holding Period**: 3 days",LONG,0.44563106796116503,True,False,True
+2024-11-07,BNB-USD,-0.0008146031718834212,LONG,1.0,1.0,FLAT,0.0,0.5,"The instrument is in a sideways trend regime. While the MACD histogram is bearish (-0.466), the ROC is positive (2.68), indicating conflicting momentum. No strong divergence or extreme overbought/oversold conditions exist. Thus, the trend is likely to continue sideways.",LONG,0.8333333333333334,False,False,False
+2024-11-08,BNB-USD,0.04419489777617902,LONG,0.5,0.75,FLAT,0.5,0.7,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **sideways** trend regime, as indicated by the `trend_regime` field. This is supported by the fact that the price is above all three SMAs (SMA20, SMA50, SMA200), but the slopes of the SMAs are conflicting. Specifically, the SMA20 has a negative annualized slope (-34.4%), while the SMA50 has a positive annualized slope (25.2%). This suggests a lack of clear directional momentum, aligning with a sideways trend.
+
+### Momentum Alignment
+Looking at the momentum indicators (MACD histogram and ROC):
+- **MACD Histogram**: 0.797 (positive) indicates bullish momentum.
+- **ROC_12**: 1.57 (positive) further confirms upward momentum.
+
+These positive momentum indicators align with the trend regime (sideways), suggesting that the upward momentum is still present despite the lack of a clear directional bias. The MACD histogram is above zero, reinforcing the idea that the trend is not exhausted.
+
+### Exhaustion Signals
+To determine if the trend is exhausting, we check for divergences or signs of weakening momentum:
+- **RSI_14**: 56.55 is within a neutral range (overbought threshold is 70), so no immediate exhaustion signal here.
+- **Stochastic K**: 79.62 is above 80, indicating overbought conditions, but this is common in a sideways trend as the price oscillates around the SMAs.
+- **Williams %R**: -20.38 is in the oversold range (-20 to -80), which is typical in a sideways market where the price fluctuates without a clear direction.
+
+### Conclusion
+The positive momentum indicators (MACD histogram and ROC) confirm the trend regime (sideways) by showing continued upward momentum despite the conflicting SMA slopes. While the RSI and Stochastic indicators are at overbought levels, this is consistent with a sideways trend where price oscillates around the SMAs. There are no strong divergence signals or signs of weakening momentum that would suggest a trend exhaustion. Therefore, the trend is likely to continue sideways.
+
+### Final Signal
+Given the alignment of momentum indicators with the trend regime and the absence of strong exhaustion signals, the appropriate action is to **hold** the position with a neutral bias. However, since the question asks for a directional signal, the closest alignment is to **FLAT**, as the trend is not clearly bullish or bearish.
+
+**Direction**: FLAT
+**Strength**: 0.5 (moderate)
+**Confidence**: 0.7 (high, as both momentum and trend confirm the sideways regime)
+**Holding Period**: 3-5 days (short-term, given the sideways nature and recent price changes)
+",LONG,0.5,True,False,True
+2024-11-09,BNB-USD,0.006290766494407629,LONG,1.0,1.0,FLAT,0.5,0.7,"The instrument is in a sideways trend regime with conflicting SMA slopes. Positive momentum indicators (MACD histogram and ROC) confirm the upward direction, but the conflicting SMAs introduce uncertainty. No strong divergence or overbought/oversold signals are present, so the trend is likely to continue sideways.",LONG,0.8906249999999999,True,False,True
+2024-11-10,BNB-USD,0.053453101521763635,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram and ROC are positive, confirming bullish momentum. RSI, Stochastic, and Williams %R are within neutral to overbought ranges without divergence. No signs of trend exhaustion exist.",LONG,0.9862318840579711,True,True,True
+2024-11-11,BNB-USD,-0.05270287965357112,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is currently in an uptrend as indicated by the trend_regime 'UPTREND' and all prices above their respective SMAs (SMA20, SMA50, SMA200). The momentum indicators, such as the MACD histogram (7.7045) and ROC_12 (11.11), are both positive, aligning with the uptrend. The RSI is at 72.25, which is above the overbought threshold of 70, reinforcing the trend's strength. The Stochastic K and D are at 98.12 and 89.46, respectively, indicating extreme overbought conditions, but since the trend is up, this is a positive sign of momentum. There are no bearish divergences noted here, as price continues to make new highs. The Williams %R is -1.88, which is a very low reading, further confirming the uptrend. The close change over 1 day and 5 days is positive, supporting the upward trend. Therefore, all indicators confirm the continuation of the uptrend without any signs of exhaustion.",LONG,0.9862318840579711,False,False,False
+2024-11-12,BNB-USD,-0.009574965265173763,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is currently in an UPTREND as indicated by the trend_regime. The price is above all SMAs (SMA20, SMA50, SMA200), and the SMA20 slope is 69.5% annualized, which is very positive. The MACD histogram is 6.8382, which is positive, confirming the uptrend. The RSI is 58.92, which is below 70, so not overbought. The Stochastic K is 67.55, also not overbought. The ROC_12 is 8.85, indicating positive momentum. The Williams %R is -32.45, which is in the oversold region but not extreme. The close change over 5 days is +4.77, which supports the uptrend. There are no bearish divergences noted here. Therefore, all indicators align with the uptrend, confirming it should continue. The strength of the trend is high due to multiple positive indicators (MACD, ROC, price above SMAs).",LONG,0.9862318840579711,False,False,False
+2024-11-13,BNB-USD,0.0010947008635044941,LONG,1.0,1.0,LONG,0.95,0.98,"The instrument BNB-USD is currently in an UPTREND as indicated by the trend_regime. The price is above all SMAs (SMA20, SMA50, SMA200), and the SMA20 slope is 81.1%, which is a strong positive slope confirming the uptrend. The MACD histogram is 5.5012, which is positive, aligning with the uptrend. The ROC_12 is 8.42, another positive momentum indicator. The RSI is 56.98, which is below 70, so not overbought, and the Stochastic K and D are 62.67 and 76.12 respectively, indicating the instrument is in a strong uptrend without signs of overboughtness. There are no bearish divergences observed here. The Williams %R is -37.33, which is a neutral to oversold level, but since the trend is up, this doesn't contradict the trend. The close change over 1d is -0.96, which is a slight dip but within the context of the overall uptrend. Therefore, all indicators confirm the continuation of the uptrend.",LONG,0.9859195402298851,True,True,True
+2024-11-14,BNB-USD,-0.004525896198429802,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive momentum indicators (MACD histogram and ROC). Oscillators like RSI and Stochastic are in the middle range, confirming strength without overbought signals. No divergence or exhaustion indicators are present.",LONG,0.9862318840579711,False,False,False
+2024-11-15,BNB-USD,0.005666349886010336,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is currently in an UPTREND as indicated by the trend_regime. The price is above all SMAs (SMA20, SMA50, SMA200), and the SMA20 slope is 95.8%, which is extremely positive, confirming a strong upward trend. The MACD histogram is 3.1507, which is positive, aligning with the uptrend. The ROC_12 is 10.98, another positive momentum indicator, reinforcing the upward momentum. The RSI is 56.14, which is below the overbought threshold of 70, so it's not indicating overbought conditions. The Stochastic K and D are 60.94 and 62.28, respectively, which are in the middle of the range, not showing extreme overbought or oversold. The Williams %R is -39.06, which is a negative value, indicating the asset is not in an overbought condition. The close change over 1 day is -0.45 and 5 days is -1.5, which are minor declines but do not contradict the overall uptrend. There are no divergences observed between price and the momentum indicators (MACD or ROC), so the trend is confirmed. The evidence strongly supports the continuation of the uptrend.",LONG,0.9862318840579711,True,True,True
+2024-11-16,BNB-USD,-0.006383764105426737,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram and ROC are both positive, confirming the upward momentum. RSI, Stochastic, and Williams %R are not overbought, and no divergences are present. Thus, the trend is confirmed to continue.",LONG,0.9862318840579711,False,False,False
+2024-11-17,BNB-USD,0.001674321228259279,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is currently in an UPTREND as per the trend regime analysis. The price is above all SMAs (SMA20, SMA50, SMA200), and the SMA20 slope is 68.7%, which is a strong positive indication of an uptrend. The MACD histogram is 1.4209, which is positive, confirming the trend. The ROC_12 is 9.72, another positive momentum indicator. The RSI is 55.59, which is below the overbought threshold of 70, so it's not indicating overbought conditions. The Stochastic K and D are 60.56 and 61.76, respectively, which are in the middle of the range, not showing extreme overbought or oversold. The Williams %R is -39.44, which is in the negative territory, indicating the asset is not overbought. The close change over 1 day is -0.64 and 5 days is -1.37, which are minor declines but still within the context of the overall uptrend. There are no divergences observed between price and the momentum indicators (MACD histogram and ROC) as both are positive. Therefore, the indicators strongly confirm the continuation of the uptrend. The only slightly bearish signal is the close change, but it's a short-term fluctuation and does not contradict the long-term trend. The weight of evidence supports trend continuation.",LONG,0.9862318840579711,True,True,True
+2024-11-18,BNB-USD,-0.005566453909814806,LONG,1.0,1.0,LONG,0.85,0.95,"The instrument BNB-USD is currently in an UPTREND as indicated by the trend_regime and the fact that the price is above all SMAs (SMA20, SMA50, SMA200). The momentum indicators, such as the MACD histogram (0.7246) and ROC_12 (4.64), are both positive, which aligns with the uptrend. The RSI (55.93) is below 70, so it's not overbought, and the Stochastic K (58.95) and D (61.1) are in a neutral to slightly oversold range but still positive. There's no divergence observed between the price and these oscillators, as the price is still rising despite the slight dip in close_change_5d. The Williams %R is -41.05, which is a strong bearish reading, but since the trend is uptrend, this could be a temporary pullback. The MACD histogram is positive, confirming the trend. Therefore, the indicators support the continuation of the uptrend.",LONG,0.9586956521739131,False,False,False
+2024-11-19,BNB-USD,-0.016022947309136892,LONG,1.0,1.0,LONG,0.75,0.8,"The instrument BNB-USD is in an uptrend with all price positions above SMAs. Positive ROC_12 (2.93) confirms upward momentum. While the MACD histogram is slightly negative (-0.0624), the positive ROC outweighs this minor bearish signal. No divergences or extreme overbought/oversold conditions exist. The trend is confirmed by multiple indicators.",LONG,0.9393939393939393,False,False,False
+2024-11-20,BNB-USD,0.02756703528044402,LONG,0.5,0.75,LONG,0.75,0.7,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram is negative, indicating bearish momentum, but the ROC_12 remains positive. The RSI and Stochastic indicators are neutral. While the MACD suggests weakening momentum, the price's position above SMAs and positive ROC confirm the trend's continuation. No strong divergence or overbought signals exist. Thus, the trend is expected to continue.",LONG,0.5679611650485437,True,True,True
+2024-11-21,BNB-USD,0.017158992499990422,LONG,1.0,1.0,LONG,0.75,0.8,"The instrument BNB-USD is currently in an uptrend as indicated by the trend_regime 'UPTREND' and all prices above their respective SMAs (SMA20, SMA50, SMA200). The momentum indicators, such as the MACD histogram (-0.9906) and ROC (-0.25), are negative, which suggests a weakening of bullish momentum. However, in an uptrend, negative momentum can still be part of the trend's consolidation phase. The RSI (56.35) is below 70, indicating the instrument is not overbought, which aligns with the uptrend. The Stochastic K (43.01) and D (38.73) are in the middle range, not showing extreme overbought or oversold conditions. The Williams %R (-56.99) is in the negative territory, but not extremely low, suggesting some selling pressure but not enough to reverse the trend. The close change over 1 day is positive (2.76), supporting the uptrend. Despite the negative momentum, there's no clear divergence or extreme overbought/oversold condition that would signal trend exhaustion. Therefore, the trend is likely to continue, but the weakening momentum suggests a cautious approach. However, since the question is about confirming or contradicting the trend, and the trend indicators (SMA slopes and price position) are all positive, the trend is confirmed. The negative momentum is a minor factor but not strong enough to classify as exhaustion. Hence, the direction remains LONG with moderate confidence.",LONG,0.9393939393939393,True,True,True
+2024-11-22,BNB-USD,0.027913911712759587,LONG,1.0,1.0,LONG,0.85,0.92,"The instrument BNB-USD is in an UPTREND. Price is above all SMAs (SMA20, SMA50, SMA200) with positive annualized slopes (75.3% and 51.3%). This confirms the upward trend. Momentum indicators show conflicting signals: MACD histogram is slightly negative (-0.1658), while ROC_12 is positive (0.83). However, the negative MACD is a minor contradiction, and no other strong divergence signals (like extreme RSI overbought/oversold) are present. Close changes support the trend. The trend is confirmed to continue.",LONG,0.9596491228070174,True,True,True
+2024-11-23,BNB-USD,0.014005433951285617,LONG,1.0,1.0,LONG,0.8,0.7,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. MACD histogram remains positive, confirming the trend despite a slight negative ROC indicating deceleration. No divergences or extreme overbought/oversold conditions exist. Trend likely to continue.",LONG,0.9562499999999999,True,True,True
+2024-11-24,BNB-USD,-0.03585828647825795,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram and ROC are both positive, confirming the trend. RSI is 66.81 (not overbought), and Stochastic indicators are in the overbought region but price continues to rise, indicating strong momentum. No divergences or exhaustion signals detected.",LONG,0.9862318840579711,False,False,False
+2024-11-25,BNB-USD,-0.03620953713099928,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with all SMAs above the price. Momentum indicators (MACD histogram +2.93 and ROC +2.52) confirm the trend. RSI (56.82) is below overbought, and no divergences exist. Close changes are minor and do not contradict the trend.",LONG,0.9862318840579711,False,False,False
+2024-11-26,BNB-USD,0.05111123887821112,LONG,1.0,1.0,FLAT,0.0,0.3,"### Trend Regime Analysis
+The instrument (BNB-USD) is currently in a **sideways** trend regime, as indicated by the 'trend_regime' field. This is determined by the price's position relative to its 20-day and 50-day SMAs. The price is above the 50-day SMA but below the 20-day SMA, which aligns with a sideways pattern. The 20-day SMA has a positive annualized slope of 150.3%, while the 50-day SMA has a positive slope of 67.7%, reinforcing the sideways trend.
+
+### Momentum Alignment
+The **MACD histogram** is **-0.2957**, which is negative, indicating bearish momentum. The **ROC_12** is **-1.3**, further confirming a bearish trend. These indicators are in **disagreement** with the sideways trend regime. Typically, in a sideways market, neutral momentum indicators are expected. The negative values here suggest a potential trend reversal, but since the trend is currently sideways, this could be a temporary dip.
+
+### Exhaustion Signals
+Looking for divergence or extreme oscillator readings:
+- **RSI_14** is **49.12**, which is within the neutral range (30-70). No overbought/oversold signals here.
+- **Stochastic K** is **20.52**, and **Stochastic D** is **45.59**, both in the middle range. No divergence from price.
+- **Williams %R_14** is **-79.48**, indicating the instrument is oversold. However, in a sideways market, this could be a temporary oversold condition rather than a trend exhaustion signal.
+- **MACD Line** and **Signal** are both positive (10.6818 and 10.9775), but the histogram is negative, which is conflicting. This suggests a potential divergence between the MACD components and the histogram, but it's not a clear bearish divergence.
+
+### Conclusion
+The negative MACD histogram and negative ROC_12 contradict the sideways trend regime. However, since the trend is currently sideways, these bearish momentum indicators might be temporary. To confirm trend exhaustion, we need multiple indicators showing divergence or extreme values. In this case, only the MACD histogram and ROC_12 are negative, but they don't align with the trend regime. Therefore, the trend is likely to continue sideways unless more evidence of exhaustion emerges.
+
+### Final Signal
+The trend is sideways, and the conflicting momentum indicators suggest a cautious approach. However, since the trend hasn't been broken yet, the default position remains **FLAT** with low confidence.",LONG,0.8928571428571428,True,False,True
+2024-11-27,BNB-USD,0.014595191976103372,LONG,1.0,1.0,LONG,0.95,0.98,"The instrument BNB-USD is currently in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators, such as the MACD histogram (0.2283) and ROC_12 (4.21), are positive, aligning with the uptrend. The RSI (57.55) is below 70, indicating no overbought condition, and the Stochastic K (54.31) is above 50, reinforcing the upward momentum. There are no bearish divergences observed here. The Williams %R (-45.69) is in a neutral to oversold range, which does not contradict the uptrend. The close changes (1d: +5.11, 5d: +1.81) are positive, supporting the trend. Therefore, the indicators strongly confirm the continuation of the uptrend without any signs of exhaustion.",LONG,0.9859195402298851,True,True,True
+2024-11-28,BNB-USD,0.0006848202803808601,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. MACD histogram and ROC confirm upward momentum. RSI and Stochastic are below overbought, no divergences detected. Trend should continue.",LONG,0.9862318840579711,True,True,True
+2024-11-29,BNB-USD,-0.0007339396180400248,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. Momentum indicators (MACD histogram and ROC) are positive, confirming the trend. Oscillators are in the middle to overbought range but not diverging from price. No bearish signals present. High alignment of confirming indicators.",LONG,0.9862318840579711,False,False,False
+2024-11-30,BNB-USD,0.0024503455006743557,LONG,1.0,1.0,LONG,0.95,0.95,The instrument BNB-USD is in an uptrend with all SMAs crossed above. Positive MACD histogram (1.4558) and ROC_12 (5.63) confirm bullish momentum. Oscillators like RSI (59.63) and Stochastic (64.42) are neutral to overbought but not diverging from price. No bearish signals present. Trend confirmed.,LONG,0.9862318840579711,True,True,True
+2024-12-01,BNB-USD,-0.01271169328761923,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive annualized SMA slopes. The MACD histogram and ROC are both positive, confirming the upward momentum. RSI is neutral, and oscillators are in the upper half without divergence. No signs of trend exhaustion detected.",LONG,0.9862318840579711,False,False,False
+2024-12-02,BNB-USD,0.1391335384443706,LONG,0.5,0.75,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram and ROC are both positive, confirming the trend. RSI is below 70, and oscillators are neutral. Minor daily dip doesn't contradict the uptrend. Strong evidence supports continuation.",LONG,0.6513274336283187,True,True,True
+2024-12-03,BNB-USD,0.002109474756836649,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive annualized SMA slopes. The MACD histogram (5.758) and ROC_12 (18.44) are both positive, confirming the trend. RSI (73.82) is above 70, indicating strong momentum, but no divergences or overbought signals contradict the uptrend. All indicators align with the current trend.",LONG,0.9862318840579711,True,True,True
+2024-12-04,BNB-USD,-0.033724306400052084,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is currently in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators, such as the MACD histogram (8.6417) and ROC_12 (16.69), are both positive, aligning with the uptrend. The RSI is at 74.01, which is above the overbought threshold of 70, but this is common in strong uptrends as it indicates high momentum. The Stochastic K and D are also above 70, reinforcing the overbought condition. However, since the trend is confirmed by the positive momentum indicators and the price continues to rise above the SMAs, there is no evidence of trend exhaustion. The Williams %R is -27.21, which is a neutral to oversold reading, but this does not contradict the uptrend as it's not in extreme negative territory. Therefore, the indicators support the continuation of the uptrend.",LONG,0.9862318840579711,False,False,False
+2024-12-05,BNB-USD,0.024756800365977494,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with all price positions above SMAs and positive annualized SMA slopes. Both the MACD histogram (8.2582) and ROC_12 (9.69) are positive, confirming bullish momentum. RSI (65.73) is below overbought, and no divergences or extreme oscillator readings exist. Thus, the trend is confirmed to continue.",LONG,0.9862318840579711,True,True,True
+2024-12-06,BNB-USD,0.024953825883369918,LONG,1.0,1.0,LONG,0.95,0.98,"The instrument BNB-USD is currently in an uptrend as indicated by the trend_regime 'UPTREND' and all price positions above the SMAs (SMA20, SMA50, SMA200). The momentum indicators (MACD histogram and ROC) are both positive (8.5477 and 10.86 respectively), which align with the uptrend. The RSI is 68.43, which is below the overbought threshold of 70, so it doesn't indicate overbought conditions. The Stochastic K and D are 68.11 and 66.6, respectively, which are in the middle of the range, not showing extreme overbought or oversold. The Williams %R is -31.89, which is a negative value, indicating the asset is not in an overbought condition. There are no bearish divergences noted here. Therefore, all indicators confirm the continuation of the uptrend. The MACD histogram and ROC are strong positive signals, reinforcing the trend. The RSI is slightly above 70 but not in overbought territory, so it doesn't contradict the trend. The overall weight of evidence strongly supports the continuation of the uptrend.",LONG,0.9859195402298851,True,True,True
+2024-12-07,BNB-USD,-0.009299272473133335,LONG,1.0,1.0,LONG,0.95,0.9,"The instrument BNB-USD is currently in an uptrend as indicated by the trend_regime 'UPTREND' and all prices above their respective SMAs (SMA20, SMA50, SMA200). The momentum indicators, such as the MACD histogram (9.2615) and ROC_12 (17.85), are both positive, aligning with the uptrend. The RSI is at 70.97, which is overbought but not extreme, and the Stochastic K is 77.61, also indicating overbought conditions. However, since the trend is confirmed by the positive momentum indicators, the overbought readings are not contradictory but rather show strong upward momentum. There are no bearish divergences observed here, as price continues to make new highs while the RSI and Stochastic are at elevated levels. Therefore, the trend is likely to continue, and the indicators support this continuation.",LONG,0.9867647058823529,False,False,False
+2024-12-08,BNB-USD,-0.07180356369223717,LONG,1.0,1.0,LONG,0.95,0.95,The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. Momentum indicators (MACD histogram +21.14 and ROC +21.14) confirm the trend. Oscillators are overbought but not diverging from price. No signs of exhaustion.,LONG,0.9862318840579711,False,False,False
+2024-12-09,BNB-USD,-0.01875780550493067,LONG,1.0,1.0,LONG,0.95,0.95,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. Positive MACD histogram (4.0581) and ROC_12 (6.97) confirm the trend. RSI (54.34) is below overbought, no divergences detected. Trend confirmed.",LONG,0.9862318840579711,False,False,False
+2024-12-10,BNB-USD,0.05144663282991724,LONG,1.0,1.0,LONG,0.85,0.9,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. The MACD histogram is slightly negative (-0.0448), but the positive ROC_12 (3.46) confirms strong momentum. While the RSI is 51.53 (not overbought), the slight negative MACD histogram suggests minor weakness, but not enough to reverse the trend. The Stochastic and Williams %R indicate neutral to oversold conditions, but price remains above SMAs. Close changes show short-term declines but no reversal signal. Thus, the trend is confirmed.",LONG,0.9602941176470587,True,True,True
+2024-12-11,BNB-USD,-0.008242615233095218,LONG,1.0,1.0,LONG,0.8,0.7,"The instrument BNB-USD is currently in an UPTREND as per the trend_regime. Let's analyze the indicators to confirm or contradict this trend.
+
+1. **Momentum Alignment**:
+   - The MACD histogram is -0.6264, which is negative, indicating bearish momentum. However, the trend is UPTREND, so this suggests a potential contradiction. Additionally, the ROC_12 is 8.71, which is positive, confirming bullish momentum. This is a conflicting signal.
+
+2. **Oscillator Analysis**:
+   - RSI_14 is 57.85, which is below the overbought threshold of 70, so it's not overbought. This aligns with the UPTREND.
+   - Stochastic K is 51.28 and D is 44.84, both within a neutral range. No divergence is observed here.
+   - Williams %R is -48.72, which is oversold, but this is common in an uptrend as the instrument may be consolidating before further gains.
+
+3. **Price vs. SMAs**:
+   - Price is above all SMAs (SMA20, SMA50, SMA200), confirming the UPTREND.
+   - SMA20_slope is 188.1% and SMA50_slope is 93.7%, both positive, reinforcing the uptrend.
+
+4. **Divergence Check**:
+   - There's no clear divergence between price and any oscillator. The MACD histogram is negative, but the price is still rising, which could indicate a bearish divergence. However, the RSI and other oscillators are not overbought, so this divergence might be a temporary pullback.
+
+5. **Conclusion**:
+   - The MACD histogram's negative value suggests bearish momentum, which contradicts the UPTREND. However, the RSI and other oscillators are not overbought, and the price remains above SMAs. The ROC_12 is positive, confirming the trend. The divergence in MACD might be a short-term signal, but the overall trend indicators (price vs. SMAs, ROC) support continuation.
+
+**Final Signal**: The trend is confirmed by price vs. SMAs and ROC, despite the negative MACD histogram. The contradiction is minor, so the trend should continue.
+
+**Direction**: LONG
+**Strength**: 0.8 (Positive trend confirmed by majority of indicators)
+**Confidence**: 0.7 (Slight contradiction from MACD, but other indicators strongly support)
+**Holding Period**: 3-5 days (based on recent price changes)
+",LONG,0.9562499999999999,False,False,False
+2024-12-12,BNB-USD,0.028770839835762674,LONG,1.0,1.0,LONG,0.75,0.8,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. While the MACD histogram is negative, indicating bearish momentum, the ROC_12 remains positive, supporting the uptrend. No divergences or overbought/oversold extremes are present. The trend is confirmed by aligned momentum and oscillator values, so continuation is expected.",LONG,0.9393939393939393,True,True,True
+2024-12-13,BNB-USD,-0.01453917103168434,LONG,1.0,1.0,LONG,0.75,0.8,"The instrument BNB-USD is in an uptrend confirmed by all SMAs (above) and positive annualized slopes. While the MACD histogram is slightly negative (-1.0071), the ROC_12 is positive (10.72), indicating mixed momentum. However, the strong alignment with SMAs and the absence of overbought/oversold extremes in key oscillators (RSI, Stochastic, Williams %R) support the continuation of the uptrend. The negative MACD histogram suggests minor bearishness but not enough to outweigh the trend confirmation from SMAs and ROC.",LONG,0.9393939393939393,False,False,False
+2024-12-14,BNB-USD,0.004804554135363626,LONG,1.0,1.0,LONG,0.85,0.75,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. While the MACD histogram is negative, indicating some bearishness, the ROC_12 remains positive, confirming upward momentum. RSI and other oscillators are not at overbought/oversold extremes. The trend is likely to continue, but with slightly reduced confidence due to minor weakness in momentum.",LONG,0.9653846153846153,True,True,True
+2024-12-15,BNB-USD,0.0016576565382502295,LONG,1.0,1.0,LONG,-0.3,0.75,"The instrument BNB-USD is in an uptrend supported by all SMAs and positive SMA slopes. While the MACD histogram and ROC are negative, indicating weakening momentum, there is no divergence in oscillators (RSI, Stochastic, Williams %R) from price. The trend is confirmed by SMAs and price position, but negative momentum suggests caution. Direction remains LONG with reduced confidence.",LONG,0.7,True,True,True
+2024-12-16,BNB-USD,-0.00505862355040454,LONG,1.0,1.0,LONG,0.75,0.7,"The instrument BNB-USD is in an uptrend as per the trend_regime. Price is above all SMAs, and positive MACD and ROC confirm the trend. However, the negative MACD histogram and ROC indicate weakening momentum. Since the trend hasn't reversed and price remains above SMAs, the default is to stay long with reduced confidence due to fading momentum.",LONG,0.9453125,False,False,False
+2024-12-17,BNB-USD,-0.0405461498198878,LONG,1.0,1.0,LONG,0.7,0.75,"The instrument BNB-USD is in an uptrend with price above all SMAs and positive SMA slopes. While the MACD histogram is slightly negative, the ROC_12 is positive, confirming trend momentum. The RSI and oscillators are neutral, not indicating exhaustion. The slight decline in price is temporary, supporting continuation.",LONG,0.9307692307692307,False,False,False
+2024-12-18,BNB-USD,-0.03061913213778622,LONG,1.0,1.0,FLAT,0.3,0.7,"The instrument is in a sideways trend regime. Negative momentum indicators (MACD histogram and ROC) confirm the trend's weakness. While RSI is neutral and Stochastic indicators are slightly bearish, no extreme divergence or overbought/oversold conditions exist. The trend is likely to continue sideways.",LONG,0.846875,False,False,False
+2024-12-19,BNB-USD,0.017278432007407307,LONG,1.0,1.0,FLAT,0.0,0.5,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **SIDeways** trend regime. This is determined by the following:
+- **SMA20_slope_ann_pct**: +111.7% (indicating a strong upward slope for the 20-day SMA)
+- **SMA50_slope_ann_pct**: +84.5% (indicating a strong upward slope for the 50-day SMA)
+- **Price vs SMA20**: Below (price is below the 20-day SMA)
+- **Price vs SMA50**: Above (price is above the 50-day SMA)
+- **Price vs SMA200**: Above (price is above the 200-day SMA)
+
+The conflicting positions relative to the 20-day SMA (below) and the 50-day SMA (above) suggest a lack of clear directional momentum, leading to a sideways trend.
+
+### Momentum Alignment
+
+- **MACD Histogram**: -7.3542 (negative, indicating bearish momentum)
+- **ROC_12**: -11.16 (negative, confirming bearish momentum)
+
+Both indicators align with the **sideways** trend, as they show a decline in momentum without a clear directional shift.
+
+### Exhaustion Signals
+
+- **RSI_14**: 45.08 (neutral, no overbought/oversold conditions)
+- **Stochastic K**: 14.46 (below 20, indicating oversold)
+- **Williams %R**: -85.54 (very oversold)
+- **Stochastic D**: 31.42 (above 20, indicating some recovery)
+
+The Stochastic indicators show a mix of oversold and recovery, but the Williams %R is extremely low, suggesting potential buying pressure. However, the MACD and ROC are still negative, which contradicts the potential recovery from oversold levels.
+
+### Conclusion
+
+The trend is **SIDeways**, confirmed by the conflicting positions relative to the 20-day SMA and the strong upward slopes of the 50-day and 200-day SMAs. The negative momentum indicators (MACD and ROC) align with this trend, while the oscillators (Stochastic, Williams %R) indicate potential buying opportunities due to oversold conditions. However, since the trend is already sideways, the negative momentum suggests a lack of upward or downward momentum. The weight of evidence here is **sideways**, with no strong signals for continuation or reversal.
+
+**Direction**: FLAT
+**Strength**: 0.0 (no clear directional momentum)
+**Confidence**: 0.5 (moderate, due to conflicting signals)
+**Holding Period**: 5 days (short-term)
+",LONG,0.8333333333333334,True,False,True
+2024-12-20,BNB-USD,-0.02183663371639255,LONG,1.0,1.0,FLAT,0.5,0.8,"The instrument is in a sideways trend regime. Both the MACD histogram and ROC are negative, confirming the sideways direction. No overbought/oversold extremes or divergences are present, so the trend is likely to continue sideways.",LONG,0.8787878787878789,False,False,False
+2024-12-21,BNB-USD,-0.021973796124124645,LONG,1.0,1.0,FLAT,0.0,0.5,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **SIDeways** trend regime. This is determined by the price's position relative to its 20-day SMA (below) and the 50-day and 200-day SMAs (above), along with the positive slopes of the 20-day (53.2%) and 50-day (72.1%) SMAs. The 50-day SMA is above the 200-day SMA, which is a common indicator of a sideways market.
+
+### Momentum Alignment
+- **MACD Histogram**: Negative (-9.27) indicates bearish momentum. However, in a sideways trend, this is neutral. The MACD Line (6.47) and Signal (15.74) are positive, but the histogram's negative value suggests a cooling off in upward momentum.
+- **ROC (12)**: Negative (-3.86) confirms a decline in price momentum over 12 days.
+
+### Oscillator Analysis
+- **RSI (14)**: 44.71 is within the neutral range (30-70), indicating no overbought/oversold conditions.
+- **Stochastic K**: 31.7 is below 50, suggesting the instrument is in the lower half of its range but not yet oversold.
+- **Williams %R (14)**: -68.3 is in the overbought region, but since the trend is sideways, this could be a temporary condition. However, the negative value indicates downward pressure.
+
+### Divergence Check
+- **MACD Divergence**: Price is declining (close change -2.18 and -7.92 over 1d and 5d), but the MACD histogram is negative, which aligns with the price decline. No bearish divergence is present here.
+- **Stochastic Divergence**: Not applicable here as both K and D are below 50, and the price is declining.
+
+### Conclusion
+The negative MACD histogram and negative ROC confirm the decline in momentum, but the trend is still sideways. There is no strong evidence of trend exhaustion yet. The instrument is in a consolidation phase, and the negative indicators are part of the natural fluctuation within the sideways trend. Therefore, the trend is likely to continue sideways unless more bearish signals emerge.
+
+### Signal
+Since the trend is sideways and no strong exhaustion signals are present, the appropriate action is to remain **FLAT**.",LONG,0.8333333333333334,False,False,False
+2024-12-22,BNB-USD,0.06828379645511284,LONG,0.5,0.75,FLAT,0.3,0.7,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **sideways** trend regime. This is determined by the price positions relative to the 20-day and 50-day SMAs (both below), and the 200-day SMA (above). The 20-day and 50-day SMAs have positive slopes (27.7% and 66.3% annualized), which suggests upward momentum, but the price is below these SMAs, indicating a sideways consolidation.
+
+### Momentum Alignment
+- **MACD Histogram**: -10.5801 (negative) indicates bearish momentum. However, in a sideways trend, this is neutral. The MACD Line (2.51) is positive, but the Signal Line (13.0902) is much higher, leading to a negative histogram. This suggests that the upward momentum is fading.
+- **ROC (Return on Close)**: -4.18% shows a decline in price over 12 days, reinforcing the bearishness.
+
+### Oscillator Analysis
+- **RSI (14)**: 41.74 is below the overbought threshold (70), indicating no overbought condition. This aligns with the sideways trend.
+- **Stochastic K**: 23.59 and **Stochastic D**: 32.22 are below 50, suggesting the instrument is in a neutral to oversold state. No divergence from price is observed here.
+- **Williams %R (14)**: -76.41 is in the oversold region, but this is common in sideways trends as the price fluctuates around the SMAs.
+
+### Exhaustion Signals
+- The MACD histogram is negative, indicating bearish momentum. However, the price is still above the 200-day SMA, which is a key support level. The negative histogram could be a sign of weakness, but without a clear divergence (e.g., price making new lows while RSI makes higher lows), this is not a strong exhaustion signal.
+- The ROC is negative, reinforcing the bearishness, but again, in a sideways trend, this is neutral.
+
+### Conclusion
+The indicators suggest a **sideways** trend with some bearish momentum. However, there is no strong evidence of trend exhaustion. The price is still above the 200-day SMA, which provides support. The negative MACD histogram and ROC indicate a decline in upward momentum, but the sideways trend regime remains intact. Therefore, the trend is likely to continue sideways unless there is a significant divergence or a break below the 200-day SMA.
+
+### Final Signal
+The trend is confirmed as **sideways**, with a slight bearish bias due to the negative MACD histogram and ROC. However, the lack of divergence and the presence of the 200-day SMA support suggests the trend is not exhausted. Thus, the appropriate action is to remain **FLAT** with a cautious bearish outlook.",LONG,0.44563106796116503,True,False,True
+2024-12-23,BNB-USD,0.005397422117285222,LONG,1.0,1.0,FLAT,0.5,0.7,"The instrument is in a sideways trend regime. The 50-day SMA has a positive slope (74.4%), while the 20-day SMA is slightly negative (-0.3%). The MACD histogram (-8.1412) and ROC (-2.64) confirm bearish momentum, aligning with the sideways trend. Oscillators like RSI (52.15) and Stochastic (63.22, 39.51) are neutral, showing no divergence. No strong exhaustion signals are present. Thus, the trend is expected to continue sideways.",LONG,0.8906249999999999,True,False,True
+2024-12-24,BNB-USD,0.008017059750913935,LONG,0.5,0.75,FLAT,-0.7,0.8,"The instrument is in a sideways trend regime. Negative MACD histogram (-6.05) and negative ROC (-1.3) confirm bearish momentum. While price is above 50-day and 200-day SMAs, the 20-day SMA slope (-19.6%) and conflicting SMA positions indicate sideways movement. No clear divergence or extreme oscillator values exist. Thus, the trend remains sideways, and the appropriate action is to stay FLAT.",LONG,0.14112149532710283,True,False,True
+2024-12-25,BNB-USD,-0.019886546579559683,LONG,0.5,0.75,FLAT,0.3,0.7,"The instrument BNB-USD is in a sideways trend regime. Key indicators include a negative SMA20 slope (-32.4%) and a positive SMA50 slope (91.1%), conflicting signals that classify it as sideways. The MACD histogram (-4.1492) and ROC_12 (-3.29) confirm bearish momentum, but the price remains above all SMAs. No strong divergence exists between price and oscillators. Thus, the trend is confirmed as sideways with a slight bearish bias.",LONG,0.44563106796116503,False,False,False
+2024-12-26,BNB-USD,0.003006093583914682,LONG,0.5,0.75,FLAT,-0.3,0.6,"### Trend Regime Analysis
+The instrument (BNB-USD) is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to SMAs. The price is **below** the 20-day SMA but **above** both the 50-day and 200-day SMAs. The 20-day SMA has a negative annualized slope (-50.5%), while the 50-day SMA has a positive annualized slope (91.7%). This suggests a lack of clear directional momentum, aligning with the sideways classification.
+
+### Momentum Alignment
+- **MACD Histogram**: Negative (-3.7106) indicates bearish momentum, which contradicts the sideways trend. In a sideways market, the MACD histogram should ideally be neutral or fluctuating around zero. The negative value here suggests potential weakness.
+- **ROC (12)**: Negative (-3.82) confirms bearish momentum. The Rate of Change (ROC) measures the percentage change over a period. A negative value here indicates a decline in price, reinforcing the bearish sentiment.
+
+### Oscillator Analysis
+- **RSI (14)**: 50.68 is in the neutral range, neither overbought nor oversold. This lacks the divergence needed to signal trend exhaustion.
+- **Stochastic K**: 59.23 and D**: 65.64 are in the middle of their ranges, showing no extreme overbought/oversold conditions. No divergence from price is observed here.
+- **Williams %R (14)**: -40.77 is in the oversold region but not extreme. This could indicate a potential buying opportunity if the trend reverses.
+
+### Divergence Check
+No clear divergences are present. Price changes (e.g., -1.99% in 1d) are minor and do not align with significant oscillator extremes.
+
+### Conclusion
+The negative MACD histogram and negative ROC confirm bearish momentum, which contradicts the sideways trend regime. However, since the trend is classified as sideways, the primary driver is the conflicting SMA positions. The bearish momentum indicators suggest a potential continuation of the sideways trend or a slight downward bias. Given the lack of strong divergence or overbought/oversold extremes, the trend is unlikely to be exhausted. However, the negative momentum metrics introduce some caution.
+
+### Final Signal
+The trend is **sideways**, but the bearish momentum indicators slightly favor a **short-term bearish bias**. However, since the trend regime is explicitly sideways, the default action is to remain **FLAT** unless multiple strong exhaustion signals converge. The negative momentum metrics reduce confidence but do not justify a counter-trend position.
+
+**Direction**: FLAT
+**Strength**: -0.3
+**Confidence**: 0.6
+**Holding Period**: 3 days",LONG,0.30606060606060603,True,False,True
+2024-12-27,BNB-USD,0.04421837173725773,LONG,0.5,0.75,FLAT,0.0,0.5,"The instrument is in a sideways trend regime. Both the MACD histogram (-3.1781) and ROC (-3.99) indicate bearish momentum, but they are not extreme. No overbought/oversold conditions or divergences are present. The lack of strong signals confirms the sideways trend.",LONG,0.39473684210526316,True,False,True
+2024-12-28,BNB-USD,-0.0377338060764838,LONG,0.5,0.75,FLAT,0.0,0.5,"The instrument is in a sideways trend regime. While the MACD histogram is negative (bearish), there's no clear divergence or extreme oscillator values indicating trend exhaustion. The default position for a sideways trend is FLAT.",LONG,0.39473684210526316,False,False,False
+2024-12-29,BNB-USD,0.014979051551079037,LONG,0.5,0.75,FLAT,0.0,0.5,"### Trend Regime Analysis
+The instrument (BNB-USD) is currently in a **sideways** trend regime, as indicated by the conflicting positions relative to its SMAs. The price is **below** the 20-day SMA but **above** both the 50-day and 200-day SMAs. The 20-day SMA has a negative annualized slope (-48.0%), while the 50-day SMA has a positive annualized slope (79.1%). This suggests a lack of clear directional momentum, aligning with the sideways classification.
+
+### Momentum Alignment
+- **MACD Histogram**: Negative (-1.05) indicates bearish momentum. However, the MACD Line (5.2731) and Signal (6.3231) are positive, which is contradictory. This divergence suggests potential trend exhaustion.
+- **ROC (12)**: Negative (-3.2) confirms bearish momentum. The negative ROC indicates a decline in price growth rate, reinforcing the bearish sentiment.
+
+### Oscillator Analysis
+- **RSI (14)**: 51.14 is neutral, neither overbought nor oversold. No divergence from price.
+- **Stochastic K**: 63.87 and D**: 70.72 are above 50, indicating the instrument is in an uptrend according to the Stochastic Oscillator. However, the negative MACD histogram and ROC contradict this, suggesting a potential divergence.
+- **Williams %R (14)**: -36.13 is in the oversold region, but the price is still above the 50-day SMA. This could indicate a temporary oversold condition before a potential reversal.
+
+### Exhaustion Signals
+- **Divergence**: The negative MACD histogram and negative ROC are bearish, while the positive Stochastic Oscillator suggests a possible divergence. This inconsistency adds to the uncertainty.
+- **Momentum Fading**: The MACD histogram is negative, indicating bearish momentum, but the price is still above the 50-day SMA. This could mean the trend is weakening.
+
+### Conclusion
+The conflicting indicators make it challenging to definitively confirm or contradict the sideways trend. However, the negative MACD histogram and negative ROC suggest bearish momentum, which could indicate a potential trend exhaustion. The Stochastic Oscillator’s positive readings suggest the trend might not be exhausted yet. Given the ambiguity, the safest approach is to remain **FLAT** with a cautious outlook.
+
+### Final Signal
+- **Direction**: FLAT
+- **Strength**: 0.0 (ambiguous)
+- **Confidence**: 0.5 (moderate uncertainty)
+- **Holding Period**: 3 days (short-term)
+",LONG,0.39473684210526316,True,False,True
+2024-12-30,BNB-USD,-0.0044868854986935824,LONG,1.0,1.0,FLAT,0.0,0.5,"### Trend Regime Analysis
+The instrument BNB-USD is currently in a **sideways** trend regime, as indicated by the `trend_regime` field. This is supported by the fact that the price is above all three SMAs (SMA20, SMA50, SMA200), but the SMA20 and SMA50 slopes are -34.0% and +69.2% annually, respectively. The negative slope of SMA20 suggests a slight downward bias, while the positive slope of SMA50 indicates a potential upward bias. However, the overall trend is classified as sideways because the price remains above all SMAs despite the conflicting slopes.
+
+### Momentum Alignment
+The momentum indicators (MACD histogram and ROC) are both positive: MACD histogram is -0.5516 (slightly negative), but this is a bit confusing. Wait, actually, the MACD histogram is -0.5516, which is negative, indicating bearish momentum. However, the ROC_12 is +2.4, which is positive. This suggests conflicting momentum signals. But wait, the MACD histogram is a key momentum indicator here. A negative MACD histogram implies that the short-term moving average is below the long-term, which is bearish. However, the price is still above the SMAs, so the trend is sideways.
+
+### Oscillator Analysis
+The RSI is 53.36, which is in the neutral range (30-70). The Stochastic K and D are 72.81 and 74.65, respectively, indicating the price is in the upper half of its recent range but not overbought (overbought would be above 80). The Williams %R is -27.19, which is oversold (over 20 is oversold). However, since the trend is sideways, these oscillators are not signaling a clear buy or sell. The RSI is neither overbought nor oversold, and the Stochastic is in the upper range but not extreme. The Williams %R is oversold, but the price is still above the SMAs, so this might be a temporary dip in the sideways trend.
+
+### Divergence Check
+There is no clear divergence noted here. Price is above all SMAs, and the oscillators are not showing extreme readings that would indicate a trend reversal. The MACD histogram is negative, which could suggest a bearish bias, but the price is still moving sideways. The ROC_12 is positive, which supports the upward movement, but the negative MACD histogram is conflicting. However, since the trend is classified as sideways, the conflicting momentum might just be part of the sideways movement.
+
+### Conclusion
+The trend is classified as sideways, and the indicators are mixed. The MACD histogram is negative, suggesting bearish momentum, but the price remains above the SMAs. The RSI and Stochastic are in neutral to upper ranges, and Williams %R is oversold. Since the trend is sideways, the conflicting momentum might just be a temporary dip. There's no strong evidence of trend exhaustion here. Therefore, the trend should continue sideways, and the appropriate action is to remain **FLAT**.
+
+### Final Signal
+- **Direction**: FLAT
+- **Strength**: 0.0 (since there's no clear momentum)
+- **Confidence**: 0.5 (moderate confidence in the sideways trend)
+- **Holding Period**: 3 days (as a default for sideways trends)
+",LONG,0.8333333333333334,False,False,False
