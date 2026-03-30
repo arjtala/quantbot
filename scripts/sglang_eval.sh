@@ -2,26 +2,34 @@
 # QuantBot — Run eval against SGLang server
 #
 # Usage:
-#   bash scripts/sglang_eval.sh <sglang-node> <model-name>
+#   bash scripts/sglang_eval.sh <sglang-node> [model-name] [port]
 #
 # Example:
-#   bash scripts/sglang_eval.sh gpu-node-01 deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
+#   bash scripts/sglang_eval.sh h200-137-002-043 deepseek-ai/DeepSeek-R1-Distill-Qwen-32B
 
 set -e
 
-NODE=${1:?"Usage: $0 <sglang-node> [model-name]"}
+NODE=${1:?"Usage: $0 <sglang-node> [model-name] [port]"}
 MODEL=${2:-"deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"}
 PORT=${3:-30000}
+WORKERS=${4:-4}
+
+# Bypass cluster proxy for compute node
+export no_proxy="$NODE"
+export NO_PROXY="$NODE"
 
 echo "=== QuantBot Eval via SGLang ==="
-echo "Server: http://$NODE:$PORT/v1"
-echo "Model:  $MODEL"
+echo "Server:  http://$NODE:$PORT/v1"
+echo "Model:   $MODEL"
+echo "Workers: $WORKERS"
 
 # Create .env for this run
 cat > .env << EOF
 DEFAULT_PROVIDER=sglang
 OPENAI_BASE_URL=http://$NODE:$PORT/v1
 OPENAI_API_KEY=not-needed
+no_proxy=$NODE
+NO_PROXY=$NODE
 INDICATOR_MODEL=sglang:$MODEL
 PATTERN_MODEL=sglang:$MODEL
 TREND_MODEL=sglang:$MODEL
@@ -36,12 +44,12 @@ echo ""
 
 # Quick connectivity test
 echo "Testing connection..."
-curl -s "http://$NODE:$PORT/v1/models" | python3 -m json.tool || {
+curl -s --noproxy "$NODE" "http://$NODE:$PORT/v1/models" | python3 -m json.tool || {
     echo "ERROR: Cannot reach SGLang server at http://$NODE:$PORT/v1"
-    echo "Is the SLURM job running? Check: squeue -u $USER"
+    echo "Is the SLURM job running? Check: squeue -u \$USER"
     exit 1
 }
 
 echo ""
-echo "Connection OK. Running eval (21 instruments × 60 days = 1,260 LLM calls)..."
-python scripts/eval_round1.py --days 60
+echo "Connection OK. Running eval (21 instruments × 60 days = 1,260 LLM calls, $WORKERS workers)..."
+python scripts/eval_round1.py --days 60 --data-dir data/ --workers "$WORKERS"
