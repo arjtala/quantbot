@@ -17,7 +17,7 @@
 # Recommended models (adjust MODEL below):
 #   1 H200:  deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  (best reasoning/GPU)
 #   1 H200:  Qwen/Qwen3-32B                              (strong reasoning)
-#   1 H200:  TheFinAI/Fin-R1-7B                           (finance-specialized)
+#   1 H200:  SUFE-AIFLM-Lab/Fin-R1                           (finance-specialized)
 #   8 H200:  Qwen/Qwen3-235B-A22B  (MoE, --tp 8, needs 1TB RAM)
 #   4 H200:  deepseek-ai/DeepSeek-V3.2  (--tp 4)
 #   8 H200:  deepseek-ai/DeepSeek-R1  (--tp 8)

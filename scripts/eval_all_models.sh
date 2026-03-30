@@ -9,7 +9,7 @@
 #
 # Results land in:
 #   eval_results/deepseek-ai_DeepSeek-R1-Distill-Qwen-32B/
-#   eval_results/TheFinAI_Fin-R1-7B/
+#   eval_results/SUFE-AIFLM-Lab_Fin-R1/
 #   eval_results/Qwen_Qwen3-32B/
 
 set -e
@@ -21,7 +21,7 @@ DATA_DIR="data"
 # Each model gets a unique port to avoid collisions if co-located
 declare -A MODELS
 MODELS[deepseek]="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
-MODELS[finr1]="TheFinAI/Fin-R1-7B"
+MODELS[finr1]="SUFE-AIFLM-Lab/Fin-R1"
 MODELS[qwen3]="Qwen/Qwen3-32B"
 
 declare -A PORTS

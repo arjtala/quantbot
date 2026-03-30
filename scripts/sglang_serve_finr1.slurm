@@ -17,7 +17,7 @@
 # Uses <think> tags like DeepSeek-R1-Distill.
 # ============================================================================
 
-MODEL="TheFinAI/Fin-R1-7B"
+MODEL="SUFE-AIFLM-Lab/Fin-R1"
 PORT=30000
 TP=1
 
