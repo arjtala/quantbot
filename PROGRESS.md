@@ -322,13 +322,14 @@ account_id = "Z69YJL"
 
 ### New Agents & Strategies
 - [ ] Cross-sectional momentum, mean reversion, carry agents
-- [ ] **Chronos Agent** *(JOURNAL.md §O)* — Zero-shot time series forecasting via Amazon's Chronos foundation model. Tokenizes price series into probabilistic forecasts. Especially valuable for new instruments lacking TSMOM lookback history.
+- [ ] **TimesFM Agent** *(JOURNAL.md §S)* — Google's 200M-param zero-shot time series foundation model. Probabilistic forecasts (quantile output) with 16K context. Replaces Chronos as primary foundation model candidate — newer, smaller, probabilistic. Complements TSMOM (momentum vs mean-reversion/cyclical). Rust: export to ONNX → `ort` crate. Runs on Mac M4.
 - [ ] **AlphaGen Agent** *(JOURNAL.md §F, §J)* — Self-improving alpha discovery loop. LLM generates mathematical factor code, runs it through `BacktestEngine`, evaluates Sharpe, iteratively refines. Promotes winners to production.
-- [ ] **Clifford TSMOM** *(JOURNAL.md §R)* — Geometric algebra-enhanced momentum. Replace scalar momentum (`price_now/price_lookback - 1`) with the full geometric product between multi-feature vectors (price, volume, volatility). Inner product captures trend continuation; wedge product (bivector) captures regime changes via structural variation. Anti-symmetric wedge means trend reversals produce sign flips — a natural reversal detector. Sparse rolling shifts at {1, 5, 21, 63} days map to daily/weekly/monthly/quarterly timescales. Research direction — potentially publishable if it outperforms standard TSMOM on regime change detection.
+- [ ] **Clifford TSMOM** *(JOURNAL.md §R)* — Geometric algebra-enhanced momentum via full geometric product. Research direction — potentially publishable.
+- [ ] **Multi-timeframe analysis** *(from QuantAgent-SBU + TorchTrade)* — Analyze across 1h/4h/1d simultaneously. Daily trend + shorter-timeframe entry signals for confluence.
 
 ### Risk & Sizing
 - [ ] Correlation-aware sizing, drawdown deleveraging
-- [ ] **RL-based dynamic agent weighting** *(JOURNAL.md §Q)* — Replace fixed `SignalCombiner` weights with a bandit/PPO agent that learns optimal agent weights per market regime. RL survey shows hybrid methods outperform by 15-20%.
+- [ ] **RL-based dynamic agent weighting** *(JOURNAL.md §Q, TorchTrade PPO reference)* — Replace fixed `SignalCombiner` weights with a bandit/PPO agent that learns optimal weights per market regime. RL survey shows hybrid methods outperform by 15-20%.
 
 ### Alternative Signal Sources
 - [ ] **PredictionMarketAgent** — Polymarket/Kalshi probability estimates as macro sentiment signal. Use [prediction-market-analysis](https://github.com/Jon-Becker/prediction-market-analysis) dataset (36GB) for backtesting. Execution via [pmxt](https://github.com/pmxt-dev/pmxt) if trading prediction markets directly.

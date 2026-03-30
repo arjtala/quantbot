@@ -169,14 +169,32 @@ The following papers address gaps in the original literature review, covering mu
 - **Limitations:** Only validated on CIFAR-100 (32×32 images). No ImageNet, no time series, no financial benchmarks. Single author, no peer review. Outdated baselines. Novel theory but immature validation (7/10 novelty, 4/10 empirical maturity).
 - **Utility:** Research direction for Phase 5. A Clifford-enhanced signal generator could detect regime changes that scalar momentum misses. Worth exploring once the core system is stable — potentially a novel publishable contribution if it outperforms standard TSMOM on regime change detection.
 
+### S. Time Series Foundation Model for Zero-Shot Forecasting
+**Repo:** [google-research/timesfm](https://github.com/google-research/timesfm) (10.5K ★)
+**Paper:** *A Decoder-Only Foundation Model for Time-Series Forecasting* (ICML 2024)
+- **Core Concept:** TimesFM 2.5 is a 200M-parameter pretrained time series model from Google Research. Feed raw price data in, get probabilistic forecasts out — zero-shot, no training required.
+- **Key Specs:** 200M params (runs on Mac M4), 16K context length, up to 1K-step horizon, quantile output (10th–90th percentiles), Apache 2.0 license.
+- **Utility — Better Chronos Alternative:** Replaces Amazon's Chronos (§O) as the primary foundation model candidate. Newer (Sept 2025), smaller, probabilistic output gives confidence intervals. Complements TSMOM: momentum captures trends, TimesFM captures mean-reversion and cyclical patterns. Zero-shot means new instruments work from day one without TSMOM's 12-month lookback requirement.
+- **Rust integration:** Export to ONNX → `ort` crate (ONNX Runtime for Rust), or keep as Python microservice.
+
+### Open-Source Architecture References
+
+| Repo | Stars | Relevance |
+|---|---|---|
+| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | Bull/bear debate implementation (paper §H now open-sourced). Study analyst→researcher→risk→trader pipeline. |
+| [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) | 49.6K | Competitive benchmark — near-identical multi-agent architecture. Compare Sharpe ratios. |
+| [QuantAgent (SBU)](https://github.com/Y-Research-SBU/QuantAgent) | — | Architecture twin to Phase 2 (indicator+pattern+trend agents via LangGraph+vision LLM). Key difference: no TSMOM anchor, no memory, no execution. Study their vision LLM chart pipeline + multi-timeframe analysis (1m to 1d). |
+| [nofx](https://github.com/NoFxAiOS/nofx) | 11.2K | Circuit breaker / safe mode pattern — auto-flatten after consecutive failures, drawdown breaker, graceful degradation. |
+| [TorchTrade](https://github.com/TorchTrade/torchtrade) | — | RL trading framework on TorchRL. Study: multi-timeframe observation design, Chronos as encoder transform (validates foundation model approach), PPO-based agent weighting. |
+
 ### Phase Relevance Map
 
-| QuantBot Phase | Most Relevant Papers |
+| QuantBot Phase | Most Relevant Papers & Repos |
 |---|---|
-| Phase 2 (LangGraph + LLM agents) | TradingAgents (H), StockAgent (I), MarketSenseAI (N), FinAgent (L) |
-| Phase 3 (Paper trading + dashboard) | FinRobot (M) |
-| Phase 4 (Rust port) | MambaStock (P) — simpler architecture for Rust |
-| Phase 5 (Extensions) | Chronos (O), Fin-R1 (K), QuantAgent-HKUST (J), CliffordNet (R) |
+| Phase 2 (LLM agents) | TradingAgents (H), StockAgent (I), MarketSenseAI (N), FinAgent (L), QuantAgent-SBU, ai-hedge-fund |
+| Phase 3 Track A (TSMOM + IG) | nofx (circuit breaker) |
+| Phase 3 Track B (LLM agents in Rust) | TradingAgents, QuantAgent-SBU (vision pipeline), MambaStock (P) |
+| Phase 4 (Extensions) | TimesFM (S), Fin-R1 (K), QuantAgent-HKUST (J), CliffordNet (R), TorchTrade (RL weighting) |
 | General reference | RL survey (Q) |
 
 ---
@@ -240,5 +258,6 @@ Triangulating across traditional stats, enterprise machine learning, and modern 
 - Yang, H., et al. (2024). "FinRobot: An Open-Source AI Agent Platform for Financial Applications using Large Language Models." *arXiv preprint arXiv:2405.14767*.
 - Zhang, C., et al. (2024). "StockAgent: LLM-based Stock Trading in Simulated Real-world Environments." *arXiv preprint arXiv:2407.18957*.
 - Zhang, W., et al. (2024). "FinAgent: A Multimodal Foundation Agent for Financial Trading." *arXiv preprint arXiv:2402.18485*.
+- Das, A., et al. (2024). "A Decoder-Only Foundation Model for Time-Series Forecasting." *ICML 2024*. [google-research/timesfm](https://github.com/google-research/timesfm).
 - Ji, Z. (2026). "CliffordNet: All You Need is Geometric Algebra." *arXiv preprint arXiv:2601.06793v2*.
 - (2024). "Reinforcement Learning in Financial Decision Making: A Systematic Review." *arXiv preprint arXiv:2411.07585*.

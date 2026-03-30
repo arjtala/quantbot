@@ -25,3 +25,4 @@ Thumbs.db
 .pytest_cache/
 eval_results/
 logs/
+data/
