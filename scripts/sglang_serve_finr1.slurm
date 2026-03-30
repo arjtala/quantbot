@@ -1,33 +1,25 @@
 #!/bin/bash
-#SBATCH --job-name=quantbot-llm
+#SBATCH --job-name=quantbot-finr1
 #SBATCH --account=dream
 #SBATCH --qos=h200_comm_shared
-#SBATCH --gres=gpu:h200:1       # 1 H200 for 32B models
+#SBATCH --gres=gpu:h200:1       # 7B model — 1 H200 is plenty
 #SBATCH --cpus-per-task=16
-#SBATCH --mem=64G
+#SBATCH --mem=32G               # 7B needs ~14GB GPU RAM, minimal system RAM
 #SBATCH --time=24:00:00
-#SBATCH --output=logs/sglang-server-%j.out
-#SBATCH --error=logs/sglang-server-%j.err
+#SBATCH --output=logs/sglang-finr1-%j.out
+#SBATCH --error=logs/sglang-finr1-%j.err
 
 # ============================================================================
-# QuantBot — SGLang Model Server
+# QuantBot — Fin-R1 (7B) Model Server
 #
-# Serves an LLM via OpenAI-compatible API for the quantbot eval pipeline.
-#
-# Recommended models (adjust MODEL below):
-#   1 H200:  deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  (best reasoning/GPU)
-#   1 H200:  Qwen/Qwen3-32B                              (strong reasoning)
-#   1 H200:  TheFinAI/Fin-R1-7B                           (finance-specialized)
-#   8 H200:  Qwen/Qwen3-235B-A22B  (MoE, --tp 8, needs 1TB RAM)
-#   4 H200:  deepseek-ai/DeepSeek-V3.2  (--tp 4)
-#   8 H200:  deepseek-ai/DeepSeek-R1  (--tp 8)
+# Finance-specialized reasoning model (DeepSeek-R1 RL-trained on financial data).
+# Matches GPT-4 on financial reasoning benchmarks at 7B parameters.
+# Uses <think> tags like DeepSeek-R1-Distill.
 # ============================================================================
 
-# --- Configuration ---
-MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
-# MODEL="Qwen/Qwen3-235B-A22B"
+MODEL="TheFinAI/Fin-R1-7B"
 PORT=30000
-TP=1  # tensor parallelism — set to number of GPUs
+TP=1
 
 # --- Activate environment ---
 source activate quantbot-cluster || conda activate quantbot-cluster
@@ -38,7 +30,6 @@ echo "  SGLang Model Server"
 echo "  Model:  $MODEL"
 echo "  Node:   $(hostname)"
 echo "  Port:   $PORT"
-echo "  TP:     $TP"
 echo "  URL:    http://$(hostname):$PORT/v1"
 echo "============================================"
 echo ""

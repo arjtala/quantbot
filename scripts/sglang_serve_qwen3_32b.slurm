@@ -1,33 +1,25 @@
 #!/bin/bash
-#SBATCH --job-name=quantbot-llm
+#SBATCH --job-name=quantbot-qwen3-32b
 #SBATCH --account=dream
 #SBATCH --qos=h200_comm_shared
-#SBATCH --gres=gpu:h200:1       # 1 H200 for 32B models
+#SBATCH --gres=gpu:h200:1       # 32B dense model — fits on 1 H200 (140GB)
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=64G
 #SBATCH --time=24:00:00
-#SBATCH --output=logs/sglang-server-%j.out
-#SBATCH --error=logs/sglang-server-%j.err
+#SBATCH --output=logs/sglang-qwen3-32b-%j.out
+#SBATCH --error=logs/sglang-qwen3-32b-%j.err
 
 # ============================================================================
-# QuantBot — SGLang Model Server
+# QuantBot — Qwen3-32B Model Server
 #
-# Serves an LLM via OpenAI-compatible API for the quantbot eval pipeline.
-#
-# Recommended models (adjust MODEL below):
-#   1 H200:  deepseek-ai/DeepSeek-R1-Distill-Qwen-32B  (best reasoning/GPU)
-#   1 H200:  Qwen/Qwen3-32B                              (strong reasoning)
-#   1 H200:  TheFinAI/Fin-R1-7B                           (finance-specialized)
-#   8 H200:  Qwen/Qwen3-235B-A22B  (MoE, --tp 8, needs 1TB RAM)
-#   4 H200:  deepseek-ai/DeepSeek-V3.2  (--tp 4)
-#   8 H200:  deepseek-ai/DeepSeek-R1  (--tp 8)
+# Strong general reasoning model. Direct comparison with DeepSeek-R1-Distill-
+# Qwen-32B (same size, different training). Qwen3 uses /think and /no_think
+# mode — enable thinking for best reasoning quality.
 # ============================================================================
 
-# --- Configuration ---
-MODEL="deepseek-ai/DeepSeek-R1-Distill-Qwen-32B"
-# MODEL="Qwen/Qwen3-235B-A22B"
+MODEL="Qwen/Qwen3-32B"
 PORT=30000
-TP=1  # tensor parallelism — set to number of GPUs
+TP=1
 
 # --- Activate environment ---
 source activate quantbot-cluster || conda activate quantbot-cluster
@@ -38,7 +30,6 @@ echo "  SGLang Model Server"
 echo "  Model:  $MODEL"
 echo "  Node:   $(hostname)"
 echo "  Port:   $PORT"
-echo "  TP:     $TP"
 echo "  URL:    http://$(hostname):$PORT/v1"
 echo "============================================"
 echo ""

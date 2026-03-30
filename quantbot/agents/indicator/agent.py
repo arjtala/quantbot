@@ -34,13 +34,12 @@ def make_indicator_node() -> Any:
 {json.dumps(indicators, indent=2)}
 ```
 
-## Indicator Reference
-- RSI > 70 = overbought, RSI < 30 = oversold
-- MACD histogram > 0 = bullish momentum, < 0 = bearish
-- Stochastic %K > 80 = overbought, < 20 = oversold
-- ROC > 0 = positive momentum, < 0 = negative
-- Williams %R > -20 = overbought, < -80 = oversold
-"""
+## How to Read These Indicators
+- **trend.trend_regime**: The current trend direction based on SMA slopes and price position
+- **Momentum (MACD histogram, ROC)**: Positive = bullish momentum, negative = bearish. These CONFIRM trends.
+- **Oscillators (RSI, Stochastic, Williams %R)**: Show overbought/oversold. In a trend, these confirm strength — only signal exhaustion when they DIVERGE from price.
+
+Assess whether the indicators confirm or contradict the current trend regime, then produce your signal."""
 
         if memory_context:
             user_content += f"\n## Decision History\n{memory_context}\n"

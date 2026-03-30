@@ -6,12 +6,58 @@ import base64
 import io
 import json
 import logging
+import re
 from typing import Any
 
 from quantbot.config import settings
 from quantbot.core.signal import Signal, SignalDirection, SignalType
 
 logger = logging.getLogger(__name__)
+
+# Regex to match <think>...</think> blocks (reasoning models like DeepSeek-R1)
+_THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+
+
+def _extract_thinking(text: str) -> tuple[str, str]:
+    """Strip <think> blocks from text, returning (reasoning, cleaned_text)."""
+    reasoning_parts: list[str] = []
+    for m in _THINK_RE.finditer(text):
+        reasoning_parts.append(m.group(1).strip())
+    cleaned = _THINK_RE.sub("", text).strip()
+    return "\n\n".join(reasoning_parts), cleaned
+
+
+def _extract_json(text: str) -> dict[str, Any]:
+    """Extract a JSON object from text that may contain markdown fences or prose."""
+    text = text.strip()
+
+    # Strip markdown code fences if present
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+
+    # Try direct parse first (fastest path)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back: find JSON by matching braces
+    start = text.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("No JSON object found in response", text, 0)
+
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start : i + 1])
+
+    raise json.JSONDecodeError("No JSON object found in response", text, 0)
 
 
 def parse_signal_response(
@@ -22,19 +68,18 @@ def parse_signal_response(
 ) -> Signal:
     """Parse an LLM JSON response into a Signal.
 
-    Handles common extraction issues (markdown code fences, trailing text).
+    Handles common extraction issues:
+    - <think>...</think> reasoning blocks (DeepSeek-R1, QwQ, etc.)
+    - Markdown code fences
+    - JSON embedded in prose text
+
     Falls back to FLAT signal on parse failure.
     """
     try:
-        # Strip markdown code fences if present
-        text = raw.strip()
-        if text.startswith("```"):
-            lines = text.split("\n")
-            # Remove first and last fence lines
-            lines = [l for l in lines if not l.strip().startswith("```")]
-            text = "\n".join(lines)
+        # Extract and preserve reasoning from <think> tags
+        llm_reasoning, text = _extract_thinking(raw)
 
-        data = json.loads(text)
+        data = _extract_json(text)
 
         direction_str = data.get("direction", "FLAT").upper()
         direction = SignalDirection(direction_str)
@@ -48,6 +93,8 @@ def parse_signal_response(
 
         # Extract reasoning and extra fields for metadata
         metadata: dict[str, Any] = {}
+        if llm_reasoning:
+            metadata["llm_reasoning"] = llm_reasoning
         for key in ("reasoning", "patterns_identified", "trend_direction", "key_levels"):
             if key in data:
                 metadata[key] = data[key]
@@ -65,6 +112,7 @@ def parse_signal_response(
 
     except (json.JSONDecodeError, KeyError, ValueError) as e:
         logger.warning("Failed to parse LLM response for %s/%s: %s", agent_name, instrument, e)
+        logger.debug("Raw LLM response:\n%s", raw[:2000])
         return Signal(
             instrument=instrument,
             direction=SignalDirection.FLAT,
@@ -91,7 +139,7 @@ def get_llm_client(model: str) -> Any:
       - "sglang:<model>"  → Custom OpenAI-compatible endpoint (SGLang/vLLM on GPU cluster)
       - "claude*"         → Anthropic API
       - "gpt*"/"o1*"/"o3" → OpenAI API
-      - anything else     → Ollama (default)
+      - anything else     → default_provider setting (sglang or ollama)
     """
     # Explicit prefix routing
     if model.startswith("ollama:"):
@@ -122,8 +170,11 @@ def get_llm_client(model: str) -> Any:
             kwargs["api_key"] = settings.openai_api_key
         return ChatOpenAI(**kwargs)
     else:
-        # Default: treat as Ollama model name
-        return _get_ollama_client(model)
+        # No prefix match — use default_provider setting as fallback
+        if settings.default_provider == "sglang":
+            return _get_sglang_client(model)
+        else:
+            return _get_ollama_client(model)
 
 
 def _get_ollama_client(model: str) -> Any:

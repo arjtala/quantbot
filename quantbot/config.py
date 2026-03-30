@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -102,3 +104,14 @@ def load_prompt(name: str) -> str:
 
 # Singleton — import and use directly
 settings = QuantbotSettings()
+
+# Ensure no_proxy is set for the SGLang/vLLM endpoint so requests bypass
+# any HTTP proxy on the cluster login nodes.
+if settings.openai_base_url:
+    host = urlparse(settings.openai_base_url).hostname
+    if host:
+        existing = os.environ.get("no_proxy", "")
+        if host not in existing:
+            no_proxy = f"{existing},{host}" if existing else host
+            os.environ["no_proxy"] = no_proxy
+            os.environ["NO_PROXY"] = no_proxy

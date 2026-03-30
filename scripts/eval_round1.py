@@ -50,6 +50,7 @@ class DayResult:
     indicator_direction: str = "FLAT"
     indicator_strength: float = 0.0
     indicator_confidence: float = 0.0
+    indicator_reasoning: str = ""
     combined_direction: str = "FLAT"
     combined_strength: float = 0.0
     tsmom_correct: bool = False
@@ -69,14 +70,12 @@ def run_indicator_agent_raw(bars: pd.DataFrame, instrument: str) -> Signal:
 {json.dumps(indicators, indent=2)}
 ```
 
-## Indicator Reference
-- RSI > 70 = overbought, RSI < 30 = oversold
-- MACD histogram > 0 = bullish momentum, < 0 = bearish
-- Stochastic %K > 80 = overbought, < 20 = oversold
-- ROC > 0 = positive momentum, < 0 = negative
-- Williams %R > -20 = overbought, < -80 = oversold
+## How to Read These Indicators
+- **trend.trend_regime**: The current trend direction based on SMA slopes and price position
+- **Momentum (MACD histogram, ROC)**: Positive = bullish momentum, negative = bearish. These CONFIRM trends.
+- **Oscillators (RSI, Stochastic, Williams %R)**: Show overbought/oversold. In a trend, these confirm strength — only signal exhaustion when they DIVERGE from price.
 
-Analyze these indicators step-by-step and produce your signal."""
+Assess whether the indicators confirm or contradict the current trend regime, then produce your signal."""
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -152,6 +151,7 @@ def evaluate_instrument(
             indicator_direction=ind_sig.direction.value,
             indicator_strength=ind_sig.strength,
             indicator_confidence=ind_sig.confidence,
+            indicator_reasoning=ind_sig.metadata.get("llm_reasoning", ind_sig.metadata.get("reasoning", "")),
             combined_direction=combined.direction.value,
             combined_strength=combined.strength,
             tsmom_correct=tsmom_correct,
@@ -231,11 +231,21 @@ def main():
     parser.add_argument("--start", type=str, default="2022-01-01", help="Data start date")
     parser.add_argument("--end", type=str, default="2025-01-01", help="Data end date")
     parser.add_argument("--data-dir", type=str, default=None, help="Load bars from CSV files in this directory instead of Yahoo Finance")
+    parser.add_argument("--run-name", type=str, default=None, help="Name for this eval run (e.g. model name). Results saved to eval_results/<run-name>/")
     args = parser.parse_args()
 
     instruments = [s.strip() for s in args.instruments.split(",")]
     start = date.fromisoformat(args.start)
     end = date.fromisoformat(args.end)
+
+    # Determine results directory
+    if args.run_name:
+        results_dir = RESULTS_DIR / args.run_name
+    else:
+        # Auto-name from indicator model setting
+        model_name = settings.indicator_model.split(":")[-1].replace("/", "_")
+        results_dir = RESULTS_DIR / model_name
+    results_dir.mkdir(parents=True, exist_ok=True)
 
     print("=" * 70)
     print("  ROUND 1 EVALUATION — Go/No-Go for Phase 3")
@@ -243,6 +253,8 @@ def main():
     print(f"  Instruments: {instruments}")
     print(f"  Eval days:   {args.days}")
     print(f"  Data range:  {start} → {end}")
+    print(f"  Model:       {settings.indicator_model}")
+    print(f"  Results dir: {results_dir}")
 
     # Fetch data
     print("\nFetching data...")
@@ -276,11 +288,11 @@ def main():
     elapsed = time.time() - start_time
 
     # Save raw results
-    RESULTS_DIR.mkdir(exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
     for sym, results in all_results.items():
         rows = [vars(r) for r in results]
         df = pd.DataFrame(rows)
-        df.to_csv(RESULTS_DIR / f"round1_{sym}.csv", index=False)
+        df.to_csv(results_dir / f"round1_{sym}.csv", index=False)
 
     # Summary
     print("\n" + "=" * 70)
@@ -329,7 +341,7 @@ def main():
             )
 
     print(f"\n  Elapsed: {elapsed:.0f}s ({elapsed/60:.1f} min)")
-    print(f"  Results saved to {RESULTS_DIR}/")
+    print(f"  Results saved to {results_dir}/")
 
     # Go/No-Go verdict
     agg_tsmom = compute_pnl(all_flat, "tsmom_direction")
