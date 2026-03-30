@@ -63,8 +63,11 @@ class DayResult:
     combined_correct: bool = False
 
 
-def run_indicator_agent_raw(bars: pd.DataFrame, instrument: str) -> Signal:
-    """Run the indicator agent directly (without LangGraph state overhead)."""
+def run_indicator_agent_raw(bars: pd.DataFrame, instrument: str, max_retries: int = 2) -> Signal:
+    """Run the indicator agent directly (without LangGraph state overhead).
+
+    Retries on parse failure with a direct JSON-only prompt.
+    """
     indicators = compute_all_indicators(bars)
 
     system_prompt = load_prompt("indicator_system")
@@ -90,8 +93,24 @@ Assess whether the indicators confirm or contradict the current trend regime, th
         HumanMessage(content=user_content),
     ]
 
-    response = llm.invoke(messages)
-    return parse_signal_response(response.content, instrument, "Indicator")
+    for attempt in range(max_retries):
+        response = llm.invoke(messages)
+        signal = parse_signal_response(response.content, instrument, "Indicator")
+
+        # If we got a real signal (not a parse error fallback), return it
+        if "parse_error" not in signal.metadata:
+            return signal
+
+        if attempt < max_retries - 1:
+            # Retry: append the failed response and a correction prompt
+            logger.info("Retry %d/%d for %s — parse failed, requesting JSON", attempt + 1, max_retries, instrument)
+            messages.append(response)
+            messages.append(HumanMessage(content=(
+                "Your response could not be parsed. Respond with ONLY a JSON object, nothing else:\n"
+                '{"direction": "LONG"|"SHORT"|"FLAT", "strength": <float>, "confidence": <float>, "horizon_days": <int>, "reasoning": "<brief>"}'
+            )))
+
+    return signal
 
 
 def evaluate_instrument(
