@@ -223,7 +223,11 @@ def compute_pnl(results: list[DayResult], direction_field: str) -> dict:
 def main():
     parser = argparse.ArgumentParser(description="Round 1 Evaluation")
     parser.add_argument("--days", type=int, default=60, help="Number of eval days")
-    parser.add_argument("--instruments", type=str, default="SPY,BTC-USD,ES=F,GC=F")
+    parser.add_argument(
+        "--instruments", type=str,
+        default="BTC-USD,ETH-USD,SOL-USD,BNB-USD,SPY,QQQ,IWM,EFA,EEM,TLT,GLD,ES=F,NQ=F,GC=F,CL=F,ZB=F,EURUSD=X,GBPUSD=X,USDJPY=X,AUDUSD=X,USDCHF=X",
+        help="Comma-separated instruments (default: full 21-instrument universe)",
+    )
     parser.add_argument("--start", type=str, default="2022-01-01", help="Data start date")
     parser.add_argument("--end", type=str, default="2025-01-01", help="Data end date")
     parser.add_argument("--data-dir", type=str, default=None, help="Load bars from CSV files in this directory instead of Yahoo Finance")

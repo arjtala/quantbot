@@ -61,7 +61,15 @@ FUTURES_UNIVERSE = [
     Instrument("ZB=F", "30-Year T-Bond", AssetClass.FUTURES, point_value=1000.0),
 ]
 
-ALL_INSTRUMENTS = CRYPTO_UNIVERSE + EQUITY_UNIVERSE + FUTURES_UNIVERSE
+FX_UNIVERSE = [
+    Instrument("EURUSD=X", "EUR/USD", AssetClass.FX, yahoo_ticker="EURUSD=X"),
+    Instrument("GBPUSD=X", "GBP/USD", AssetClass.FX, yahoo_ticker="GBPUSD=X"),
+    Instrument("USDJPY=X", "USD/JPY", AssetClass.FX, yahoo_ticker="USDJPY=X"),
+    Instrument("AUDUSD=X", "AUD/USD", AssetClass.FX, yahoo_ticker="AUDUSD=X"),
+    Instrument("USDCHF=X", "USD/CHF", AssetClass.FX, yahoo_ticker="USDCHF=X"),
+]
+
+ALL_INSTRUMENTS = CRYPTO_UNIVERSE + EQUITY_UNIVERSE + FUTURES_UNIVERSE + FX_UNIVERSE
 
 INSTRUMENT_MAP: dict[str, Instrument] = {inst.symbol: inst for inst in ALL_INSTRUMENTS}
 

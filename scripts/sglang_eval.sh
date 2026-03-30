@@ -28,7 +28,7 @@ TREND_MODEL=sglang:$MODEL
 DEBATE_MODEL=sglang:$MODEL
 DECISION_MODEL=sglang:$MODEL
 BACKTEST_MODEL=sglang:$MODEL
-INSTRUMENTS=SPY,BTC-USD,ES=F,GC=F
+INSTRUMENTS=BTC-USD,ETH-USD,SOL-USD,BNB-USD,SPY,QQQ,IWM,EFA,EEM,TLT,GLD,ES=F,NQ=F,GC=F,CL=F,ZB=F,EURUSD=X,GBPUSD=X,USDJPY=X,AUDUSD=X,USDCHF=X
 EOF
 
 echo "Created .env pointing to SGLang server"
@@ -43,5 +43,5 @@ curl -s "http://$NODE:$PORT/v1/models" | python3 -m json.tool || {
 }
 
 echo ""
-echo "Connection OK. Running eval..."
-python scripts/eval_round1.py --days 60 --instruments SPY,BTC-USD,ES=F,GC=F
+echo "Connection OK. Running eval (21 instruments × 60 days = 1,260 LLM calls)..."
+python scripts/eval_round1.py --days 60
