@@ -406,16 +406,18 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 - **Demo→Live = one config change** (just the base URL)
 - IBKR can be added later via same `ExecutionEngine` trait if needed
 
-### Track A — Proven Alpha (Weeks 1-3) — START IMMEDIATELY
+### Track A — Proven Alpha (Weeks 1-4) — START IMMEDIATELY
+
+**Principle: validate the math first, then add plumbing.** If the Rust backtest reproduces the Python Sharpe numbers exactly (0.34 over 252 days on tradeable universe, 1.37 over 60 days on 4 instruments), the port is validated. IG execution is just plumbing after that.
 
 | Week | Deliverable |
 |---|---|
-| **1** | Core types (signal, portfolio, bar) + config + SQLite memory + `Cargo.toml` |
-| **1** | Data layer: Yahoo via `yahoo_finance_api` + polars DataFrame wrapper + IG epic mapping |
+| **1** | Core types (signal, portfolio, bar) + config + `Cargo.toml` |
+| **1** | Data layer: load OHLCV from CSV (reuse `data/` from Python eval) + Yahoo fetcher |
 | **2** | TSMOM agent + EWMA volatility (pure Rust, ndarray) |
-| **2** | Backtest engine + metrics (Sharpe, Sortino, Calmar, equity curve) — validate matches Python Sharpe 1.37 |
-| **3** | IG execution engine (`ig_trading_api`) + Paper engine + Recording engine |
-| **3** | Risk manager + circuit breaker + CLI via `clap` (backtest, paper-trade modes) |
+| **2** | Backtest engine + metrics — **gate: reproduce Python Sharpe 0.34 (252d) and 1.37 (60d)** |
+| **3** | SQLite memory + risk manager + circuit breaker |
+| **3-4** | IG execution engine (`ig_trading_api`) + Paper engine + CLI |
 
 Track A checklist:
 - [ ] `Cargo.toml` — Track A deps (tokio, polars, ndarray, rusqlite, ig_trading_api, yahoo_finance_api, clap, config, serde, tracing, anyhow/thiserror, chrono, async-trait)
@@ -423,13 +425,24 @@ Track A checklist:
 - [ ] `src/core/portfolio.rs` — Position, Order, Fill, AccountSummary
 - [ ] `src/core/bar.rs` — OHLCV polars DataFrame wrapper
 - [ ] `src/config.rs` — Layered config (TOML + env), IG credentials, model selection
-- [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
+- [ ] `src/data/csv.rs` — Load OHLCV from CSV files (reuse `data/` directory from Python eval)
 - [ ] `src/data/yahoo.rs` — Yahoo Finance fetcher
 - [ ] `src/data/universe.rs` — Instrument definitions + IG epic mapping
-- [ ] `src/data/ig_feed.rs` — IG historical prices + Lightstreamer streaming
 - [ ] `src/agents/traits.rs` — `SignalAgent` trait
 - [ ] `src/agents/tsmom/agent.rs` — Multi-lookback momentum
 - [ ] `src/agents/tsmom/volatility.rs` — EWMA vol (ndarray)
+- [ ] `src/backtest/engine.rs` — Event-driven backtest, next-open execution
+- [ ] `src/backtest/metrics.rs` — Sharpe, Sortino, Calmar, max DD, equity curve
+- [ ] **Validation gate: Rust Sharpe matches Python exactly (0.34 / 1.37)**
+- [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
+- [ ] `src/risk/agent.rs` — Position sizing, drawdown limits, veto authority
+- [ ] `src/risk/circuit_breaker.rs` — Auto-flatten after 3 failures, daily loss limit, graceful degradation to TSMOM-only
+- [ ] `src/execution/traits.rs` — `ExecutionEngine` trait
+- [ ] `src/execution/paper.rs` — Local paper simulation
+- [ ] `src/execution/ig/` — IG REST API (auth, orders, streaming, epics, rate_limiter)
+- [ ] `src/execution/recording.rs` — Decorator: logs all orders/fills to SQLite
+- [ ] `src/main.rs` — CLI (backtest, paper-trade, live-trade modes)
+- [ ] Integration tests: IG demo round-trip
 - [ ] `src/backtest/engine.rs` — Event-driven backtest, next-open execution
 - [ ] `src/backtest/metrics.rs` — Sharpe, Sortino, Calmar, max DD, equity curve
 - [ ] `src/execution/traits.rs` — `ExecutionEngine` trait
