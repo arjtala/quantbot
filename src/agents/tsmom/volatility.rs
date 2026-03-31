@@ -3,25 +3,38 @@ const SQRT_252: f64 = 15.874507866387544; // f64::sqrt(252.0)
 
 /// Compute annualized EWMA volatility from daily returns.
 ///
-/// Follows Moskowitz, Ooi, Pedersen (JFE 2012):
-/// variance_t = alpha * r_t^2 + (1 - alpha) * variance_{t-1}
-/// where alpha = 1 / (1 + com).
+/// Matches pandas `Series.pow(2).ewm(com=com, min_periods=min_periods).mean()`
+/// with `adjust=True` (the pandas default).
+///
+/// With adjust=True, the EWMA at time t is:
+///   ewma_t = (x_t + (1-α)·x_{t-1} + (1-α)²·x_{t-2} + ...) / (1 + (1-α) + (1-α)² + ...)
+///
+/// This is computed incrementally as:
+///   num_t = x_t + (1-α) · num_{t-1}
+///   den_t = 1  + (1-α) · den_{t-1}
+///   ewma_t = num_t / den_t
 ///
 /// Returns a Vec of annualized volatility values aligned with the input.
 /// Values before `min_periods` are set to 0.0.
 pub fn ewma_volatility(returns: &[f64], com: usize, min_periods: usize) -> Vec<f64> {
     let alpha = 1.0 / (1.0 + com as f64);
+    let decay = 1.0 - alpha;
     let mut result = Vec::with_capacity(returns.len());
-    let mut ewma_var = 0.0;
+    let mut num = 0.0;
+    let mut den = 0.0;
 
     for (i, &r) in returns.iter().enumerate() {
+        let x = r * r; // squared return → variance input
         if i == 0 {
-            ewma_var = r * r;
+            num = x;
+            den = 1.0;
         } else {
-            ewma_var = alpha * r * r + (1.0 - alpha) * ewma_var;
+            num = x + decay * num;
+            den = 1.0 + decay * den;
         }
 
         if i + 1 >= min_periods {
+            let ewma_var = num / den;
             result.push(ewma_var.sqrt() * SQRT_252);
         } else {
             result.push(0.0);

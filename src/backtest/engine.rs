@@ -37,6 +37,8 @@ pub struct Snapshot {
     pub gross_exposure: f64,
     pub net_exposure: f64,
     pub positions: HashMap<String, f64>,
+    /// Per-instrument notional exposure (quantity * close price).
+    pub position_notionals: HashMap<String, f64>,
     pub signals: HashMap<String, Signal>,
     pub fills: Vec<Fill>,
 }
@@ -48,7 +50,7 @@ pub struct Snapshot {
 /// 2. Mark-to-market existing positions at today's close
 /// 3. Generate signals using data up to today's close
 /// 4. Convert signals to target quantities for tomorrow's open
-/// 5. Record snapshot
+/// 5. Record snapshot (only if date >= eval_start)
 pub struct BacktestEngine {
     config: BacktestConfig,
 }
@@ -63,11 +65,20 @@ impl BacktestEngine {
     }
 
     /// Run backtest across multiple instruments.
+    ///
+    /// The engine processes all bars from min_history onwards, computing signals
+    /// and executing trades throughout. However, only snapshots on or after
+    /// `eval_start` are included in the returned results. This separates the
+    /// warm-up period (needed for lookback computation) from the evaluation
+    /// period (used for Sharpe calculation).
+    ///
+    /// Pass `None` for `eval_start` to include all snapshots (no warm-up separation).
     pub fn run(
         &self,
         agent: &TSMOMAgent,
         bars_by_instrument: &HashMap<String, BarSeries>,
         min_history: usize,
+        eval_start: Option<NaiveDate>,
     ) -> Vec<Snapshot> {
         let all_dates = self.get_all_dates(bars_by_instrument);
 
@@ -91,11 +102,10 @@ impl BacktestEngine {
 
         let dates: Vec<NaiveDate> = all_dates.into_iter().collect();
         let mut portfolio = PortfolioState::new(self.config.initial_cash);
-        let mut snapshots = Vec::with_capacity(dates.len() - min_history);
+        let mut snapshots = Vec::new();
         let mut pending_targets: HashMap<String, f64> = HashMap::new();
 
         for &today in &dates[min_history..] {
-
             // Collect today's prices
             let mut close_prices: HashMap<String, f64> = HashMap::new();
             let mut open_prices: HashMap<String, f64> = HashMap::new();
@@ -123,14 +133,12 @@ impl BacktestEngine {
             let mut target_weights: HashMap<String, f64> = HashMap::new();
 
             for (sym, series) in bars_by_instrument {
-                // Find how many bars are available up to today
                 if let Some(&today_idx) = bar_indexes[sym.as_str()].get(&today) {
                     let history_len = today_idx + 1;
                     if history_len < min_history {
                         continue;
                     }
 
-                    // Create a sub-series up to today (inclusive)
                     let history_bars: Vec<Bar> = series.bars()[..=today_idx].to_vec();
                     if let Ok(history) = BarSeries::new(history_bars) {
                         let sig = agent.generate_signal(&history, sym);
@@ -160,21 +168,33 @@ impl BacktestEngine {
                 }
             }
 
-            // Step 4: Record snapshot
-            snapshots.push(Snapshot {
-                date: today,
-                nav: portfolio.nav(),
-                cash: portfolio.cash,
-                gross_exposure: portfolio.gross_exposure(Some(&close_prices)),
-                net_exposure: portfolio.net_exposure(Some(&close_prices)),
-                positions: portfolio
+            // Step 4: Record snapshot (only during eval period)
+            let in_eval = eval_start.is_none_or(|es| today >= es);
+            if in_eval {
+                let position_notionals: HashMap<String, f64> = portfolio
                     .positions
                     .iter()
-                    .map(|(s, p)| (s.clone(), p.quantity))
-                    .collect(),
-                signals,
-                fills,
-            });
+                    .map(|(s, p)| {
+                        let px = close_prices.get(s).copied().unwrap_or(p.avg_entry_price);
+                        (s.clone(), p.quantity * px)
+                    })
+                    .collect();
+                snapshots.push(Snapshot {
+                    date: today,
+                    nav: portfolio.nav(),
+                    cash: portfolio.cash,
+                    gross_exposure: portfolio.gross_exposure(Some(&close_prices)),
+                    net_exposure: portfolio.net_exposure(Some(&close_prices)),
+                    positions: portfolio
+                        .positions
+                        .iter()
+                        .map(|(s, p)| (s.clone(), p.quantity))
+                        .collect(),
+                    position_notionals,
+                    signals,
+                    fills,
+                });
+            }
         }
 
         snapshots
@@ -268,8 +288,10 @@ impl BacktestEngine {
         }
     }
 
-    /// Scale down weights if gross leverage exceeds limit.
+    /// Apply risk limits: scale gross leverage first, then cap individual positions.
+    /// Order matches the Python reference implementation.
     fn apply_risk_limits(&self, weights: &mut HashMap<String, f64>) {
+        // Scale down if gross leverage exceeds limit
         let gross: f64 = weights.values().map(|w| w.abs()).sum();
         if gross > self.config.max_gross_leverage {
             let scale = self.config.max_gross_leverage / gross;
@@ -278,6 +300,7 @@ impl BacktestEngine {
             }
         }
 
+        // Then cap individual position weights
         let cap = self.config.max_position_pct * self.config.max_gross_leverage;
         for w in weights.values_mut() {
             if w.abs() > cap {
@@ -320,9 +343,31 @@ mod tests {
 
         let engine = BacktestEngine::with_defaults();
         let agent = TSMOMAgent::new();
-        let snaps = engine.run(&agent, &instruments, 253);
+        let snaps = engine.run(&agent, &instruments, 253, None);
         assert!(!snaps.is_empty());
         assert_eq!(snaps.len(), 300 - 253);
+    }
+
+    #[test]
+    fn eval_start_filters_warmup() {
+        let bars = trending_bars(300, 100.0, 0.001);
+        let mut instruments = HashMap::new();
+        instruments.insert("TEST".into(), bars);
+
+        let engine = BacktestEngine::with_defaults();
+        let agent = TSMOMAgent::new();
+
+        // Without eval_start: all snapshots from min_history onwards
+        let all = engine.run(&agent, &instruments, 253, None);
+
+        // With eval_start at day 280: only the last ~20 snapshots
+        let eval_start = NaiveDate::from_ymd_opt(2023, 1, 2).unwrap() + chrono::Days::new(280);
+        let filtered = engine.run(&agent, &instruments, 253, Some(eval_start));
+
+        assert!(filtered.len() < all.len());
+        assert!(filtered.first().unwrap().date >= eval_start);
+        // NAV should differ because the engine still trades during warmup
+        // but the filtered snapshots only cover the eval window
     }
 
     #[test]
@@ -337,27 +382,23 @@ mod tests {
         };
         let engine = BacktestEngine::new(config);
         let agent = TSMOMAgent::new();
-        let snaps = engine.run(&agent, &instruments, 253);
+        let snaps = engine.run(&agent, &instruments, 253, None);
 
-        // First snapshot: no pending orders yet, so NAV ~ initial cash
-        // (mark-to-market on empty portfolio = just cash)
         assert!((snaps[0].nav - 500_000.0).abs() < 1.0);
     }
 
     #[test]
     fn uptrend_generates_positive_nav() {
-        // Strong uptrend should produce positive returns
         let bars = trending_bars(300, 100.0, 0.002);
         let mut instruments = HashMap::new();
         instruments.insert("TEST".into(), bars);
 
         let engine = BacktestEngine::with_defaults();
         let agent = TSMOMAgent::new();
-        let snaps = engine.run(&agent, &instruments, 253);
+        let snaps = engine.run(&agent, &instruments, 253, None);
 
         let first_nav = snaps.first().unwrap().nav;
         let last_nav = snaps.last().unwrap().nav;
-        // With strong uptrend and TSMOM going long, NAV should increase
         assert!(
             last_nav > first_nav,
             "NAV should increase in uptrend: first={first_nav}, last={last_nav}"
@@ -370,7 +411,6 @@ mod tests {
         let mut weights = HashMap::new();
         weights.insert("A".into(), 1.5);
         weights.insert("B".into(), 1.5);
-        // Gross = 3.0, max = 2.0 → should scale down
         engine.apply_risk_limits(&mut weights);
         let gross: f64 = weights.values().map(|w| w.abs()).sum();
         assert!(gross <= 2.0 + 1e-10);
@@ -381,7 +421,7 @@ mod tests {
         let instruments: HashMap<String, BarSeries> = HashMap::new();
         let engine = BacktestEngine::with_defaults();
         let agent = TSMOMAgent::new();
-        let snaps = engine.run(&agent, &instruments, 253);
+        let snaps = engine.run(&agent, &instruments, 253, None);
         assert!(snaps.is_empty());
     }
 }

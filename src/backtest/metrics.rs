@@ -167,6 +167,7 @@ mod tests {
                 gross_exposure: 0.0,
                 net_exposure: 0.0,
                 positions: HashMap::new(),
+                position_notionals: HashMap::new(),
                 signals: HashMap::new(),
                 fills: Vec::new(),
             })
