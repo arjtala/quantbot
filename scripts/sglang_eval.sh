@@ -2,19 +2,21 @@
 # QuantBot — Run eval against SGLang server
 #
 # Usage:
-#   bash scripts/sglang_eval.sh <sglang-node> [model-name] [port] [workers] [days]
+#   bash scripts/sglang_eval.sh <sglang-node> [model-name] [port] [workers] [days] [run-name]
 #
 # Examples:
 #   bash scripts/sglang_eval.sh h200-node SUFE-AIFLM-Lab/Fin-R1              # 60 days (default)
 #   bash scripts/sglang_eval.sh h200-node SUFE-AIFLM-Lab/Fin-R1 30000 4 252  # 252-day full eval
+#   bash scripts/sglang_eval.sh h200-node SUFE-AIFLM-Lab/Fin-R1 30000 4 252 finr1-252d  # custom run name
 
 set -e
 
-NODE=${1:?"Usage: $0 <sglang-node> [model-name] [port] [workers] [days]"}
+NODE=${1:?"Usage: $0 <sglang-node> [model-name] [port] [workers] [days] [run-name]"}
 MODEL=${2:-"SUFE-AIFLM-Lab/Fin-R1"}
 PORT=${3:-30000}
 WORKERS=${4:-4}
 DAYS=${5:-60}
+RUN_NAME=${6:-""}
 
 # Bypass cluster proxy for compute node
 export no_proxy="$NODE"
@@ -55,4 +57,10 @@ curl -s --noproxy "$NODE" "http://$NODE:$PORT/v1/models" | python3 -m json.tool 
 TOTAL_CALLS=$((21 * DAYS))
 echo ""
 echo "Connection OK. Running eval (21 instruments × $DAYS days = $TOTAL_CALLS LLM calls, $WORKERS workers)..."
-python scripts/eval_round1.py --days "$DAYS" --data-dir data/ --workers "$WORKERS"
+
+RUN_NAME_FLAG=""
+if [ -n "$RUN_NAME" ]; then
+    RUN_NAME_FLAG="--run-name $RUN_NAME"
+fi
+
+python scripts/eval_round1.py --days "$DAYS" --data-dir data/ --workers "$WORKERS" $RUN_NAME_FLAG

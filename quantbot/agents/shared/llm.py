@@ -19,12 +19,51 @@ _THINK_RE = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 
 
 def _extract_thinking(text: str) -> tuple[str, str]:
-    """Strip <think> blocks from text, returning (reasoning, cleaned_text)."""
+    """Strip <think> blocks from text, returning (reasoning, cleaned_text).
+
+    If stripping <think> tags leaves no content outside them, fall back to
+    the full text inside the tags — Fin-R1 sometimes wraps the entire
+    response (including JSON) inside <think>...</think>.
+    """
     reasoning_parts: list[str] = []
     for m in _THINK_RE.finditer(text):
         reasoning_parts.append(m.group(1).strip())
     cleaned = _THINK_RE.sub("", text).strip()
-    return "\n\n".join(reasoning_parts), cleaned
+    reasoning = "\n\n".join(reasoning_parts)
+
+    # If nothing remains after stripping, the JSON is likely inside <think>.
+    # Use the reasoning content as the cleaned text so JSON extraction works.
+    if not cleaned and reasoning:
+        cleaned = reasoning
+
+    return reasoning, cleaned
+
+
+def _sanitize_json_string(text: str) -> str:
+    """Escape unescaped control characters inside JSON string values only.
+
+    LLMs (especially reasoning models like Fin-R1) often emit raw newlines,
+    tabs, and other control chars inside JSON string values, which strict
+    json.loads rejects.  We walk through the text and only escape control
+    characters that appear inside quoted strings (between unescaped double quotes).
+    Whitespace outside strings (structural JSON whitespace) is left alone.
+    """
+    result = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch == '"' and (i == 0 or text[i - 1] != '\\'):
+            in_string = not in_string
+            result.append(ch)
+        elif in_string and ch in '\n\r\t':
+            result.append({'\n': '\\n', '\r': '\\r', '\t': '\\t'}[ch])
+        elif in_string and ord(ch) < 0x20:
+            result.append(f'\\u{ord(ch):04x}')
+        else:
+            result.append(ch)
+        i += 1
+    return ''.join(result)
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -43,21 +82,68 @@ def _extract_json(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         pass
 
+    # Retry with sanitized control characters
+    sanitized = _sanitize_json_string(text)
+    try:
+        return json.loads(sanitized)
+    except json.JSONDecodeError:
+        pass
+
     # Fall back: find JSON by matching braces
-    start = text.find("{")
+    start = sanitized.find("{")
     if start == -1:
         raise json.JSONDecodeError("No JSON object found in response", text, 0)
 
     depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "{":
+    for i in range(start, len(sanitized)):
+        if sanitized[i] == "{":
             depth += 1
-        elif text[i] == "}":
+        elif sanitized[i] == "}":
             depth -= 1
             if depth == 0:
-                return json.loads(text[start : i + 1])
+                candidate = sanitized[start : i + 1]
+                try:
+                    return json.loads(candidate)
+                except json.JSONDecodeError:
+                    # Brace-matched substring has syntax errors (e.g. unescaped
+                    # quotes in reasoning field).  Try regex extraction of the
+                    # key fields we actually need.
+                    return _regex_extract_signal_fields(candidate)
 
     raise json.JSONDecodeError("No JSON object found in response", text, 0)
+
+
+def _regex_extract_signal_fields(text: str) -> dict[str, Any]:
+    """Last-resort extraction: pull signal fields via regex when JSON is malformed.
+
+    Fin-R1 sometimes produces valid structure but with unescaped characters in
+    the 'reasoning' string that break json.loads.  We only need direction,
+    strength, confidence, and horizon_days.
+    """
+    result: dict[str, Any] = {}
+
+    dir_m = re.search(r'"direction"\s*:\s*"(LONG|SHORT|FLAT)"', text, re.IGNORECASE)
+    if dir_m:
+        result["direction"] = dir_m.group(1).upper()
+
+    for field in ("strength", "confidence"):
+        m = re.search(rf'"{field}"\s*:\s*(-?[\d.]+)', text)
+        if m:
+            result[field] = float(m.group(1))
+
+    horizon_m = re.search(r'"horizon_days"\s*:\s*(\d+)', text)
+    if horizon_m:
+        result["horizon_days"] = int(horizon_m.group(1))
+
+    if "direction" not in result:
+        raise json.JSONDecodeError("Could not extract direction from malformed JSON", text, 0)
+
+    # Try to salvage reasoning (best-effort, truncate at next key)
+    reason_m = re.search(r'"reasoning"\s*:\s*"(.*?)(?:"\s*[,}])', text, re.DOTALL)
+    if reason_m:
+        result["reasoning"] = reason_m.group(1)[:500]
+
+    return result
 
 
 def parse_signal_response(
