@@ -311,27 +311,45 @@ Extended eval from 60 days to a full year (Mar 2024 – Mar 2025). Critical real
 
 **Key findings:**
 
-1. **60-day results were overfitting to a trending period.** TSMOM dropped from 0.508→0.34, indicator from 0.765→0.04. The "combiner destroys alpha" finding from Round 1b was period-specific.
-2. **TSMOM-only (Sharpe 0.34) is the best aggregate strategy** on the tradeable universe. Gold and SPY carry it.
-3. **Indicator excels on forex** (GBPUSD +1.40, USDCHF +1.42) but the combiner destroys it — need per-instrument routing.
-4. **Bonds are uninvestable** — negative Sharpe across all strategies. Consider dropping TLT/ZB=F.
-5. **Crypto negative over a full year** — bull run in Q4 2024 masked a mediocre full-year performance.
-6. **Parse failure rate dropped to 0.04%** (2/5,292) — retry mechanism works well.
+1. **60-day results were overfitting to a trending period.** TSMOM dropped from 0.508→0.34, indicator from 0.765→0.04. The Oct–Dec 2024 window had strong directional trends — exactly the regime where both strategies perform best.
+2. **TSMOM-only (Sharpe 0.34) is the best aggregate strategy** on the tradeable universe. Gold (GC=F +2.02, GLD +2.12) and SPY (+1.13) carry it.
+3. **Indicator excels on forex** (GBPUSD +1.40, USDCHF +1.42, USDJPY +0.70) but the fixed combiner destroys it — need per-instrument routing, not weighted average.
+4. **Gold is the star** — only asset class where all strategies are positive AND the combiner adds value (GC=F: TSMOM +2.02, Combined +2.24).
+5. **Equities: TSMOM-only.** SPY Sharpe 1.13 TSMOM vs −0.17 indicator. The LLM adds noise on efficiently-priced US large cap.
+6. **Bonds are uninvestable** — negative Sharpe across all strategies. Drop TLT/ZB=F entirely.
+7. **Crypto negative over a full year** — Q4 2024 bull run masked mediocre full-year performance. Excluded from tradeable universe.
+8. **Parse failure rate dropped to 0.04%** (2/5,292) — retry mechanism works well.
 
-**Implications for Phase 3:**
-- TSMOM port to Rust remains clearly worth it (Sharpe 0.34 on tradeable universe, gold + equity carry)
-- Indicator agent adds value only on forex — per-instrument routing is essential, not optional
-- Dynamic combiner simulation needed on 252-day data to confirm Round 2 findings hold
-- Consider dropping bonds (TLT, ZB=F) from tradeable universe — negative Sharpe everywhere
+**Revised instrument-type weights (252-day data):**
 
-**Round 2+ — Remaining Experiments**
-- [ ] **Dynamic combiner simulation on 252-day data** — Replay with instrument-type weights. Does the Round 2 finding (Sharpe 0.793) hold over a full year?
+```python
+weights_252day = {
+    "gold":   {"tsmom": 0.50, "indicator": 0.50},  # Both contribute, combiner adds value
+    "equity": {"tsmom": 1.00, "indicator": 0.00},  # TSMOM only — indicator is destructive
+    "forex":  {"tsmom": 0.10, "indicator": 0.90},  # Indicator dominates
+}
+```
+
+**Revised tradeable universe (6 instruments):**
+
+| Instrument | Type | Strategy | 252-Day Sharpe |
+|---|---|---|---|
+| GLD | Gold | Dynamic combiner | +2.38 |
+| GC=F | Gold | Dynamic combiner | +2.24 |
+| USDCHF=X | Forex | Indicator-heavy | +1.42 |
+| GBPUSD=X | Forex | Indicator-heavy | +1.40 |
+| SPY | Equity | TSMOM-only | +1.13 |
+| USDJPY=X | Forex | Indicator-heavy | +0.70 |
+
+Dropped: all crypto, EEM, EFA, TLT, ZB=F, CL=F, IWM, QQQ, NQ=F, ES=F, EURUSD=X, AUDUSD=X.
+
+**Remaining experiments:**
+- [ ] **Dynamic combiner simulation on 252-day data** — Replay with revised per-instrument weights on 6-instrument universe. Does the 60-day Sharpe 0.793 hold?
+- [ ] **Out-of-sample period test** — Run on a different 252-day window (e.g., Mar 2023–Mar 2024) to check stability
+- [ ] **Walk-forward validation** — Train weights on first 126 days, test on second 126 days
 - [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner?
-- [ ] **Memory effectiveness** — 50+ sequential decisions, memory vs memoryless.
-- [ ] **Pattern + Trend agent ablation** — Vision agents (needs Qwen3.5-VL or similar on cluster).
-- [ ] **Prompt sensitivity analysis** — Tweak prompts to reduce FLAT rate on forex.
-- [ ] **Latency profiling** — End-to-end time for full graph execution on Mac M4 with local Fin-R1.
-- [ ] **Pull Fin-R1 into local Ollama** — Verify it works locally for free dev/testing.
+- [ ] **Prompt sensitivity analysis** — Tweak prompts to reduce FLAT rate on forex
+- [ ] **Pull Fin-R1 into local Ollama** — Verify it works locally for free dev/testing
 
 ---
 
@@ -388,24 +406,29 @@ Track A checklist:
 - [ ] `src/main.rs` — CLI (backtest, paper-trade, live-trade modes)
 - [ ] Integration tests: IG demo round-trip, backtest Sharpe matches Python 1.37
 
-### Track B — Fin-R1 Indicator Agent (Weeks 3-5) — START AFTER TRACK A
+### Track B — Fin-R1 Indicator Agent (Weeks 3-5) — CONDITIONAL ON COMBINER SIM
 
-**Gate passed:** Fin-R1 indicator Sharpe 0.671 vs TSMOM 0.315. Domain-specialized 7B model beats 32B general models.
+**Gate: 252-day data shows indicator alpha only on forex + gold.** 60-day Sharpe 0.671 was period-specific. Indicator adds value via per-instrument routing, not as a universal signal.
 
 - [ ] `rig-core` LLM client (Ollama routing — Fin-R1 runs locally on Mac Mini M4 Pro)
 - [ ] `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
 - [ ] `src/agents/indicator/` — `ta` crate computations → LLM interpretation
-- [ ] `src/agents/decision/combiner.rs` — **Dynamic instrument-type weights** (forex: 80% indicator, equity: 80% TSMOM)
-- [ ] `src/agents/decision/combiner.rs` — **FLAT-aware sizing** (FLAT → 50% position size, not override)
-- [ ] Universe cleanup: drop EEM, EFA (negative Sharpe everywhere)
+- [ ] `src/agents/decision/combiner.rs` — **Per-instrument router** (not weighted average):
+  ```rust
+  match instrument.asset_type() {
+      Gold   => combine(tsmom, indicator, 0.50, 0.50),
+      Equity => tsmom_only,
+      Forex  => combine(tsmom, indicator, 0.10, 0.90),
+  }
+  ```
+- [ ] Universe: 6 instruments (GLD, GC=F, SPY, GBPUSD=X, USDCHF=X, USDJPY=X)
 - [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
 - [ ] `src/eval/` — Backtest LLM + agent ablation (Rust port)
 - [ ] `prompts/` — Indicator .md template (ported from Python)
-- [ ] Benchmark against [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) (49.6K ★) Sharpe
 
-### Track C — Additional Agents & Signals (Weeks 5-8) — CONDITIONAL ON ROUND 2
+### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED
 
-If Pattern/Trend vision agents or debate add marginal alpha in Round 2:
+Defer until core system (Track A + B) is validated with live paper trading. Vision agents and debate are lower priority given 252-day results.
 
 - [ ] `src/agents/pattern/` — `plotters` candlestick charts → vision LLM
 - [ ] `src/agents/trend/` — Trendline fitting + S/R → vision LLM
