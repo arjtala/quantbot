@@ -29,7 +29,7 @@ impl Default for BacktestConfig {
 }
 
 /// Daily snapshot of backtest state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct Snapshot {
     pub date: NaiveDate,
     pub nav: f64,

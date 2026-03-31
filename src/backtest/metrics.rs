@@ -1,9 +1,11 @@
+use serde::Serialize;
+
 use super::engine::Snapshot;
 
 const TRADING_DAYS_PER_YEAR: f64 = 252.0;
 
 /// Computed performance metrics from backtest snapshots.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct BacktestResult {
     pub sharpe_ratio: f64,
     pub annualized_return: f64,
