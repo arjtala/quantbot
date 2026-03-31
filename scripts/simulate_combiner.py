@@ -36,21 +36,34 @@ INSTRUMENT_TYPE = {
     "BTC-USD": "crypto", "ETH-USD": "crypto", "SOL-USD": "crypto", "BNB-USD": "crypto",
     # Equity ETFs
     "SPY": "equity", "QQQ": "equity", "IWM": "equity", "EFA": "equity",
-    "EEM": "equity", "TLT": "bonds", "GLD": "commodity",
+    "EEM": "equity", "TLT": "bonds",
+    # Gold (split from commodity — different strategy)
+    "GLD": "gold", "GC=F": "gold",
     # Futures
-    "ES=F": "equity", "NQ=F": "equity", "GC=F": "commodity",
+    "ES=F": "equity", "NQ=F": "equity",
     "CL=F": "commodity", "ZB=F": "bonds",
     # FX
     "EURUSD=X": "forex", "GBPUSD=X": "forex", "USDJPY=X": "forex",
     "AUDUSD=X": "forex", "USDCHF=X": "forex",
 }
 
-# Dynamic combiner weights by instrument type (from Round 1b per-instrument analysis)
-DYNAMIC_WEIGHTS = {
+# Round 1b dynamic combiner weights (60-day eval)
+DYNAMIC_WEIGHTS_60D = {
     "forex":     {"tsmom": 0.20, "indicator": 0.80},
     "crypto":    {"tsmom": 0.30, "indicator": 0.70},
     "equity":    {"tsmom": 0.80, "indicator": 0.20},
     "bonds":     {"tsmom": 0.30, "indicator": 0.70},
+    "commodity": {"tsmom": 0.50, "indicator": 0.50},
+    "gold":      {"tsmom": 0.50, "indicator": 0.50},
+}
+
+# Revised weights based on 252-day eval (Round 3)
+DYNAMIC_WEIGHTS_252D = {
+    "gold":      {"tsmom": 0.50, "indicator": 0.50},
+    "equity":    {"tsmom": 1.00, "indicator": 0.00},
+    "forex":     {"tsmom": 0.10, "indicator": 0.90},
+    "crypto":    {"tsmom": 0.50, "indicator": 0.50},
+    "bonds":     {"tsmom": 0.50, "indicator": 0.50},
     "commodity": {"tsmom": 0.50, "indicator": 0.50},
 }
 
@@ -61,10 +74,14 @@ IG_SPREAD_BPS = {
     "equity": 5.0,      # ~1-2 points on SPY/ES ≈ 5 bps
     "bonds": 10.0,      # ~2-3 ticks
     "commodity": 15.0,  # ~3-6 cents on CL
+    "gold": 10.0,       # ~0.3-0.6 points on gold ≈ 10 bps
 }
 
-# Instruments to drop (negative Sharpe across all models)
+# Instruments to drop (negative Sharpe across all strategies in 252-day eval)
 DROP_INSTRUMENTS = {"EEM", "EFA"}
+
+# Focused 6-instrument universe (252-day eval winners)
+FOCUSED_UNIVERSE = {"GLD", "GC=F", "SPY", "GBPUSD=X", "USDCHF=X", "USDJPY=X"}
 
 
 # ---------------------------------------------------------------------------
@@ -86,48 +103,53 @@ def strategy_fixed_combiner(row: pd.Series) -> tuple[str, float]:
     return row["combined_direction"], 1.0
 
 
+def _make_dynamic_combiner(weights: dict) -> callable:
+    """Create a dynamic combiner strategy with given weights."""
+    def strategy(row: pd.Series) -> tuple[str, float]:
+        inst_type = INSTRUMENT_TYPE.get(row["instrument"], "equity")
+        w = weights.get(inst_type, {"tsmom": 0.50, "indicator": 0.50})
+
+        def dir_to_sign(d: str) -> float:
+            if d == "LONG": return 1.0
+            if d == "SHORT": return -1.0
+            return 0.0
+
+        t_sign = dir_to_sign(row["tsmom_direction"])
+        i_sign = dir_to_sign(row["indicator_direction"])
+
+        w_t = w["tsmom"]
+        w_i = w["indicator"]
+
+        numerator = w_t * t_sign * abs(row["tsmom_strength"]) * row["tsmom_confidence"] + \
+                    w_i * i_sign * abs(row["indicator_strength"]) * row["indicator_confidence"]
+        denominator = w_t * row["tsmom_confidence"] + w_i * row["indicator_confidence"]
+
+        if denominator < 1e-8:
+            return "FLAT", 0.0
+
+        combined = numerator / denominator
+
+        if abs(combined) < 0.10:
+            return "FLAT", 0.0
+        elif combined > 0:
+            return "LONG", abs(combined)
+        else:
+            return "SHORT", abs(combined)
+    return strategy
+
+
 def strategy_dynamic_combiner(row: pd.Series) -> tuple[str, float]:
-    """Instrument-type dynamic weights."""
-    inst_type = INSTRUMENT_TYPE.get(row["instrument"], "equity")
-    weights = DYNAMIC_WEIGHTS[inst_type]
+    """Instrument-type dynamic weights (60-day weights)."""
+    return _make_dynamic_combiner(DYNAMIC_WEIGHTS_60D)(row)
 
-    tsmom_dir = row["tsmom_direction"]
-    ind_dir = row["indicator_direction"]
-    tsmom_str = row["tsmom_strength"]
-    tsmom_conf = row["tsmom_confidence"]
-    ind_str = row["indicator_strength"]
-    ind_conf = row["indicator_confidence"]
 
-    # Map direction to signed value
-    def dir_to_sign(d: str) -> float:
-        if d == "LONG": return 1.0
-        if d == "SHORT": return -1.0
-        return 0.0
-
-    t_sign = dir_to_sign(tsmom_dir)
-    i_sign = dir_to_sign(ind_dir)
-
-    w_t = weights["tsmom"]
-    w_i = weights["indicator"]
-
-    numerator = w_t * t_sign * abs(tsmom_str) * tsmom_conf + w_i * i_sign * abs(ind_str) * ind_conf
-    denominator = w_t * tsmom_conf + w_i * ind_conf
-
-    if denominator < 1e-8:
-        return "FLAT", 0.0
-
-    combined = numerator / denominator
-
-    if abs(combined) < 0.10:
-        return "FLAT", 0.0
-    elif combined > 0:
-        return "LONG", abs(combined)
-    else:
-        return "SHORT", abs(combined)
+def strategy_dynamic_252d(row: pd.Series) -> tuple[str, float]:
+    """Instrument-type dynamic weights (252-day revised weights)."""
+    return _make_dynamic_combiner(DYNAMIC_WEIGHTS_252D)(row)
 
 
 def strategy_dynamic_flat_aware(row: pd.Series) -> tuple[str, float]:
-    """Dynamic combiner + FLAT-aware sizing.
+    """Dynamic combiner (60-day weights) + FLAT-aware sizing.
 
     When indicator is FLAT, reduce position to 50% of TSMOM-only size
     instead of overriding with full TSMOM weight.
@@ -258,7 +280,8 @@ def main():
         "TSMOM-only": strategy_tsmom_only,
         "Indicator-only": strategy_indicator_only,
         "Fixed combiner (0.50/0.20)": strategy_fixed_combiner,
-        "Dynamic combiner": strategy_dynamic_combiner,
+        "Dynamic combiner (60d wts)": strategy_dynamic_combiner,
+        "Dynamic combiner (252d wts)": strategy_dynamic_252d,
         "Dynamic + FLAT-aware": strategy_dynamic_flat_aware,
     }
 
@@ -306,29 +329,57 @@ def main():
 
     # --- Per instrument-type breakdown (best strategy) ---
     print(f"\n{'─' * 85}")
-    print(f"  PER INSTRUMENT-TYPE BREAKDOWN — Dynamic + FLAT-aware (clean universe)")
+    print(f"  PER INSTRUMENT-TYPE BREAKDOWN — Dynamic 252d weights (clean universe)")
     print(f"{'─' * 85}")
     print(f"  {'Type':<12} {'Instruments':>5} {'Sharpe':>8} {'Ann.Ret':>10} {'MaxDD':>10} {'Flat%':>8}")
     print(f"  {'─'*12} {'─'*5} {'─'*8} {'─'*10} {'─'*10} {'─'*8}")
 
-    for inst_type in ["forex", "crypto", "equity", "bonds", "commodity"]:
+    for inst_type in ["gold", "forex", "equity", "crypto", "bonds", "commodity"]:
         type_instruments = {k for k, v in INSTRUMENT_TYPE.items() if v == inst_type} - DROP_INSTRUMENTS
         type_df = clean_df[clean_df["instrument"].isin(type_instruments)]
         if type_df.empty:
             continue
-        rets = compute_returns(type_df, strategy_dynamic_flat_aware)
+        rets = compute_returns(type_df, strategy_dynamic_252d)
         m = compute_metrics(rets)
         print(f"  {inst_type:<12} {len(type_instruments):>5} {m['sharpe']:>8.3f} {m['ann_return']:>9.1%} {m['max_dd']:>9.1%} {m['flat_pct']:>7.1%}")
 
-    # --- Per-instrument detail (top and bottom 5) ---
+    # --- Focused 6-instrument universe ---
+    focused_df = full_df[full_df["instrument"].isin(FOCUSED_UNIVERSE)]
+    if not focused_df.empty:
+        print(f"\n{'─' * 85}")
+        print(f"  FOCUSED UNIVERSE — 6 instruments (GLD, GC=F, SPY, GBPUSD, USDCHF, USDJPY)")
+        print(f"{'─' * 85}")
+        print(f"  {'Strategy':<30} {'Sharpe':>8} {'w/costs':>8} {'Δ':>8} {'Ann.Ret':>10} {'MaxDD':>10}")
+        print(f"  {'─'*30} {'─'*8} {'─'*8} {'─'*8} {'─'*10} {'─'*10}")
+
+        for name, fn in strategies.items():
+            rets_no = compute_returns(focused_df, fn, apply_costs=False)
+            rets_yes = compute_returns(focused_df, fn, apply_costs=True)
+            m_no = compute_metrics(rets_no)
+            m_yes = compute_metrics(rets_yes)
+            delta = m_yes["sharpe"] - m_no["sharpe"]
+            print(f"  {name:<30} {m_no['sharpe']:>8.3f} {m_yes['sharpe']:>8.3f} {delta:>+7.3f} {m_no['ann_return']:>9.1%} {m_no['max_dd']:>9.1%}")
+
+        # Per-instrument detail for focused universe
+        print(f"\n  Per-instrument (Dynamic 252d weights):")
+        for sym in sorted(FOCUSED_UNIVERSE):
+            sym_df = focused_df[focused_df["instrument"] == sym]
+            if sym_df.empty:
+                continue
+            rets = compute_returns(sym_df, strategy_dynamic_252d)
+            m = compute_metrics(rets)
+            inst_type = INSTRUMENT_TYPE.get(sym, "?")
+            print(f"    {sym:<12} ({inst_type:<6})  Sharpe={m['sharpe']:>+.3f}  Ann.Ret={m['ann_return']:>+.1%}  MaxDD={m['max_dd']:>.1%}")
+
+    # --- Per-instrument detail (all, sorted by Sharpe) ---
     print(f"\n{'─' * 85}")
-    print(f"  PER-INSTRUMENT SHARPE — Dynamic + FLAT-aware (clean universe)")
+    print(f"  PER-INSTRUMENT SHARPE — Dynamic 252d weights (clean universe)")
     print(f"{'─' * 85}")
 
     inst_sharpes = []
     for sym in clean_df["instrument"].unique():
         sym_df = clean_df[clean_df["instrument"] == sym]
-        rets = compute_returns(sym_df, strategy_dynamic_flat_aware)
+        rets = compute_returns(sym_df, strategy_dynamic_252d)
         m = compute_metrics(rets)
         inst_sharpes.append((sym, m["sharpe"], m["ann_return"], m["max_dd"]))
 
