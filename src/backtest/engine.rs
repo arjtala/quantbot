@@ -6,11 +6,11 @@ use crate::agents::tsmom::TSMOMAgent;
 use crate::core::bar::{Bar, BarSeries};
 use crate::core::portfolio::{Fill, Order, OrderSide, PortfolioState, Position};
 use crate::core::signal::{Signal, SignalDirection};
+use crate::execution::router::{ExecutionRouter, SpreadCostTracker};
 
 /// Backtest configuration.
 pub struct BacktestConfig {
     pub initial_cash: f64,
-    pub slippage_bps: f64,
     pub vol_target: f64,
     pub max_gross_leverage: f64,
     pub max_position_pct: f64,
@@ -20,7 +20,6 @@ impl Default for BacktestConfig {
     fn default() -> Self {
         Self {
             initial_cash: 1_000_000.0,
-            slippage_bps: 5.0,
             vol_target: 0.40,
             max_gross_leverage: 2.0,
             max_position_pct: 0.20,
@@ -53,11 +52,19 @@ pub struct Snapshot {
 /// 5. Record snapshot (only if date >= eval_start)
 pub struct BacktestEngine {
     config: BacktestConfig,
+    router: ExecutionRouter,
 }
 
 impl BacktestEngine {
     pub fn new(config: BacktestConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            router: ExecutionRouter::with_ig_defaults(),
+        }
+    }
+
+    pub fn new_with_router(config: BacktestConfig, router: ExecutionRouter) -> Self {
+        Self { config, router }
     }
 
     pub fn with_defaults() -> Self {
@@ -104,6 +111,7 @@ impl BacktestEngine {
         let mut portfolio = PortfolioState::new(self.config.initial_cash);
         let mut snapshots = Vec::new();
         let mut pending_targets: HashMap<String, f64> = HashMap::new();
+        let mut spread_tracker = SpreadCostTracker::new();
 
         for &today in &dates[min_history..] {
             // Collect today's prices
@@ -122,7 +130,7 @@ impl BacktestEngine {
             let fills = if pending_targets.is_empty() {
                 Vec::new()
             } else {
-                self.rebalance(&mut portfolio, &mut pending_targets, &open_prices)
+                self.rebalance(&mut portfolio, &mut pending_targets, &open_prices, &mut spread_tracker)
             };
 
             // Step 2: Mark positions to today's close
@@ -156,14 +164,14 @@ impl BacktestEngine {
             // Apply risk limits
             self.apply_risk_limits(&mut target_weights);
 
-            // Convert weights to target quantities
+            // Convert weights to target quantities using execution router
             let nav = portfolio.nav();
             pending_targets.clear();
             for (sym, weight) in &target_weights {
                 if let Some(&px) = close_prices.get(sym) {
                     if px > 0.0 {
-                        let target_notional = weight * nav;
-                        pending_targets.insert(sym.clone(), target_notional / px);
+                        let qty = self.router.size_from_weight(sym, *weight, nav, px);
+                        pending_targets.insert(sym.clone(), qty);
                     }
                 }
             }
@@ -176,7 +184,7 @@ impl BacktestEngine {
                     .iter()
                     .map(|(s, p)| {
                         let px = close_prices.get(s).copied().unwrap_or(p.avg_entry_price);
-                        (s.clone(), p.quantity * px)
+                        (s.clone(), p.quantity * px * p.point_value)
                     })
                     .collect();
                 snapshots.push(Snapshot {
@@ -217,6 +225,7 @@ impl BacktestEngine {
         portfolio: &mut PortfolioState,
         target_quantities: &mut HashMap<String, f64>,
         open_prices: &HashMap<String, f64>,
+        spread_tracker: &mut SpreadCostTracker,
     ) -> Vec<Fill> {
         let mut fills = Vec::new();
 
@@ -241,25 +250,32 @@ impl BacktestEngine {
                 continue;
             }
 
-            let slippage = self.config.slippage_bps / 10_000.0;
-            let (fill_price, side) = if delta > 0.0 {
-                (price * (1.0 + slippage), OrderSide::Buy)
+            let spec = self.router.get_spec(sym);
+            let point_value = spec.point_value;
+
+            // Spread cost via tracker: direction-aware multiplier
+            let cost_mult = spread_tracker.cost_multiplier(sym, target_qty);
+            let trade_notional = delta.abs() * price * point_value;
+            let spread_cost = spec.spread_cost(trade_notional) * cost_mult;
+
+            let side = if delta > 0.0 {
+                OrderSide::Buy
             } else {
-                (price * (1.0 - slippage), OrderSide::Sell)
+                OrderSide::Sell
             };
 
             let order = Order::new(sym.clone(), side, delta.abs());
             fills.push(Fill {
                 order,
-                fill_price,
+                fill_price: price,
                 fill_quantity: delta.abs(),
                 timestamp: chrono::Utc::now(),
-                slippage_bps: self.config.slippage_bps,
+                slippage_bps: spec.spread_bps,
             });
 
-            // Update portfolio
-            let cost = delta * fill_price;
-            portfolio.cash -= cost;
+            // Update portfolio: cash changes by notional + spread cost
+            portfolio.cash -= delta * price * point_value;
+            portfolio.cash -= spread_cost;
 
             if target_qty.abs() < 1e-8 {
                 portfolio.positions.remove(sym);
@@ -269,8 +285,8 @@ impl BacktestEngine {
                     Position {
                         instrument: sym.clone(),
                         quantity: target_qty,
-                        avg_entry_price: fill_price,
-                        point_value: 1.0,
+                        avg_entry_price: price,
+                        point_value,
                     },
                 );
             }
@@ -423,5 +439,78 @@ mod tests {
         let agent = TSMOMAgent::new();
         let snaps = engine.run(&agent, &instruments, 253, None);
         assert!(snaps.is_empty());
+    }
+
+    #[test]
+    fn futures_sizing_uses_point_value() {
+        // GC=F has point_value=100, so quantity should be much smaller
+        let router = ExecutionRouter::with_ig_defaults();
+        let qty = router.size_from_weight("GC=F", 0.20, 1_000_000.0, 2000.0);
+        // target_notional = 0.20 * 1_000_000 = 200_000
+        // raw_qty = 200_000 / (2000 * 100) = 1.0
+        assert_eq!(qty, 1.0);
+
+        // Compare with equity: same weight/nav/price but pv=1
+        let eq_qty = router.size_from_weight("SPY", 0.20, 1_000_000.0, 500.0);
+        // raw_qty = 200_000 / (500 * 1) = 400
+        assert_eq!(eq_qty, 400.0);
+    }
+
+    #[test]
+    fn spread_cost_applied_in_rebalance() {
+        // Build a minimal engine + manually call rebalance to verify spread costs
+        let mut specs = std::collections::HashMap::new();
+        specs.insert("X".to_string(), crate::execution::router::ContractSpec {
+            symbol: "X".to_string(),
+            asset_class: crate::execution::router::AssetClass::Equity,
+            point_value: 1.0,
+            min_deal_size: 1.0,
+            lot_step: 1.0,
+            margin_pct: 0.20,
+            spread_bps: 100.0, // 1% spread for easy math
+        });
+        let router = ExecutionRouter::new(specs);
+        let config = BacktestConfig {
+            initial_cash: 100_000.0,
+            ..BacktestConfig::default()
+        };
+        let engine = BacktestEngine::new_with_router(config, router);
+
+        let mut portfolio = PortfolioState::new(100_000.0);
+        let open_prices: HashMap<String, f64> = [("X".to_string(), 100.0)].into();
+        let mut tracker = SpreadCostTracker::new();
+
+        // Buy 100 shares at $100 → notional = 10_000, spread = 1% * 10_000 = 100
+        // Open from flat → multiplier = 1.0
+        let mut targets: HashMap<String, f64> = [("X".to_string(), 100.0)].into();
+        engine.rebalance(&mut portfolio, &mut targets, &open_prices, &mut tracker);
+
+        // Cash should be 100_000 - 10_000 (notional) - 100 (spread) = 89_900
+        assert!(
+            (portfolio.cash - 89_900.0).abs() < 1e-6,
+            "Expected 89_900, got {}",
+            portfolio.cash
+        );
+
+        // Hold same position → multiplier = 0.0, no spread cost
+        let mut targets2: HashMap<String, f64> = [("X".to_string(), 100.0)].into();
+        let cash_before = portfolio.cash;
+        engine.rebalance(&mut portfolio, &mut targets2, &open_prices, &mut tracker);
+        assert!(
+            (portfolio.cash - cash_before).abs() < 1e-6,
+            "Holding should not incur spread cost"
+        );
+
+        // Flip to short → multiplier = 2.0
+        let mut targets3: HashMap<String, f64> = [("X".to_string(), -100.0)].into();
+        engine.rebalance(&mut portfolio, &mut targets3, &open_prices, &mut tracker);
+        // delta = -200, notional_cost = -(-200) * 100 * 1 = +20_000 cash back
+        // trade_notional = 200 * 100 * 1 = 20_000, spread = 1% * 20_000 * 2 = 400
+        let expected_cash = cash_before + 20_000.0 - 400.0;
+        assert!(
+            (portfolio.cash - expected_cash).abs() < 1e-6,
+            "Expected {expected_cash}, got {}",
+            portfolio.cash
+        );
     }
 }

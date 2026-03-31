@@ -26,7 +26,6 @@ fn data_dir() -> PathBuf {
 fn default_config() -> BacktestConfig {
     BacktestConfig {
         initial_cash: 1_000_000.0,
-        slippage_bps: 5.0,
         vol_target: 0.40,
         max_gross_leverage: 2.0,
         max_position_pct: 0.20,

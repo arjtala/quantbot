@@ -57,10 +57,6 @@ struct BacktestArgs {
     #[arg(long, default_value_t = 1_000_000.0)]
     initial_cash: f64,
 
-    /// Slippage in basis points
-    #[arg(long, default_value_t = 5.0)]
-    slippage_bps: f64,
-
     /// Annualized volatility target
     #[arg(long, default_value_t = 0.40)]
     vol_target: f64,
@@ -170,7 +166,6 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
     // Build config and run
     let config = BacktestConfig {
         initial_cash: args.initial_cash,
-        slippage_bps: args.slippage_bps,
         vol_target: args.vol_target,
         max_gross_leverage: args.max_gross_leverage,
         max_position_pct: args.max_position_pct,

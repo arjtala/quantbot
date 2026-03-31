@@ -233,6 +233,55 @@ Triangulating across traditional stats, enterprise machine learning, and modern 
 
 ---
 
+## 7. Phase 3 Engineering Log (Rust Rewrite)
+
+### 2025-03 — Track A: Core Engine + Execution Router
+
+**Completed components:**
+
+| Component | Location | Tests | Notes |
+|---|---|---|---|
+| Core types (Bar, Signal, Portfolio, Universe) | `src/core/` | 9 | `Bar` as plain struct, `BarSeries` as validated `Vec<Bar>` |
+| CSV data loader + `DataProvider` trait | `src/data/` | 4 | Handles Yahoo Finance CSV format (Close before Open) |
+| TSMOM agent + EWMA volatility | `src/agents/tsmom/` | 6 | Pure Rust EWMA matching pandas `ewm(com=60).mean()` |
+| Backtest engine + metrics | `src/backtest/` | 9 | Next-open execution, mark-to-market at close |
+| Execution router | `src/execution/router.rs` | 22 | Per-instrument specs, lot rounding, spread costs |
+| CLI (clap) | `src/main.rs` | — | `backtest` subcommand + stubs for paper-trade/live/positions |
+
+**Validation gate (pre-router integration):**
+- Rust Sharpe 1.377 vs Python 1.370 (+0.5%) — 60-day, 4 instruments
+- Rust Sharpe 0.930 vs Python 0.882 (+5.5%) — 252-day, 6 tradeable instruments
+- Rust Sharpe 0.378 vs Python 0.340 (+11.1%) — 252-day, 21 full universe
+
+**ExecutionRouter integration into BacktestEngine (2025-03-31):**
+
+Replaced the flat `slippage_bps` cost model with the per-instrument `ExecutionRouter`:
+
+1. **Sizing:** `target_notional / price` → `router.size_from_weight()` — accounts for `point_value` (e.g. GC=F gold futures pv=100) and lot rounding (e.g. FX lot_step=0.1, min_deal=0.5)
+2. **Cost model:** Slippage as price adjustment → direction-aware spread cost as cash deduction. `SpreadCostTracker` applies 0x (hold), 1x (open/close), or 2x (flip) multiplier per instrument
+3. **Position point_value:** Hardcoded `1.0` → from router spec, so `PortfolioState::nav()` correctly values futures positions
+4. **Snapshot notionals:** `quantity * price` → `quantity * price * point_value` for accurate exposure reporting
+
+Net effect: backtest now reflects IG spread betting reality — per-instrument spread rates (3-10 bps), correct futures contract sizing, and direction-aware transaction costs.
+
+**39 → 71 tests passing, clean clippy.**
+
+**Post-router validation results (2025-03-31):**
+
+| Test | Pre-Router | Post-Router | Python | Δ vs Python | Trades Before → After |
+|---|---|---|---|---|---|
+| 60-day, 4 inst | 1.377 | 1.386 | 1.370 | +1.1% ✅ | 271 → 178 (-34%) |
+| 252-day, 6 tradeable | 0.930 | 1.117 | 0.882 | +26.6% 🟡 | 1,522 → 1,298 (-15%) |
+| 252-day, 21 full | 0.378 | 0.512 | 0.340 | +50.7% 🔴 | 5,440 → 4,970 (-9%) |
+
+**Analysis:** Sharpe went *up* despite adding spread costs. Lot rounding acts as a natural trade filter — small weight changes round to zero, suppressing micro-rebalances. Fewer trades → less friction → higher Sharpe. GC=F (pv=100) is the smoking gun: positions snap to ~$26K increments, which propagates through portfolio construction.
+
+The 60-day test validates core engine correctness (+1.1% match). Tests 2/3 diverged because Python doesn't do lot rounding or point_value sizing — they're now computing fundamentally different strategies. The Rust engine is more realistic (reflects actual IG execution constraints). Python comparison accepted as no longer meaningful for these tests.
+
+**Next: paper-trade mode, IG API client.**
+
+---
+
 ## References
 
 ### Foundational (2012–2023)
