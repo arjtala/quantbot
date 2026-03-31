@@ -192,7 +192,7 @@ The following papers address gaps in the original literature review, covering mu
 | QuantBot Phase | Most Relevant Papers & Repos |
 |---|---|
 | Phase 2 (LLM agents) | TradingAgents (H), StockAgent (I), MarketSenseAI (N), FinAgent (L), QuantAgent-SBU, ai-hedge-fund |
-| Phase 3 Track A (TSMOM + IG) | nofx (circuit breaker) |
+| Phase 3 Track A (TSMOM + IG) | nofx (circuit breaker), Qlib (online rolling for production) |
 | Phase 3 Track B (LLM agents in Rust) | TradingAgents, QuantAgent-SBU (vision pipeline), MambaStock (P) |
 | Phase 4 (Extensions) | TimesFM (S), Fin-R1 (K), QuantAgent-HKUST (J), CliffordNet (R), TorchTrade (RL weighting) |
 | General reference | RL survey (Q) |
@@ -244,9 +244,9 @@ Triangulating across traditional stats, enterprise machine learning, and modern 
 | Core types (Bar, Signal, Portfolio, Universe) | `src/core/` | 9 | `Bar` as plain struct, `BarSeries` as validated `Vec<Bar>` |
 | CSV data loader + `DataProvider` trait | `src/data/` | 4 | Handles Yahoo Finance CSV format (Close before Open) |
 | TSMOM agent + EWMA volatility | `src/agents/tsmom/` | 6 | Pure Rust EWMA matching pandas `ewm(com=60).mean()` |
-| Backtest engine + metrics | `src/backtest/` | 9 | Next-open execution, mark-to-market at close |
+| Backtest engine + metrics | `src/backtest/` | 13 | Next-open execution, mark-to-market at close, `generate_targets()` for paper-trade |
 | Execution router | `src/execution/router.rs` | 22 | Per-instrument specs, lot rounding, spread costs |
-| CLI (clap) | `src/main.rs` | — | `backtest` subcommand + stubs for paper-trade/live/positions |
+| CLI (clap) | `src/main.rs` | — | `backtest` + `paper-trade` subcommands, stubs for live/positions |
 
 **Validation gate (pre-router integration):**
 - Rust Sharpe 1.377 vs Python 1.370 (+0.5%) — 60-day, 4 instruments
@@ -279,6 +279,28 @@ Net effect: backtest now reflects IG spread betting reality — per-instrument s
 The 60-day test validates core engine correctness (+1.1% match). Tests 2/3 diverged because Python doesn't do lot rounding or point_value sizing — they're now computing fundamentally different strategies. The Rust engine is more realistic (reflects actual IG execution constraints). Python comparison accepted as no longer meaningful for these tests.
 
 **Next: paper-trade mode, IG API client.**
+
+**Paper-trade mode implemented (2025-03-31):**
+
+Added `paper-trade` CLI command — a single-shot signal pipeline that runs TSMOM on the latest CSV data and outputs target positions, orders, margin, and spread costs.
+
+Architecture: `generate_targets()` on `BacktestEngine` runs one iteration of signal→risk limits→sizing→diff→orders. Reuses all existing logic (TSMOMAgent, ExecutionRouter, risk limits) without modifying the backtest `run()` loop.
+
+Sample output (2025-03-28 data):
+- **Long gold:** GLD at +0.40 weight (1,388 shares, $400K) + GC=F at +0.40 weight (1 lot, $312K). Both at max weight — 40%+ 252-day returns
+- **Short SPY:** -0.16 weight (282 shares, $156K). Weak short — negative 21d/63d momentum but positive 252d
+- **FX:** Long GBPUSD +0.33, Short USDCHF -0.36, Short USDJPY -0.26. Dollar weakness theme
+- **Total margin:** $158,544 (15.9% of NAV) — conservative
+
+**Known limitation — correlated gold exposure:**
+GLD + GC=F are ~0.99 correlated but 1/N allocation treats them as independent. Combined notional is ~$712K on a $1M portfolio (71% gold exposure). The TSMOM-only 6-instrument universe has this structural concentration risk. Resolution: when the per-instrument router gets the signal combiner (Track B), add correlation-aware position limits or dedup correlated exposures. Acceptable for now — TSMOM-only on 6 instruments is the validated strategy.
+
+**Qlib evaluation:**
+Evaluated [microsoft/qlib](https://github.com/microsoft/qlib). Impressive ML research platform (LightGBM, LSTM, Transformer model zoo) but wrong tool: Python-only, equity/Chinese A-share focused, overkill architecture for multi-asset TSMOM. Two ideas worth stealing later: (1) RD-Agent pattern for LLM-driven factor discovery maps to the planned indicator agent, (2) online model rolling pipeline for production drift management.
+
+**75 tests passing, clean clippy.**
+
+**Next: position state persistence (JSON file for consecutive paper-trade diffs), then IG API client.**
 
 ---
 

@@ -7,10 +7,12 @@ use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 
 use quantbot::agents::tsmom::TSMOMAgent;
-use quantbot::backtest::engine::{BacktestConfig, BacktestEngine};
+use quantbot::backtest::engine::{BacktestConfig, BacktestEngine, TargetSnapshot};
 use quantbot::backtest::metrics::BacktestResult;
+use quantbot::core::signal::SignalDirection;
 use quantbot::core::universe::TRADEABLE_UNIVERSE;
 use quantbot::data::loader::CsvLoader;
+use quantbot::execution::router::SizedOrder;
 
 #[derive(Parser)]
 #[command(name = "quantbot", version, about = "Quantitative trading system")]
@@ -23,8 +25,8 @@ struct Cli {
 enum Command {
     /// Run TSMOM backtest on historical CSV data
     Backtest(BacktestArgs),
-    /// Paper trade against live data (not yet implemented)
-    PaperTrade(StubArgs),
+    /// Generate target positions and orders for today (paper-trade mode)
+    PaperTrade(PaperTradeArgs),
     /// Live trade with IG execution (not yet implemented)
     Live(StubArgs),
     /// Show current positions (not yet implemented)
@@ -93,15 +95,47 @@ struct StubArgs {
     dry_run: bool,
 }
 
+#[derive(Parser)]
+struct PaperTradeArgs {
+    /// Comma-separated instrument symbols (default: tradeable universe)
+    #[arg(long, value_delimiter = ',')]
+    instruments: Option<Vec<String>>,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
+
+    /// Initial portfolio cash (NAV)
+    #[arg(long, default_value_t = 1_000_000.0)]
+    initial_cash: f64,
+
+    /// Annualized volatility target
+    #[arg(long, default_value_t = 0.40)]
+    vol_target: f64,
+
+    /// Maximum gross leverage
+    #[arg(long, default_value_t = 2.0)]
+    max_gross_leverage: f64,
+
+    /// Maximum position size as fraction of NAV
+    #[arg(long, default_value_t = 0.20)]
+    max_position_pct: f64,
+
+    /// Minimum bars of history required before trading
+    #[arg(long, default_value_t = 252)]
+    min_history: usize,
+
+    /// Output results as JSON
+    #[arg(long)]
+    json: bool,
+}
+
 fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
         Command::Backtest(args) => run_backtest(args),
-        Command::PaperTrade(_) => {
-            eprintln!("paper-trade: not yet implemented");
-            process::exit(1);
-        }
+        Command::PaperTrade(args) => run_paper_trade(args),
         Command::Live(_) => {
             eprintln!("live: not yet implemented");
             process::exit(1);
@@ -196,4 +230,170 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
+    let symbols: Vec<String> = match args.instruments {
+        Some(syms) => syms,
+        None => TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect(),
+    };
+
+    if !args.data_dir.is_dir() {
+        bail!(
+            "Data directory does not exist: {}",
+            args.data_dir.display()
+        );
+    }
+
+    // Load all bars (no date filter — need full history for lookback)
+    let loader = CsvLoader::new(&args.data_dir);
+    let mut bars: HashMap<String, _> = HashMap::new();
+
+    for sym in &symbols {
+        match loader.load_bars(sym, None, None) {
+            Ok(series) => {
+                eprintln!("  Loaded {} bars for {}", series.bars().len(), sym);
+                bars.insert(sym.clone(), series);
+            }
+            Err(e) => {
+                eprintln!("  Warning: failed to load {sym}: {e}");
+            }
+        }
+    }
+
+    if bars.is_empty() {
+        bail!("Failed to load data for any instrument");
+    }
+
+    let config = BacktestConfig {
+        initial_cash: args.initial_cash,
+        vol_target: args.vol_target,
+        max_gross_leverage: args.max_gross_leverage,
+        max_position_pct: args.max_position_pct,
+    };
+
+    let engine = BacktestEngine::new(config);
+    let agent = TSMOMAgent::new();
+
+    let snapshot = engine.generate_targets(
+        &agent,
+        &bars,
+        &HashMap::new(), // starting flat (v1: no position persistence)
+        args.initial_cash,
+        args.min_history,
+    );
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&snapshot)
+            .context("Failed to serialize targets")?;
+        println!("{json}");
+    } else {
+        print_paper_trade_report(&snapshot, args.initial_cash);
+    }
+
+    Ok(())
+}
+
+fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64) {
+    println!("==================================================");
+    println!("  PAPER TRADE REPORT — {}", snap.date);
+    println!("  NAV: ${}", format_number(nav));
+    println!("==================================================");
+    println!();
+
+    // Signals table
+    println!("  SIGNALS");
+    println!(
+        "  {:<14} {:<10} {:>8} {:>10} {:>8} {:>8}",
+        "Instrument", "Direction", "Strength", "Confidence", "AnnVol", "Weight"
+    );
+
+    let mut sig_syms: Vec<&String> = snap.signals.keys().collect();
+    sig_syms.sort();
+    for sym in sig_syms {
+        let sig = &snap.signals[sym];
+        let dir_str = match sig.direction {
+            SignalDirection::Long => "Long",
+            SignalDirection::Short => "Short",
+            SignalDirection::Flat => "Flat",
+        };
+        let ann_vol = sig.metadata.get("ann_vol").copied().unwrap_or(0.0);
+        let weight = snap.target_weights.get(sym).copied().unwrap_or(0.0);
+        println!(
+            "  {:<14} {:<10} {:>+8.2} {:>10.2} {:>7.1}% {:>+8.2}",
+            sym,
+            dir_str,
+            sig.strength,
+            sig.confidence,
+            ann_vol * 100.0,
+            weight,
+        );
+    }
+
+    println!();
+
+    // Orders table
+    if snap.orders.is_empty() {
+        println!("  NO ORDERS (already at target)");
+    } else {
+        println!("  ORDERS (from flat)");
+        println!(
+            "  {:<14} {:<6} {:>10} {:>10} {:>12} {:>10} {:>10}",
+            "Instrument", "Side", "Qty", "Price", "Notional", "Margin", "Spread"
+        );
+
+        for order in &snap.orders {
+            print_order_row(order);
+        }
+
+        println!("  {}", "─".repeat(74));
+        let margin_pct = if nav > 0.0 {
+            snap.total_margin / nav * 100.0
+        } else {
+            0.0
+        };
+        println!(
+            "  Total Margin: ${} ({:.1}% of NAV)",
+            format_number(snap.total_margin), margin_pct
+        );
+    }
+
+    println!("==================================================");
+}
+
+/// Format a number with thousands separators (e.g., 1234567 → "1,234,567").
+fn format_number(n: f64) -> String {
+    let rounded = n.round() as i64;
+    let negative = rounded < 0;
+    let s = rounded.unsigned_abs().to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    let formatted: String = result.chars().rev().collect();
+    if negative {
+        format!("-{formatted}")
+    } else {
+        formatted
+    }
+}
+
+fn print_order_row(order: &SizedOrder) {
+    let side_str = match order.side {
+        quantbot::core::portfolio::OrderSide::Buy => "BUY",
+        quantbot::core::portfolio::OrderSide::Sell => "SELL",
+    };
+    println!(
+        "  {:<14} {:<6} {:>10.1} {:>10.2} {:>12} {:>10} {:>10.2}",
+        order.instrument,
+        side_str,
+        order.quantity,
+        order.reference_price,
+        format_number(order.notional),
+        format_number(order.margin_required),
+        order.spread_cost,
+    );
 }

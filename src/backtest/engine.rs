@@ -6,7 +6,7 @@ use crate::agents::tsmom::TSMOMAgent;
 use crate::core::bar::{Bar, BarSeries};
 use crate::core::portfolio::{Fill, Order, OrderSide, PortfolioState, Position};
 use crate::core::signal::{Signal, SignalDirection};
-use crate::execution::router::{ExecutionRouter, SpreadCostTracker};
+use crate::execution::router::{ExecutionRouter, SizedOrder, SpreadCostTracker};
 
 /// Backtest configuration.
 pub struct BacktestConfig {
@@ -42,6 +42,18 @@ pub struct Snapshot {
     pub fills: Vec<Fill>,
 }
 
+/// Single-shot target snapshot for paper-trade mode.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TargetSnapshot {
+    pub date: NaiveDate,
+    pub signals: HashMap<String, Signal>,
+    pub raw_weights: HashMap<String, f64>,
+    pub target_weights: HashMap<String, f64>,
+    pub target_quantities: HashMap<String, f64>,
+    pub orders: Vec<SizedOrder>,
+    pub total_margin: f64,
+}
+
 /// Event-driven backtest engine with next-open execution.
 ///
 /// At each bar:
@@ -69,6 +81,93 @@ impl BacktestEngine {
 
     pub fn with_defaults() -> Self {
         Self::new(BacktestConfig::default())
+    }
+
+    /// Generate target positions for a single point in time (paper-trade mode).
+    ///
+    /// Runs the signal pipeline on the latest available data for each instrument,
+    /// applies risk limits, sizes via the execution router, and diffs against
+    /// `current_quantities` to produce orders.
+    pub fn generate_targets(
+        &self,
+        agent: &TSMOMAgent,
+        bars_by_instrument: &HashMap<String, BarSeries>,
+        current_quantities: &HashMap<String, f64>,
+        nav: f64,
+        min_history: usize,
+    ) -> TargetSnapshot {
+        let mut signals: HashMap<String, Signal> = HashMap::new();
+        let mut raw_weights: HashMap<String, f64> = HashMap::new();
+        let mut close_prices: HashMap<String, f64> = HashMap::new();
+        let mut max_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+
+        // Generate signals for each instrument with sufficient history
+        for (sym, series) in bars_by_instrument {
+            if series.bars().len() < min_history {
+                continue;
+            }
+
+            let sig = agent.generate_signal(series, sym);
+            let weight = if sig.direction != SignalDirection::Flat {
+                TSMOMAgent::compute_target_weight(&sig)
+            } else {
+                0.0
+            };
+
+            let last_bar = series.bars().last().unwrap();
+            close_prices.insert(sym.clone(), last_bar.close);
+            if last_bar.date > max_date {
+                max_date = last_bar.date;
+            }
+
+            raw_weights.insert(sym.clone(), weight);
+            signals.insert(sym.clone(), sig);
+        }
+
+        // Apply risk limits to a clone of the weights
+        let mut target_weights = raw_weights.clone();
+        self.apply_risk_limits(&mut target_weights);
+
+        // Size from weights to lot-rounded quantities
+        let mut target_quantities: HashMap<String, f64> = HashMap::new();
+        for (sym, &weight) in &target_weights {
+            if let Some(&px) = close_prices.get(sym) {
+                if px > 0.0 {
+                    let qty = self.router.size_from_weight(sym, weight, nav, px);
+                    target_quantities.insert(sym.clone(), qty);
+                }
+            }
+        }
+
+        // Diff against current positions to create orders
+        let mut orders = Vec::new();
+        for (sym, &target_qty) in &target_quantities {
+            let current_qty = current_quantities.get(sym).copied().unwrap_or(0.0);
+            if let Some(order) = self.router.create_sized_order(
+                sym,
+                target_qty,
+                current_qty,
+                close_prices[sym],
+                1.0, // opening from flat or adjusting — use 1.0
+            ) {
+                orders.push(order);
+            }
+        }
+
+        // Sort orders by instrument for deterministic output
+        orders.sort_by(|a, b| a.instrument.cmp(&b.instrument));
+
+        let total_margin = self.router.total_margin(&target_quantities, &close_prices);
+
+        TargetSnapshot {
+            date: max_date,
+            signals,
+            raw_weights,
+            target_weights,
+            target_quantities,
+            orders,
+            total_margin,
+        }
     }
 
     /// Run backtest across multiple instruments.
@@ -511,6 +610,120 @@ mod tests {
             (portfolio.cash - expected_cash).abs() < 1e-6,
             "Expected {expected_cash}, got {}",
             portfolio.cash
+        );
+    }
+
+    // ── generate_targets tests ──────────────────────────────────
+
+    #[test]
+    fn generate_targets_produces_signals_and_orders() {
+        let bars = trending_bars(300, 100.0, 0.002);
+        let mut instruments = HashMap::new();
+        instruments.insert("TEST".into(), bars);
+
+        let engine = BacktestEngine::with_defaults();
+        let agent = TSMOMAgent::new();
+        let snapshot = engine.generate_targets(
+            &agent,
+            &instruments,
+            &HashMap::new(), // flat positions
+            1_000_000.0,
+            253,
+        );
+
+        // Should produce a Long signal for an uptrend
+        assert!(!snapshot.signals.is_empty());
+        let sig = snapshot.signals.get("TEST").unwrap();
+        assert_eq!(sig.direction, SignalDirection::Long);
+
+        // Should produce orders since we're starting flat
+        assert!(!snapshot.orders.is_empty());
+        assert!(snapshot.total_margin > 0.0);
+    }
+
+    #[test]
+    fn generate_targets_flat_when_insufficient_data() {
+        let bars = trending_bars(100, 100.0, 0.002);
+        let mut instruments = HashMap::new();
+        instruments.insert("TEST".into(), bars);
+
+        let engine = BacktestEngine::with_defaults();
+        let agent = TSMOMAgent::new();
+        let snapshot = engine.generate_targets(
+            &agent,
+            &instruments,
+            &HashMap::new(),
+            1_000_000.0,
+            253, // need 253 bars but only have 100
+        );
+
+        assert!(snapshot.signals.is_empty());
+        assert!(snapshot.orders.is_empty());
+        assert_eq!(snapshot.total_margin, 0.0);
+    }
+
+    #[test]
+    fn generate_targets_no_orders_when_already_at_target() {
+        let bars = trending_bars(300, 100.0, 0.002);
+        let mut instruments = HashMap::new();
+        instruments.insert("TEST".into(), bars);
+
+        let engine = BacktestEngine::with_defaults();
+        let agent = TSMOMAgent::new();
+
+        // First run: get target quantities from flat
+        let snap1 = engine.generate_targets(
+            &agent,
+            &instruments,
+            &HashMap::new(),
+            1_000_000.0,
+            253,
+        );
+
+        // Second run: already at target quantities
+        let snap2 = engine.generate_targets(
+            &agent,
+            &instruments,
+            &snap1.target_quantities,
+            1_000_000.0,
+            253,
+        );
+
+        // No orders needed — already at target
+        assert!(snap2.orders.is_empty());
+    }
+
+    #[test]
+    fn generate_targets_risk_limits_applied() {
+        // Create 6 instruments all with strong trends → gross weight should be capped at 2.0
+        let mut instruments = HashMap::new();
+        for i in 0..6 {
+            let sym = format!("INST{}", i);
+            instruments.insert(sym, trending_bars(300, 100.0, 0.003));
+        }
+
+        let engine = BacktestEngine::with_defaults();
+        let agent = TSMOMAgent::new();
+        let snapshot = engine.generate_targets(
+            &agent,
+            &instruments,
+            &HashMap::new(),
+            1_000_000.0,
+            253,
+        );
+
+        // Raw weights should sum to more than 2.0 (6 strong trends)
+        let raw_gross: f64 = snapshot.raw_weights.values().map(|w| w.abs()).sum();
+        assert!(
+            raw_gross > 2.0,
+            "Expected raw gross > 2.0, got {raw_gross}"
+        );
+
+        // Target weights should be capped at max_gross_leverage = 2.0
+        let target_gross: f64 = snapshot.target_weights.values().map(|w| w.abs()).sum();
+        assert!(
+            target_gross <= 2.0 + 1e-10,
+            "Expected target gross <= 2.0, got {target_gross}"
         );
     }
 }

@@ -106,7 +106,7 @@ impl ContractSpec {
 
 // ─── Sized Order ───────────────────────────────────────────────────
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SizedOrder {
     pub instrument: String,
     pub side: OrderSide,
