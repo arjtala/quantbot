@@ -274,12 +274,62 @@ Tested 5 combiner strategies on existing Round 1b data. Key question: can a smar
 | Bonds | -0.218 | ZB=F good (1.66), TLT terrible (-1.75) |
 | Commodity | -0.467 | All negative |
 
-**Round 2 — Remaining Experiments**
-- [ ] **252-day in-sample + 60-day out-of-sample** — Single cluster run with Fin-R1. In-sample: Oct 2023–Dec 2024. Out-of-sample: Jan–Mar 2025. If OOS Sharpe within 0.15 of IS → not overfitting.
+**Round 3 — 252-Day Full Eval** *(Completed 2026-03-31, 21 instruments × 252 days = 5,292 LLM calls, H200 cluster)*
+
+Extended eval from 60 days to a full year (Mar 2024 – Mar 2025). Critical reality check: the 60-day results were inflated by a strong trending period.
+
+**Headline results (252 days, 21 instruments):**
+
+| Universe | TSMOM | Indicator | Combined | Ind Acc | Ind FLAT% |
+|---|---|---|---|---|---|
+| All 21 | -0.07 | -0.14 | -0.04 | 51.7% | 49% |
+| No crypto (17) | +0.24 | +0.06 | +0.22 | 52.8% | 48% |
+| Tradeable (15) | **+0.34** | +0.04 | +0.27 | 53.0% | 48% |
+
+**By asset class:**
+
+| Type | TSMOM | Indicator | Combined | Winner |
+|---|---|---|---|---|
+| Commodity | **+1.22** | +0.38 | +1.15 | TSMOM (GC=F +2.02, GLD +2.12) |
+| Equity | +0.16 | -0.10 | +0.11 | TSMOM (SPY +1.13) |
+| Forex | -0.73 | **+0.51** | -0.55 | Indicator (GBPUSD +1.40, USDCHF +1.42, USDJPY +0.70) |
+| Bonds | -0.45 | -0.47 | -0.71 | Both terrible |
+| Crypto | -0.48 | -0.42 | -0.37 | Both terrible |
+
+**Best strategy per instrument (wins: TSMOM=6, Indicator=8, Combined=7):**
+
+| Instrument | Winner | TSMOM | Indicator | Combined |
+|---|---|---|---|---|
+| GLD | Combined | +2.12 | +0.62 | **+2.38** |
+| GC=F | Combined | +2.02 | +1.16 | **+2.24** |
+| USDCHF=X | Indicator | -1.15 | **+1.42** | -0.64 |
+| GBPUSD=X | Indicator | -0.59 | **+1.40** | -0.41 |
+| SPY | TSMOM | **+1.13** | -0.17 | +0.59 |
+| USDJPY=X | Indicator | -0.57 | **+0.70** | -0.75 |
+| NQ=F | Combined | +0.08 | -0.43 | **+0.56** |
+| EEM | Indicator | -0.12 | **+0.55** | +0.14 |
+
+**Key findings:**
+
+1. **60-day results were overfitting to a trending period.** TSMOM dropped from 0.508→0.34, indicator from 0.765→0.04. The "combiner destroys alpha" finding from Round 1b was period-specific.
+2. **TSMOM-only (Sharpe 0.34) is the best aggregate strategy** on the tradeable universe. Gold and SPY carry it.
+3. **Indicator excels on forex** (GBPUSD +1.40, USDCHF +1.42) but the combiner destroys it — need per-instrument routing.
+4. **Bonds are uninvestable** — negative Sharpe across all strategies. Consider dropping TLT/ZB=F.
+5. **Crypto negative over a full year** — bull run in Q4 2024 masked a mediocre full-year performance.
+6. **Parse failure rate dropped to 0.04%** (2/5,292) — retry mechanism works well.
+
+**Implications for Phase 3:**
+- TSMOM port to Rust remains clearly worth it (Sharpe 0.34 on tradeable universe, gold + equity carry)
+- Indicator agent adds value only on forex — per-instrument routing is essential, not optional
+- Dynamic combiner simulation needed on 252-day data to confirm Round 2 findings hold
+- Consider dropping bonds (TLT, ZB=F) from tradeable universe — negative Sharpe everywhere
+
+**Round 2+ — Remaining Experiments**
+- [ ] **Dynamic combiner simulation on 252-day data** — Replay with instrument-type weights. Does the Round 2 finding (Sharpe 0.793) hold over a full year?
 - [ ] **Debate on/off comparison** — Does bull/bear debate improve decisions vs pure numeric combiner?
 - [ ] **Memory effectiveness** — 50+ sequential decisions, memory vs memoryless.
 - [ ] **Pattern + Trend agent ablation** — Vision agents (needs Qwen3.5-VL or similar on cluster).
-- [ ] **Prompt sensitivity analysis** — Tweak prompts to reduce FLAT rate on forex/crypto.
+- [ ] **Prompt sensitivity analysis** — Tweak prompts to reduce FLAT rate on forex.
 - [ ] **Latency profiling** — End-to-end time for full graph execution on Mac M4 with local Fin-R1.
 - [ ] **Pull Fin-R1 into local Ollama** — Verify it works locally for free dev/testing.
 
@@ -288,13 +338,13 @@ Tested 5 combiner strategies on existing Round 1b data. Key question: can a smar
 ## Phase 3: Rust Rewrite + IG Trading Execution
 > **Status: Not started** | Parallel tracks — TSMOM ships immediately, Fin-R1 indicator confirmed for port
 
-### Strategy: Parallel Tracks (Updated After Round 1b)
+### Strategy: Parallel Tracks (Updated After Round 3 — 252-Day Eval)
 
-Round 1b showed Fin-R1 indicator-only Sharpe 0.671 vs TSMOM 0.315 — the indicator adds genuine alpha, but the combiner was destroying it. Phase 3 now includes LLM agents from the start, with a fixed combiner:
+Round 3 (252 days) showed TSMOM-only Sharpe 0.34 on tradeable universe — gold and SPY carry. Indicator adds alpha only on forex (GBPUSD +1.40, USDCHF +1.42). The 60-day results were inflated by a trending period.
 
-- **Track A** (unconditional): Port TSMOM + IG execution to Rust. Ships proven alpha.
-- **Track B** (unconditional): Port Fin-R1 indicator agent to Rust. Dynamic combiner with instrument-type weights. Respect FLAT signals.
-- **Track C** (Round 2): Test Pattern + Trend vision agents, debate, memory. Port if they add marginal alpha.
+- **Track A** (unconditional): Port TSMOM + IG execution to Rust. Ships proven alpha on gold + equity.
+- **Track B** (conditional on dynamic combiner sim): Port Fin-R1 indicator agent to Rust. Per-instrument routing essential — indicator only for forex, TSMOM-heavy for equity/commodity.
+- **Track C** (Round 2+): Test Pattern + Trend vision agents, debate, memory. Port if they add marginal alpha.
 
 ### Why IG Over IBKR
 - **Tax-free profits** via spread betting (UK: no CGT, no stamp duty)
