@@ -177,6 +177,19 @@ The following papers address gaps in the original literature review, covering mu
 - **Utility — Better Chronos Alternative:** Replaces Amazon's Chronos (§O) as the primary foundation model candidate. Newer (Sept 2025), smaller, probabilistic output gives confidence intervals. Complements TSMOM: momentum captures trends, TimesFM captures mean-reversion and cyclical patterns. Zero-shot means new instruments work from day one without TSMOM's 12-month lookback requirement.
 - **Rust integration:** Export to ONNX → `ort` crate (ONNX Runtime for Rust), or keep as Python microservice.
 
+### T. Sparse MoE for General Reasoning
+**Model:** [nvidia/Nemotron-Cascade-2-30B-A3B](https://huggingface.co/nvidia/Nemotron-Cascade-2-30B-A3B) (NVIDIA - 2025)
+- **Core Concept:** 30B total parameters, only 3B active via Mixture-of-Experts (MoE). Achieves reasoning performance competitive with much larger dense models at a fraction of the compute.
+- **Evaluation for QuantBot:** Impressive general reasoning but not the right fit for the indicator agent. Fin-R1 7B (§K) already proved that domain specialization (financial reasoning via RL) beats general reasoning ability for financial signals. Nemotron also needs ~60GB VRAM despite MoE efficiency — overweight for signal generation.
+- **Utility:** Bookmark for a hypothetical "AI portfolio manager" layer above the signal generators — a meta-reasoning agent that interprets cross-strategy performance, regime context, and allocation decisions. That's a Phase 5+ problem. Stick with Fin-R1 for the indicator agent.
+
+### U. AI-Oriented Quantitative Investment Platform
+**Repo:** [microsoft/qlib](https://github.com/microsoft/qlib) (Microsoft - 2020, actively maintained)
+- **Core Concept:** Open-source ML platform covering the full quant pipeline: data processing, model training (LightGBM, LSTM, Transformer, GNN, RL), backtesting, and portfolio optimization. Primarily targets Chinese A-share markets (CSI300/CSI500) and US equities.
+- **Evaluation for QuantBot:** Wrong tool for the job. Python-only (QuantBot has a validated Rust engine). Equity/stock-picking focused (QuantBot is multi-asset TSMOM). Overkill architecture with its own data layer, workflow engine, and nested decision framework — would fight the framework to do simple trend following. No spread betting / CFD support.
+- **What to steal:** (1) RD-Agent concept — LLM-driven factor mining loop maps directly to the planned indicator agent's automated alpha discovery. (2) Online model rolling — automatic model retraining pipeline for production drift management, relevant when QuantBot reaches live deployment.
+- **Verdict:** Research reference, not a dependency. QuantBot's strength is simplicity — 6 instruments, TSMOM, Rust, IG execution.
+
 ### Open-Source Architecture References
 
 | Repo | Stars | Relevance |
@@ -192,9 +205,10 @@ The following papers address gaps in the original literature review, covering mu
 | QuantBot Phase | Most Relevant Papers & Repos |
 |---|---|
 | Phase 2 (LLM agents) | TradingAgents (H), StockAgent (I), MarketSenseAI (N), FinAgent (L), QuantAgent-SBU, ai-hedge-fund |
-| Phase 3 Track A (TSMOM + IG) | nofx (circuit breaker), Qlib (online rolling for production) |
+| Phase 3 Track A (TSMOM + IG) | nofx (circuit breaker), Qlib (U, online rolling for production) |
 | Phase 3 Track B (LLM agents in Rust) | TradingAgents, QuantAgent-SBU (vision pipeline), MambaStock (P) |
 | Phase 4 (Extensions) | TimesFM (S), Fin-R1 (K), QuantAgent-HKUST (J), CliffordNet (R), TorchTrade (RL weighting) |
+| Phase 5+ (Meta-reasoning) | Nemotron-Cascade (T), Qlib RD-Agent (U) |
 | General reference | RL survey (Q) |
 
 ---
@@ -331,4 +345,5 @@ Evaluated [microsoft/qlib](https://github.com/microsoft/qlib). Impressive ML res
 - Zhang, W., et al. (2024). "FinAgent: A Multimodal Foundation Agent for Financial Trading." *arXiv preprint arXiv:2402.18485*.
 - Das, A., et al. (2024). "A Decoder-Only Foundation Model for Time-Series Forecasting." *ICML 2024*. [google-research/timesfm](https://github.com/google-research/timesfm).
 - Ji, Z. (2026). "CliffordNet: All You Need is Geometric Algebra." *arXiv preprint arXiv:2601.06793v2*.
+- NVIDIA. (2025). "Nemotron-Cascade-2-30B-A3B." [Hugging Face](https://huggingface.co/nvidia/Nemotron-Cascade-2-30B-A3B).
 - (2024). "Reinforcement Learning in Financial Decision Making: A Systematic Review." *arXiv preprint arXiv:2411.07585*.
