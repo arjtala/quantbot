@@ -11,7 +11,7 @@ pub struct SessionRequest {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionResponse {
-    pub account_id: String,
+    pub current_account_id: String,
 }
 
 #[derive(Debug, Deserialize)]

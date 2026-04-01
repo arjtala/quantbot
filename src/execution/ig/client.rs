@@ -312,7 +312,7 @@ mod tests {
             .with_status(200)
             .with_header("CST", "test-cst-token")
             .with_header("X-SECURITY-TOKEN", "test-security-token")
-            .with_body(r#"{"accountId":"Z69YJL"}"#)
+            .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
             .create_async()
             .await;
 
@@ -324,7 +324,7 @@ mod tests {
         );
 
         let session = client.authenticate().await.unwrap();
-        assert_eq!(session.account_id, "Z69YJL");
+        assert_eq!(session.current_account_id, "Z69YJL");
         assert!(client.is_authenticated());
         assert_eq!(client.cst.as_deref(), Some("test-cst-token"));
         assert_eq!(client.security_token.as_deref(), Some("test-security-token"));
@@ -367,7 +367,7 @@ mod tests {
             .with_status(200)
             .with_header("CST", "cst")
             .with_header("X-SECURITY-TOKEN", "sec")
-            .with_body(r#"{"accountId":"Z69YJL"}"#)
+            .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
             .create_async()
             .await;
 
@@ -422,7 +422,7 @@ mod tests {
             .with_status(200)
             .with_header("CST", "cst")
             .with_header("X-SECURITY-TOKEN", "sec")
-            .with_body(r#"{"accountId":"Z69YJL"}"#)
+            .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
             .create_async()
             .await;
 
@@ -489,7 +489,7 @@ mod tests {
             .with_status(200)
             .with_header("CST", "cst")
             .with_header("X-SECURITY-TOKEN", "sec")
-            .with_body(r#"{"accountId":"Z69YJL"}"#)
+            .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
             .create_async()
             .await;
 
@@ -534,7 +534,7 @@ mod tests {
             .with_status(200)
             .with_header("CST", "cst")
             .with_header("X-SECURITY-TOKEN", "sec")
-            .with_body(r#"{"accountId":"Z69YJL"}"#)
+            .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
             .create_async()
             .await;
 
@@ -582,7 +582,7 @@ mod tests {
             .with_status(200)
             .with_header("CST", "cst1")
             .with_header("X-SECURITY-TOKEN", "sec1")
-            .with_body(r#"{"accountId":"Z69YJL"}"#)
+            .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
             .expect(2)  // called twice: initial + re-auth
             .create_async()
             .await;
@@ -629,7 +629,7 @@ mod tests {
             .with_status(200)
             .with_header("CST", "cst")
             .with_header("X-SECURITY-TOKEN", "sec")
-            .with_body(r#"{"accountId":"Z69YJL"}"#)
+            .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
             .create_async()
             .await;
 
