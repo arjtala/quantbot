@@ -14,9 +14,10 @@ use quantbot::core::portfolio::OrderSide;
 use quantbot::core::signal::SignalDirection;
 use quantbot::core::universe::TRADEABLE_UNIVERSE;
 use quantbot::data::loader::CsvLoader;
+use quantbot::execution::circuit_breaker::CircuitBreaker;
 use quantbot::execution::ig::engine::IgExecutionEngine;
-use quantbot::execution::ig::mapping::SymbolMapper;
 use quantbot::execution::paper::PaperExecutionEngine;
+use quantbot::execution::reconcile;
 use quantbot::execution::router::SizedOrder;
 use quantbot::execution::traits::{ExecutionEngine, OrderAck, OrderRequest};
 
@@ -35,8 +36,19 @@ enum Command {
     PaperTrade(PaperTradeArgs),
     /// Live trade with IG execution
     Live(LiveArgs),
-    /// Show current positions (not yet implemented)
-    Positions,
+    /// Show current IG positions
+    Positions(PositionsArgs),
+}
+
+#[derive(Parser)]
+struct PositionsArgs {
+    /// Path to TOML configuration file
+    #[arg(long)]
+    config: PathBuf,
+
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -228,10 +240,7 @@ async fn main() {
         Command::Backtest(args) => run_backtest(args),
         Command::PaperTrade(args) => run_paper_trade(args),
         Command::Live(args) => run_live(args).await,
-        Command::Positions => {
-            eprintln!("positions: not yet implemented");
-            process::exit(1);
-        }
+        Command::Positions(args) => run_positions(args).await,
     };
 
     if let Err(e) = result {
@@ -425,11 +434,14 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         return run_flatten(&app_config).await;
     }
 
+    let ig_config = app_config
+        .execution
+        .ig
+        .as_ref()
+        .context("IG config required for live trading")?;
+
     // ── Resolve instruments (respect --instrument filter) ───────
-    let all_symbols: Vec<String> = match &app_config.execution.ig {
-        Some(ig) => ig.instruments.keys().cloned().collect(),
-        None => TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect(),
-    };
+    let all_symbols: Vec<String> = ig_config.instruments.keys().cloned().collect();
 
     let symbols: Vec<String> = match &args.instrument {
         Some(sym) => {
@@ -468,21 +480,16 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         bail!("Failed to load data for any instrument");
     }
 
-    // ── Load prior state ───────────────────────────────────────
-    let (current_quantities, nav) = match load_state(&args.state_file)? {
+    // ── Generate targets ───────────────────────────────────────
+    // Use prior state for NAV, but actual positions come from IG
+    let nav = match load_state(&args.state_file)? {
         Some(state) => {
-            eprintln!(
-                "  Loaded state from {} ({}, {} positions)",
-                args.state_file.display(),
-                state.date,
-                state.quantities.len()
-            );
-            (state.quantities, state.nav)
+            eprintln!("  Loaded NAV from state: ${}", format_number(state.nav));
+            state.nav
         }
-        None => (HashMap::new(), args.initial_cash),
+        None => args.initial_cash,
     };
 
-    // ── Generate targets ───────────────────────────────────────
     let config = BacktestConfig {
         initial_cash: args.initial_cash,
         vol_target: args.vol_target,
@@ -492,122 +499,157 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     let bt_engine = BacktestEngine::new(config);
     let agent = TSMOMAgent::new();
 
+    // For target generation, use empty quantities (we'll reconcile against live positions)
     let snapshot = bt_engine.generate_targets(
         &agent,
         &bars,
-        &current_quantities,
+        &HashMap::new(),
         nav,
         args.min_history,
     );
 
-    // ── Convert to OrderRequests ───────────────────────────────
-    let mut order_requests: Vec<OrderRequest> = match &app_config.execution.ig {
-        Some(ig_config) => {
-            let mapper = SymbolMapper::from_config(ig_config);
-            snapshot
-                .orders
-                .iter()
-                .filter_map(|o| {
-                    let req = mapper.order_request_from_sized_order(o);
-                    if req.is_none() {
-                        eprintln!("  Warning: no epic mapping for {}, skipping", o.instrument);
-                    }
-                    req
-                })
-                .collect()
+    // ── Construct engine and run rebalance ───────────────────
+    match app_config.execution.engine {
+        EngineType::Paper => {
+            let engine = PaperExecutionEngine::new();
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav).await?;
         }
-        None => {
-            snapshot
-                .orders
-                .iter()
-                .map(|o| OrderRequest {
-                    instrument: o.instrument.clone(),
-                    epic: o.instrument.clone(),
-                    direction: o.side,
-                    size: o.quantity,
-                    order_type: quantbot::execution::traits::OrderType::Market,
-                    currency_code: "GBP".into(),
-                    expiry: "DFB".into(),
-                })
-                .collect()
+        EngineType::Ig => {
+            let engine = IgExecutionEngine::new(ig_config)
+                .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav).await?;
         }
-    };
+    }
+
+    Ok(())
+}
+
+async fn run_rebalance(
+    engine: &impl ExecutionEngine,
+    snapshot: &TargetSnapshot,
+    symbols: &[String],
+    ig_config: &quantbot::config::IgConfig,
+    args: &LiveArgs,
+    nav: f64,
+) -> Result<()> {
+    eprintln!("  Authenticating...");
+    engine.health_check().await.context("health check failed")?;
+    eprintln!("  Health check passed");
+
+    // ── Fetch actual positions and reconcile ────────────────────
+    let live_positions = engine.get_positions().await.context("failed to fetch positions")?;
+    let actual_signed = reconcile::positions_to_signed(&live_positions);
+
+    eprintln!("  Live positions: {} instrument(s)", actual_signed.len());
+    for (sym, qty) in &actual_signed {
+        eprintln!("    {}: {:.1}", sym, qty);
+    }
+
+    // Filter target quantities to only requested instruments
+    let target_quantities: HashMap<String, f64> = snapshot
+        .target_quantities
+        .iter()
+        .filter(|(sym, _)| symbols.contains(sym))
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+
+    let (mut delta_orders, skipped_below_min, skipped_unknown) =
+        reconcile::compute_deltas(&target_quantities, &actual_signed, ig_config);
+
+    eprintln!(
+        "  Reconciliation: {} orders, {} skipped (below min), {} skipped (unknown)",
+        delta_orders.len(),
+        skipped_below_min,
+        skipped_unknown
+    );
 
     // ── Apply safety valves ────────────────────────────────────
     if let Some(max_size) = args.max_size {
-        let before = order_requests.len();
-        order_requests.retain(|o| o.size <= max_size);
-        let filtered = before - order_requests.len();
+        let before = delta_orders.len();
+        delta_orders.retain(|o| o.size <= max_size);
+        let filtered = before - delta_orders.len();
         if filtered > 0 {
             eprintln!("  Safety: filtered {filtered} orders exceeding --max-size {max_size}");
         }
     }
 
-    if order_requests.len() > args.max_orders {
+    if delta_orders.len() > args.max_orders {
         eprintln!(
             "  Safety: truncating {} orders to --max-orders {}",
-            order_requests.len(),
+            delta_orders.len(),
             args.max_orders
         );
-        order_requests.truncate(args.max_orders);
+        delta_orders.truncate(args.max_orders);
+    }
+
+    // ── Circuit breaker check ──────────────────────────────────
+    let mut breaker = CircuitBreaker::default();
+    if let Some(max_size) = args.max_size {
+        breaker = breaker.with_max_order_size(max_size);
+    }
+
+    let max_order_size = delta_orders.iter().map(|o| o.size).fold(0.0_f64, f64::max);
+    if let Err(reason) = breaker.check_orders(delta_orders.len(), max_order_size) {
+        eprintln!("  CIRCUIT BREAKER: {reason}");
+        eprintln!("  Attempting to flatten all positions...");
+        if let Err(e) = engine.flatten_all().await {
+            eprintln!("  Flatten failed: {e}");
+        }
+        bail!("circuit breaker tripped: {reason}");
     }
 
     // ── Print report ───────────────────────────────────────────
-    print_live_report(&snapshot, nav, &order_requests);
+    print_live_report(snapshot, nav, &delta_orders);
 
     if args.dry_run {
         eprintln!("  --dry-run: no orders placed");
         return Ok(());
     }
 
-    // ── Execute ────────────────────────────────────────────────
-    let acks: Vec<OrderAck> = match app_config.execution.engine {
-        EngineType::Paper => {
-            let engine = PaperExecutionEngine::new();
-            engine.health_check().await.context("health check failed")?;
-            engine
-                .place_orders(order_requests.clone())
-                .await
-                .context("failed to place orders")?
+    if delta_orders.is_empty() {
+        eprintln!("  No orders to place (already at target)");
+    } else {
+        // ── Execute ────────────────────────────────────────────
+        let acks: Vec<OrderAck> = engine
+            .place_orders(delta_orders.clone())
+            .await
+            .context("failed to place orders")?;
+
+        for ack in &acks {
+            eprintln!(
+                "  {} {} → {:?}",
+                ack.deal_reference, ack.instrument, ack.status
+            );
         }
-        EngineType::Ig => {
-            let ig_config = app_config
-                .execution
-                .ig
-                .as_ref()
-                .context("IG config required for engine=ig")?;
-            let engine = IgExecutionEngine::new(ig_config)
-                .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
 
-            eprintln!("  Authenticating with IG...");
-            engine.health_check().await.context("IG health check failed")?;
-            eprintln!("  IG health check passed");
-
-            engine
-                .place_orders(order_requests.clone())
-                .await
-                .context("failed to place IG orders")?
-        }
-    };
-
-    // ── Print results ──────────────────────────────────────────
-    for ack in &acks {
-        eprintln!(
-            "  {} {} → {:?}",
-            ack.deal_reference, ack.instrument, ack.status
-        );
+        write_audit_log(&delta_orders, &acks)?;
+        breaker.record_success();
     }
 
-    // ── Write audit log ────────────────────────────────────────
-    write_audit_log(&order_requests, &acks)?;
+    // ── Post-trade verification ────────────────────────────────
+    let post_positions = engine.get_positions().await.context("post-trade position fetch failed")?;
+    let post_signed = reconcile::positions_to_signed(&post_positions);
+    let mismatches = reconcile::verify_positions(&target_quantities, &post_signed, ig_config);
 
-    // ── Save state ─────────────────────────────────────────────
+    if mismatches.is_empty() {
+        eprintln!("  Post-trade verification: all positions match targets");
+    } else {
+        eprintln!("  Post-trade verification: {} mismatch(es)", mismatches.len());
+        for m in &mismatches {
+            eprintln!(
+                "    {}: target={:.1}, actual={:.1}, delta={:.1}",
+                m.instrument, m.target, m.actual, m.delta
+            );
+        }
+    }
+
+    // ── Save state with actual quantities ──────────────────────
     save_state(
         &args.state_file,
         &PaperTradeState {
             date: snapshot.date,
             nav,
-            quantities: snapshot.target_quantities.clone(),
+            quantities: post_signed,
         },
     )?;
     eprintln!("  State saved to {}", args.state_file.display());
@@ -637,6 +679,54 @@ async fn run_flatten(app_config: &AppConfig) -> Result<()> {
             eprintln!("  All positions closed");
         }
     }
+    Ok(())
+}
+
+async fn run_positions(args: PositionsArgs) -> Result<()> {
+    let app_config = AppConfig::load(&args.config)
+        .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+
+    let ig_config = match (&app_config.execution.engine, &app_config.execution.ig) {
+        (EngineType::Ig, Some(ig)) => ig,
+        _ => bail!("positions command requires engine = \"ig\" with IG config"),
+    };
+
+    let engine = IgExecutionEngine::new(ig_config)
+        .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
+
+    engine.health_check().await.context("IG health check failed")?;
+
+    let positions = engine.get_positions().await.context("failed to fetch positions")?;
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&positions)
+            .context("failed to serialize positions")?;
+        println!("{json}");
+        return Ok(());
+    }
+
+    if positions.is_empty() {
+        println!("  0 open positions");
+        return Ok(());
+    }
+
+    println!("  {:<14} {:<6} {:>10} {:>10} {:<30}", "Instrument", "Side", "Size", "Level", "Epic");
+    println!("  {}", "─".repeat(74));
+
+    for pos in &positions {
+        let side_str = match pos.direction {
+            OrderSide::Buy => "BUY",
+            OrderSide::Sell => "SELL",
+        };
+        println!(
+            "  {:<14} {:<6} {:>10.1} {:>10.4} {:<30}",
+            pos.instrument, side_str, pos.size, pos.open_level, pos.epic,
+        );
+    }
+
+    println!("  {}", "─".repeat(74));
+    println!("  {} open position(s)", positions.len());
+
     Ok(())
 }
 
