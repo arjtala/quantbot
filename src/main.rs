@@ -9,10 +9,15 @@ use clap::{Parser, Subcommand};
 use quantbot::agents::tsmom::TSMOMAgent;
 use quantbot::backtest::engine::{BacktestConfig, BacktestEngine, TargetSnapshot};
 use quantbot::backtest::metrics::BacktestResult;
+use quantbot::config::{AppConfig, EngineType};
+use quantbot::core::portfolio::OrderSide;
 use quantbot::core::signal::SignalDirection;
 use quantbot::core::universe::TRADEABLE_UNIVERSE;
 use quantbot::data::loader::CsvLoader;
+use quantbot::execution::ig::mapping::SymbolMapper;
+use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::router::SizedOrder;
+use quantbot::execution::traits::{ExecutionEngine, OrderRequest};
 
 #[derive(Parser)]
 #[command(name = "quantbot", version, about = "Quantitative trading system")]
@@ -27,8 +32,8 @@ enum Command {
     Backtest(BacktestArgs),
     /// Generate target positions and orders for today (paper-trade mode)
     PaperTrade(PaperTradeArgs),
-    /// Live trade with IG execution (not yet implemented)
-    Live(StubArgs),
+    /// Live trade with IG execution
+    Live(LiveArgs),
     /// Show current positions (not yet implemented)
     Positions,
 }
@@ -85,14 +90,46 @@ struct BacktestArgs {
 }
 
 #[derive(Parser)]
-struct StubArgs {
-    /// Path to configuration file
+struct LiveArgs {
+    /// Path to TOML configuration file
     #[arg(long)]
-    config: Option<PathBuf>,
+    config: PathBuf,
 
-    /// Dry run (no actual trades)
+    /// Dry run — compute targets and print orders without executing
     #[arg(long)]
     dry_run: bool,
+
+    /// Path to state file for position persistence
+    #[arg(long, default_value = "data/live-state.json")]
+    state_file: PathBuf,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
+
+    /// Initial portfolio cash (NAV)
+    #[arg(long, default_value_t = 1_000_000.0)]
+    initial_cash: f64,
+
+    /// Annualized volatility target
+    #[arg(long, default_value_t = 0.40)]
+    vol_target: f64,
+
+    /// Maximum gross leverage
+    #[arg(long, default_value_t = 2.0)]
+    max_gross_leverage: f64,
+
+    /// Maximum position size as fraction of NAV
+    #[arg(long, default_value_t = 0.20)]
+    max_position_pct: f64,
+
+    /// Minimum bars of history required before trading
+    #[arg(long, default_value_t = 252)]
+    min_history: usize,
+
+    /// Output results as JSON
+    #[arg(long)]
+    json: bool,
 }
 
 #[derive(Parser)]
@@ -166,16 +203,14 @@ fn save_state(path: &Path, state: &PaperTradeState) -> Result<()> {
     Ok(())
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     let result = match cli.command {
         Command::Backtest(args) => run_backtest(args),
         Command::PaperTrade(args) => run_paper_trade(args),
-        Command::Live(_) => {
-            eprintln!("live: not yet implemented");
-            process::exit(1);
-        }
+        Command::Live(args) => run_live(args).await,
         Command::Positions => {
             eprintln!("positions: not yet implemented");
             process::exit(1);
@@ -361,6 +396,206 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
     Ok(())
 }
 
+async fn run_live(args: LiveArgs) -> Result<()> {
+    let app_config = AppConfig::load(&args.config)
+        .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+
+    // Resolve instruments from config
+    let symbols: Vec<String> = match &app_config.execution.ig {
+        Some(ig) => ig.instruments.keys().cloned().collect(),
+        None => TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect(),
+    };
+
+    if !args.data_dir.is_dir() {
+        bail!(
+            "Data directory does not exist: {}",
+            args.data_dir.display()
+        );
+    }
+
+    // Load bar data
+    let loader = CsvLoader::new(&args.data_dir);
+    let mut bars: HashMap<String, _> = HashMap::new();
+
+    for sym in &symbols {
+        match loader.load_bars(sym, None, None) {
+            Ok(series) => {
+                eprintln!("  Loaded {} bars for {}", series.bars().len(), sym);
+                bars.insert(sym.clone(), series);
+            }
+            Err(e) => {
+                eprintln!("  Warning: failed to load {sym}: {e}");
+            }
+        }
+    }
+
+    if bars.is_empty() {
+        bail!("Failed to load data for any instrument");
+    }
+
+    // Load prior state
+    let (current_quantities, nav) = match load_state(&args.state_file)? {
+        Some(state) => {
+            eprintln!(
+                "  Loaded state from {} ({}, {} positions)",
+                args.state_file.display(),
+                state.date,
+                state.quantities.len()
+            );
+            (state.quantities, state.nav)
+        }
+        None => (HashMap::new(), args.initial_cash),
+    };
+
+    // Generate targets
+    let config = BacktestConfig {
+        initial_cash: args.initial_cash,
+        vol_target: args.vol_target,
+        max_gross_leverage: args.max_gross_leverage,
+        max_position_pct: args.max_position_pct,
+    };
+    let bt_engine = BacktestEngine::new(config);
+    let agent = TSMOMAgent::new();
+
+    let snapshot = bt_engine.generate_targets(
+        &agent,
+        &bars,
+        &current_quantities,
+        nav,
+        args.min_history,
+    );
+
+    // Convert SizedOrders to OrderRequests
+    let order_requests: Vec<OrderRequest> = match &app_config.execution.ig {
+        Some(ig_config) => {
+            let mapper = SymbolMapper::from_config(ig_config);
+            snapshot
+                .orders
+                .iter()
+                .filter_map(|o| {
+                    let req = mapper.order_request_from_sized_order(o);
+                    if req.is_none() {
+                        eprintln!("  Warning: no epic mapping for {}, skipping", o.instrument);
+                    }
+                    req
+                })
+                .collect()
+        }
+        None => {
+            // Paper engine — no epic mapping needed, use instrument as epic
+            snapshot
+                .orders
+                .iter()
+                .map(|o| OrderRequest {
+                    instrument: o.instrument.clone(),
+                    epic: o.instrument.clone(),
+                    direction: o.side,
+                    size: o.quantity,
+                    order_type: quantbot::execution::traits::OrderType::Market,
+                    currency_code: "GBP".into(),
+                    expiry: "DFB".into(),
+                })
+                .collect()
+        }
+    };
+
+    // Print target report
+    print_live_report(&snapshot, nav, &order_requests);
+
+    if args.dry_run {
+        eprintln!("  --dry-run: no orders placed");
+        return Ok(());
+    }
+
+    // Construct engine and execute
+    match app_config.execution.engine {
+        EngineType::Paper => {
+            let engine = PaperExecutionEngine::new();
+            engine.health_check().await.context("health check failed")?;
+            let acks = engine
+                .place_orders(order_requests)
+                .await
+                .context("failed to place orders")?;
+            for ack in &acks {
+                eprintln!(
+                    "  {} {} → {:?}",
+                    ack.deal_reference, ack.instrument, ack.status
+                );
+            }
+        }
+        EngineType::Ig => {
+            bail!("IG execution engine not yet implemented (PR 2)");
+        }
+    }
+
+    // Save state
+    save_state(
+        &args.state_file,
+        &PaperTradeState {
+            date: snapshot.date,
+            nav,
+            quantities: snapshot.target_quantities.clone(),
+        },
+    )?;
+    eprintln!("  State saved to {}", args.state_file.display());
+
+    Ok(())
+}
+
+fn print_live_report(snap: &TargetSnapshot, nav: f64, orders: &[OrderRequest]) {
+    println!("==================================================");
+    println!("  LIVE TRADE TARGETS — {}", snap.date);
+    println!("  NAV: ${}", format_number(nav));
+    println!("==================================================");
+    println!();
+
+    // Signals table
+    println!("  SIGNALS");
+    println!(
+        "  {:<14} {:<10} {:>8} {:>10} {:>8}",
+        "Instrument", "Direction", "Strength", "Confidence", "Weight"
+    );
+
+    let mut sig_syms: Vec<&String> = snap.signals.keys().collect();
+    sig_syms.sort();
+    for sym in sig_syms {
+        let sig = &snap.signals[sym];
+        let dir_str = match sig.direction {
+            SignalDirection::Long => "Long",
+            SignalDirection::Short => "Short",
+            SignalDirection::Flat => "Flat",
+        };
+        let weight = snap.target_weights.get(sym).copied().unwrap_or(0.0);
+        println!(
+            "  {:<14} {:<10} {:>+8.2} {:>10.2} {:>+8.2}",
+            sym, dir_str, sig.strength, sig.confidence, weight,
+        );
+    }
+    println!();
+
+    if orders.is_empty() {
+        println!("  NO ORDERS (already at target)");
+    } else {
+        println!("  ORDERS TO EXECUTE ({} orders)", orders.len());
+        println!(
+            "  {:<14} {:<6} {:>10} {:<30}",
+            "Instrument", "Side", "Size", "Epic"
+        );
+        for order in orders {
+            let side_str = match order.direction {
+                OrderSide::Buy => "BUY",
+                OrderSide::Sell => "SELL",
+            };
+            println!(
+                "  {:<14} {:<6} {:>10.1} {:<30}",
+                order.instrument, side_str, order.size, order.epic,
+            );
+        }
+    }
+
+    println!("==================================================");
+}
+
 fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64, prior: Option<&PaperTradeState>) {
     println!("==================================================");
     println!("  PAPER TRADE REPORT — {}", snap.date);
@@ -461,8 +696,8 @@ fn format_number(n: f64) -> String {
 
 fn print_order_row(order: &SizedOrder) {
     let side_str = match order.side {
-        quantbot::core::portfolio::OrderSide::Buy => "BUY",
-        quantbot::core::portfolio::OrderSide::Sell => "SELL",
+        OrderSide::Buy => "BUY",
+        OrderSide::Sell => "SELL",
     };
     println!(
         "  {:<14} {:<6} {:>10.1} {:>10.2} {:>12} {:>10} {:>10.2}",
