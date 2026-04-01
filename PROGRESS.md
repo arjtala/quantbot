@@ -389,7 +389,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A Weeks 1-2 complete, validation gate PASSED** | GO confirmed — Sharpe 1.112 after costs, -8.6% max DD
+> **Status: In progress — Track A Weeks 1-3 complete, Week 3-4 next (IG API)** | 75 tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -416,9 +416,9 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 | **1** | Data layer: load OHLCV from CSV (reuse `data/` from Python eval) | ✅ Done |
 | **2** | TSMOM agent + EWMA volatility (pure Rust) | ✅ Done |
 | **2** | Backtest engine + metrics + validation gate | ✅ **PASSED** |
-| **3** | Per-instrument router + dynamic combiner weights | ← NEXT |
-| **3** | CLI (clap — backtest, paper-trade, live-trade modes) | |
-| **3-4** | IG execution engine (`ig_trading_api`) + Paper engine | |
+| **3** | Per-instrument execution router + spread cost model | ✅ Done |
+| **3** | CLI (clap — backtest, paper-trade modes) + paper-trade state persistence | ✅ Done |
+| **3-4** | IG execution engine (`ig_trading_api`) + Paper engine | ← NEXT |
 | **4** | SQLite memory + risk manager + circuit breaker | |
 
 #### Validation Results (2026-03-31)
@@ -447,19 +447,22 @@ Track A checklist:
 - [x] Python code relocated to `lib/` — Rust owns `src/`, Python is reference implementation
 - [x] `tests/validate_sharpe.rs` — 4 validation tests + benchmark + per-instrument PnL diagnostics
 - [x] **Validation gate: Rust Sharpe matches Python** ✅ PASSED
-- [ ] `src/agents/decision/router.rs` — Per-instrument strategy router (gold: combiner, equity: TSMOM, forex: indicator-heavy) ← NEXT
-- [ ] `src/main.rs` — CLI (clap — backtest, paper-trade, live-trade modes)
+- [ ] `src/agents/decision/router.rs` — Per-instrument strategy router (gold: combiner, equity: TSMOM, forex: indicator-heavy) ← Track B
+- [x] `src/main.rs` — CLI (clap — backtest + paper-trade subcommands, stubs for live/positions)
+- [x] `src/execution/router.rs` — ExecutionRouter: per-instrument ContractSpec, lot rounding, direction-aware spread costs (SpreadCostTracker 0x/1x/2x), integrated into BacktestEngine
+- [x] `src/backtest/engine.rs` — `generate_targets()` for paper-trade mode: single-shot signal→risk limits→sizing→orders pipeline
+- [x] Paper-trade state persistence — `PaperTradeState` JSON file, `--state-file`/`--reset` CLI args, diff-based rebalance orders
 - [ ] `src/config.rs` — Layered config (TOML + env), IG credentials, model selection
 - [ ] `src/execution/traits.rs` — `ExecutionEngine` trait
 - [ ] `src/execution/paper.rs` — Local paper simulation
-- [ ] `src/execution/ig/` — IG REST API (auth, orders, streaming, epics, rate_limiter)
+- [ ] `src/execution/ig/` — IG REST API (auth, orders, streaming, epics, rate_limiter) ← NEXT
 - [ ] `src/execution/recording.rs` — Decorator: logs all orders/fills to SQLite
 - [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
 - [ ] `src/risk/agent.rs` — Position sizing, drawdown limits, veto authority
 - [ ] `src/risk/circuit_breaker.rs` — Auto-flatten after 3 failures, daily loss limit, graceful degradation to TSMOM-only
 - [ ] Integration tests: IG demo round-trip
 
-**37 tests passing, clean clippy, 0 warnings.** Python reference implementation in `lib/`. **Validation gate passed.**
+**75 tests passing, clean clippy, 0 warnings.** Python reference implementation in `lib/`. **Validation gate passed.**
 
 ### Track B — Fin-R1 Indicator Agent (Weeks 3-5) — UNCONDITIONAL (Gate Passed)
 

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use anyhow::{bail, Context, Result};
@@ -128,6 +128,42 @@ struct PaperTradeArgs {
     /// Output results as JSON
     #[arg(long)]
     json: bool,
+
+    /// Path to state file for position persistence
+    #[arg(long, default_value = "data/paper-state.json")]
+    state_file: PathBuf,
+
+    /// Reset state (start from flat, ignoring saved positions)
+    #[arg(long)]
+    reset: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct PaperTradeState {
+    date: NaiveDate,
+    nav: f64,
+    quantities: HashMap<String, f64>,
+}
+
+fn load_state(path: &Path) -> Result<Option<PaperTradeState>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let contents =
+        std::fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let state: PaperTradeState = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse state file {}", path.display()))?;
+    Ok(Some(state))
+}
+
+fn save_state(path: &Path, state: &PaperTradeState) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+    }
+    let json = serde_json::to_string_pretty(state).context("failed to serialize state")?;
+    std::fs::write(path, json).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
 }
 
 fn main() {
@@ -275,29 +311,68 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
     let engine = BacktestEngine::new(config);
     let agent = TSMOMAgent::new();
 
+    // Load prior state
+    let (current_quantities, nav, prior_state) = if args.reset {
+        (HashMap::new(), args.initial_cash, None)
+    } else {
+        match load_state(&args.state_file)? {
+            Some(state) => {
+                eprintln!(
+                    "  Loaded state from {} ({}, {} positions)",
+                    args.state_file.display(),
+                    state.date,
+                    state.quantities.len()
+                );
+                let nav = state.nav;
+                let quantities = state.quantities.clone();
+                (quantities, nav, Some(state))
+            }
+            None => (HashMap::new(), args.initial_cash, None),
+        }
+    };
+
     let snapshot = engine.generate_targets(
         &agent,
         &bars,
-        &HashMap::new(), // starting flat (v1: no position persistence)
-        args.initial_cash,
+        &current_quantities,
+        nav,
         args.min_history,
     );
+
+    // Save new state
+    save_state(
+        &args.state_file,
+        &PaperTradeState {
+            date: snapshot.date,
+            nav, // v1: NAV doesn't change without live prices
+            quantities: snapshot.target_quantities.clone(),
+        },
+    )?;
+    eprintln!("  State saved to {}", args.state_file.display());
 
     if args.json {
         let json = serde_json::to_string_pretty(&snapshot)
             .context("Failed to serialize targets")?;
         println!("{json}");
     } else {
-        print_paper_trade_report(&snapshot, args.initial_cash);
+        print_paper_trade_report(&snapshot, nav, prior_state.as_ref());
     }
 
     Ok(())
 }
 
-fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64) {
+fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64, prior: Option<&PaperTradeState>) {
     println!("==================================================");
     println!("  PAPER TRADE REPORT — {}", snap.date);
     println!("  NAV: ${}", format_number(nav));
+    match prior {
+        Some(state) => println!(
+            "  Previous state: {} ({} positions)",
+            state.date,
+            state.quantities.len()
+        ),
+        None => println!("  Previous state: flat (no state file)"),
+    }
     println!("==================================================");
     println!();
 
@@ -336,7 +411,10 @@ fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64) {
     if snap.orders.is_empty() {
         println!("  NO ORDERS (already at target)");
     } else {
-        println!("  ORDERS (from flat)");
+        match prior {
+            Some(state) => println!("  ORDERS (rebalance from {})", state.date),
+            None => println!("  ORDERS (from flat)"),
+        }
         println!(
             "  {:<14} {:<6} {:>10} {:>10} {:>12} {:>10} {:>10}",
             "Instrument", "Side", "Qty", "Price", "Notional", "Margin", "Spread"
