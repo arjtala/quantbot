@@ -85,7 +85,8 @@ impl IgClient {
             .post(&url)
             .header("X-IG-API-KEY", &self.api_key)
             .header("VERSION", "2")
-            .header("Content-Type", "application/json")
+            .header("Content-Type", "application/json; charset=UTF-8")
+            .header("Accept", "application/json; charset=UTF-8")
             .json(&body)
             .send()
             .await
@@ -95,7 +96,8 @@ impl IgClient {
 
         let status = resp.status().as_u16();
         if status == 401 || status == 403 {
-            return Err(IgError::AuthFailed(format!("HTTP {status}")));
+            let text = resp.text().await.unwrap_or_default();
+            return Err(IgError::AuthFailed(format!("HTTP {status}: {text}")));
         }
         if status >= 400 {
             let text = resp.text().await.unwrap_or_default();
@@ -200,7 +202,11 @@ impl IgClient {
         headers.insert("VERSION", HeaderValue::from_str(version).unwrap());
         headers.insert(
             "Content-Type",
-            HeaderValue::from_static("application/json"),
+            HeaderValue::from_static("application/json; charset=UTF-8"),
+        );
+        headers.insert(
+            "Accept",
+            HeaderValue::from_static("application/json; charset=UTF-8"),
         );
         if let Some(cst) = &self.cst {
             headers.insert("CST", HeaderValue::from_str(cst).unwrap());
