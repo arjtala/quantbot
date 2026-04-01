@@ -553,14 +553,37 @@ async fn run_rebalance(
         .map(|(k, v)| (k.clone(), *v))
         .collect();
 
-    let (mut delta_orders, skipped_below_min, skipped_unknown) =
+    let reconcile_result =
         reconcile::compute_deltas(&target_quantities, &actual_signed, ig_config);
 
+    // ── Fail on unknown instruments (missing config = missing leg) ──
+    if !reconcile_result.unknown_instruments.is_empty() {
+        bail!(
+            "unknown instruments with no epic mapping: [{}] — fix config or remove from targets",
+            reconcile_result.unknown_instruments.join(", ")
+        );
+    }
+
+    // ── Report dust deltas ─────────────────────────────────────
+    if !reconcile_result.skipped_dust.is_empty() {
+        eprintln!(
+            "  Dust: {} instrument(s) with sub-minimum deltas (tracked, not traded):",
+            reconcile_result.skipped_dust.len()
+        );
+        for dust in &reconcile_result.skipped_dust {
+            eprintln!(
+                "    {}: target={:.1}, actual={:.1}, delta={:.4}",
+                dust.instrument, dust.target, dust.actual, dust.delta
+            );
+        }
+    }
+
+    let mut delta_orders = reconcile_result.orders;
+
     eprintln!(
-        "  Reconciliation: {} orders, {} skipped (below min), {} skipped (unknown)",
+        "  Reconciliation: {} orders, {} dust",
         delta_orders.len(),
-        skipped_below_min,
-        skipped_unknown
+        reconcile_result.skipped_dust.len(),
     );
 
     // ── Apply safety valves ────────────────────────────────────

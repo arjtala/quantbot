@@ -6,13 +6,19 @@ use crate::execution::traits::{LivePosition, OrderRequest, OrderType};
 
 /// Result of a reconciliation pass.
 #[derive(Debug, Clone, serde::Serialize)]
-pub struct RebalanceResult {
-    pub orders_placed: usize,
-    pub orders_accepted: usize,
-    pub orders_rejected: usize,
-    pub skipped_below_min: usize,
-    pub skipped_unknown: usize,
-    pub mismatches: Vec<PositionMismatch>,
+pub struct ReconcileResult {
+    pub orders: Vec<OrderRequest>,
+    pub skipped_dust: Vec<DustDelta>,
+    pub unknown_instruments: Vec<String>,
+}
+
+/// A delta that was too small to trade (below instrument's min_size).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct DustDelta {
+    pub instrument: String,
+    pub target: f64,
+    pub actual: f64,
+    pub delta: f64,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -40,16 +46,21 @@ pub fn positions_to_signed(positions: &[LivePosition]) -> HashMap<String, f64> {
 
 /// Compute delta orders needed to move from actual positions to target quantities.
 ///
-/// Returns OrderRequests for deltas that exceed per-instrument minimum size.
-/// Unknown instruments (not in config) are skipped.
+/// Returns a `ReconcileResult` containing:
+/// - `orders`: OrderRequests for deltas exceeding per-instrument min_size
+/// - `skipped_dust`: deltas too small to trade (tracked for drift monitoring)
+/// - `unknown_instruments`: instruments in targets/actuals but missing from config
+///
+/// The caller should treat `unknown_instruments` as an error condition if any
+/// are present in the target set (missing a leg is worse than a failed run).
 pub fn compute_deltas(
     target_quantities: &HashMap<String, f64>,
     actual_positions: &HashMap<String, f64>,
     ig_config: &IgConfig,
-) -> (Vec<OrderRequest>, usize, usize) {
+) -> ReconcileResult {
     let mut orders = Vec::new();
-    let mut skipped_below_min = 0;
-    let mut skipped_unknown = 0;
+    let mut skipped_dust = Vec::new();
+    let mut unknown_instruments = Vec::new();
 
     // All instruments that appear in either target or actual
     let mut all_instruments: Vec<&String> = target_quantities.keys().collect();
@@ -74,8 +85,7 @@ pub fn compute_deltas(
         let inst_config = match ig_config.instruments.get(sym) {
             Some(c) => c,
             None => {
-                eprintln!("  Reconcile: unknown instrument {}, skipping", sym);
-                skipped_unknown += 1;
+                unknown_instruments.push(sym.clone());
                 continue;
             }
         };
@@ -83,9 +93,14 @@ pub fn compute_deltas(
         // Round to step size
         let rounded = (delta.abs() / inst_config.size_step).round() * inst_config.size_step;
 
-        // Skip if below minimum deal size
+        // Track dust: delta exists but rounds below minimum deal size
         if rounded < inst_config.min_size {
-            skipped_below_min += 1;
+            skipped_dust.push(DustDelta {
+                instrument: sym.clone(),
+                target,
+                actual,
+                delta,
+            });
             continue;
         }
 
@@ -106,11 +121,21 @@ pub fn compute_deltas(
         });
     }
 
-    (orders, skipped_below_min, skipped_unknown)
+    ReconcileResult {
+        orders,
+        skipped_dust,
+        unknown_instruments,
+    }
 }
 
 /// Post-trade verification: compare actual positions against targets.
-/// Returns mismatches where abs(delta) exceeds instrument's min_size.
+///
+/// Returns mismatches where `abs(target - actual) >= tolerance`.
+/// Tolerance is the instrument's `min_size` — deltas below this are
+/// acceptable dust that can't be traded due to IG's minimum deal size.
+///
+/// Dust deltas (from `compute_deltas`) are expected to appear as small
+/// mismatches here and are correctly tolerated.
 pub fn verify_positions(
     target_quantities: &HashMap<String, f64>,
     actual_positions: &HashMap<String, f64>,
@@ -132,7 +157,8 @@ pub fn verify_positions(
         let actual = actual_positions.get(sym).copied().unwrap_or(0.0);
         let delta = (target - actual).abs();
 
-        // Use instrument's min_size as tolerance, fallback to 0.1
+        // Tolerance = instrument's min_size (smallest tradeable unit).
+        // Deltas below this are "dust" — we can't correct them, so they're acceptable.
         let tolerance = ig_config
             .instruments
             .get(sym)
@@ -205,10 +231,10 @@ mod tests {
         let mut actuals = HashMap::new();
         actuals.insert("GBPUSD=X".to_string(), 100.0);
 
-        let (orders, below, unknown) = compute_deltas(&targets, &actuals, &config);
-        assert!(orders.is_empty());
-        assert_eq!(below, 0);
-        assert_eq!(unknown, 0);
+        let result = compute_deltas(&targets, &actuals, &config);
+        assert!(result.orders.is_empty());
+        assert!(result.skipped_dust.is_empty());
+        assert!(result.unknown_instruments.is_empty());
     }
 
     #[test]
@@ -217,32 +243,28 @@ mod tests {
         let mut targets = HashMap::new();
         targets.insert("GBPUSD=X".to_string(), 10.0);
 
-        let actuals = HashMap::new(); // flat
-
-        let (orders, _, _) = compute_deltas(&targets, &actuals, &config);
-        assert_eq!(orders.len(), 1);
-        assert_eq!(orders[0].instrument, "GBPUSD=X");
-        assert!(matches!(orders[0].direction, OrderSide::Buy));
-        assert_eq!(orders[0].size, 10.0);
+        let result = compute_deltas(&targets, &HashMap::new(), &config);
+        assert_eq!(result.orders.len(), 1);
+        assert_eq!(result.orders[0].instrument, "GBPUSD=X");
+        assert!(matches!(result.orders[0].direction, OrderSide::Buy));
+        assert_eq!(result.orders[0].size, 10.0);
     }
 
     #[test]
     fn stale_position_creates_sell() {
         let config = test_ig_config();
-        let targets = HashMap::new(); // want flat
-
         let mut actuals = HashMap::new();
-        actuals.insert("SPY".to_string(), 5.0); // holding 5
+        actuals.insert("SPY".to_string(), 5.0);
 
-        let (orders, _, _) = compute_deltas(&targets, &actuals, &config);
-        assert_eq!(orders.len(), 1);
-        assert_eq!(orders[0].instrument, "SPY");
-        assert!(matches!(orders[0].direction, OrderSide::Sell));
-        assert_eq!(orders[0].size, 5.0);
+        let result = compute_deltas(&HashMap::new(), &actuals, &config);
+        assert_eq!(result.orders.len(), 1);
+        assert_eq!(result.orders[0].instrument, "SPY");
+        assert!(matches!(result.orders[0].direction, OrderSide::Sell));
+        assert_eq!(result.orders[0].size, 5.0);
     }
 
     #[test]
-    fn small_delta_skipped() {
+    fn small_delta_tracked_as_dust() {
         let config = test_ig_config();
         let mut targets = HashMap::new();
         targets.insert("GBPUSD=X".to_string(), 10.0);
@@ -250,50 +272,48 @@ mod tests {
         let mut actuals = HashMap::new();
         actuals.insert("GBPUSD=X".to_string(), 9.8); // delta 0.2 < min 0.5
 
-        let (orders, below, _) = compute_deltas(&targets, &actuals, &config);
-        assert!(orders.is_empty());
-        assert_eq!(below, 1);
+        let result = compute_deltas(&targets, &actuals, &config);
+        assert!(result.orders.is_empty());
+        assert_eq!(result.skipped_dust.len(), 1);
+        assert_eq!(result.skipped_dust[0].instrument, "GBPUSD=X");
+        assert!((result.skipped_dust[0].delta - 0.2).abs() < 1e-10);
     }
 
     #[test]
-    fn unknown_instrument_skipped() {
+    fn unknown_instrument_reported() {
         let config = test_ig_config();
         let mut targets = HashMap::new();
         targets.insert("UNKNOWN".to_string(), 10.0);
 
-        let actuals = HashMap::new();
-
-        let (orders, _, unknown) = compute_deltas(&targets, &actuals, &config);
-        assert!(orders.is_empty());
-        assert_eq!(unknown, 1);
+        let result = compute_deltas(&targets, &HashMap::new(), &config);
+        assert!(result.orders.is_empty());
+        assert_eq!(result.unknown_instruments, vec!["UNKNOWN"]);
     }
 
     #[test]
     fn delta_rounded_to_step() {
         let config = test_ig_config();
         let mut targets = HashMap::new();
-        targets.insert("GBPUSD=X".to_string(), 10.73); // step=0.1 → 0.7 delta
+        targets.insert("GBPUSD=X".to_string(), 10.73);
 
         let mut actuals = HashMap::new();
         actuals.insert("GBPUSD=X".to_string(), 10.0);
 
-        let (orders, _, _) = compute_deltas(&targets, &actuals, &config);
-        assert_eq!(orders.len(), 1);
-        assert!((orders[0].size - 0.7).abs() < 1e-10);
+        let result = compute_deltas(&targets, &actuals, &config);
+        assert_eq!(result.orders.len(), 1);
+        assert!((result.orders[0].size - 0.7).abs() < 1e-10);
     }
 
     #[test]
     fn short_position_handling() {
         let config = test_ig_config();
         let mut targets = HashMap::new();
-        targets.insert("SPY".to_string(), -5.0); // want short 5
+        targets.insert("SPY".to_string(), -5.0);
 
-        let actuals = HashMap::new(); // flat
-
-        let (orders, _, _) = compute_deltas(&targets, &actuals, &config);
-        assert_eq!(orders.len(), 1);
-        assert!(matches!(orders[0].direction, OrderSide::Sell));
-        assert_eq!(orders[0].size, 5.0);
+        let result = compute_deltas(&targets, &HashMap::new(), &config);
+        assert_eq!(result.orders.len(), 1);
+        assert!(matches!(result.orders[0].direction, OrderSide::Sell));
+        assert_eq!(result.orders[0].size, 5.0);
     }
 
     #[test]
@@ -305,10 +325,10 @@ mod tests {
         let mut actuals = HashMap::new();
         actuals.insert("SPY".to_string(), 5.0);
 
-        let (orders, _, _) = compute_deltas(&targets, &actuals, &config);
-        assert_eq!(orders.len(), 1);
-        assert!(matches!(orders[0].direction, OrderSide::Sell));
-        assert_eq!(orders[0].size, 8.0); // delta = -3 - 5 = -8
+        let result = compute_deltas(&targets, &actuals, &config);
+        assert_eq!(result.orders.len(), 1);
+        assert!(matches!(result.orders[0].direction, OrderSide::Sell));
+        assert_eq!(result.orders[0].size, 8.0);
     }
 
     #[test]
@@ -361,7 +381,7 @@ mod tests {
         targets.insert("SPY".to_string(), 10.0);
 
         let mut actuals = HashMap::new();
-        actuals.insert("SPY".to_string(), 7.0); // delta 3.0 >= min_size 1.0
+        actuals.insert("SPY".to_string(), 7.0);
 
         let mismatches = verify_positions(&targets, &actuals, &config);
         assert_eq!(mismatches.len(), 1);
@@ -379,19 +399,38 @@ mod tests {
         targets.insert("GLD".to_string(), 50.0);
 
         let mut actuals = HashMap::new();
-        actuals.insert("GBPUSD=X".to_string(), 100.0); // match
-        actuals.insert("SPY".to_string(), -8.0); // delta -2 → sell 2
-        // GLD missing → buy 50
+        actuals.insert("GBPUSD=X".to_string(), 100.0);
+        actuals.insert("SPY".to_string(), -8.0);
 
-        let (orders, _, _) = compute_deltas(&targets, &actuals, &config);
-        assert_eq!(orders.len(), 2);
+        let result = compute_deltas(&targets, &actuals, &config);
+        assert_eq!(result.orders.len(), 2);
 
-        let gld_order = orders.iter().find(|o| o.instrument == "GLD").unwrap();
+        let gld_order = result.orders.iter().find(|o| o.instrument == "GLD").unwrap();
         assert!(matches!(gld_order.direction, OrderSide::Buy));
         assert_eq!(gld_order.size, 50.0);
 
-        let spy_order = orders.iter().find(|o| o.instrument == "SPY").unwrap();
+        let spy_order = result.orders.iter().find(|o| o.instrument == "SPY").unwrap();
         assert!(matches!(spy_order.direction, OrderSide::Sell));
         assert_eq!(spy_order.size, 2.0);
+    }
+
+    #[test]
+    fn dust_does_not_cause_verify_mismatch() {
+        let config = test_ig_config();
+        // Target 10.2 but we can only hold 10.0 (dust delta 0.2 < min 0.5)
+        let mut targets = HashMap::new();
+        targets.insert("GBPUSD=X".to_string(), 10.2);
+
+        let mut actuals = HashMap::new();
+        actuals.insert("GBPUSD=X".to_string(), 10.0);
+
+        // compute_deltas should report dust
+        let result = compute_deltas(&targets, &actuals, &config);
+        assert!(result.orders.is_empty());
+        assert_eq!(result.skipped_dust.len(), 1);
+
+        // verify_positions should NOT report mismatch (within tolerance)
+        let mismatches = verify_positions(&targets, &actuals, &config);
+        assert!(mismatches.is_empty());
     }
 }
