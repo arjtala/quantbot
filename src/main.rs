@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use anyhow::{bail, Context, Result};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, Utc};
 use clap::{Parser, Subcommand};
 
 use quantbot::agents::tsmom::TSMOMAgent;
@@ -14,10 +14,11 @@ use quantbot::core::portfolio::OrderSide;
 use quantbot::core::signal::SignalDirection;
 use quantbot::core::universe::TRADEABLE_UNIVERSE;
 use quantbot::data::loader::CsvLoader;
+use quantbot::execution::ig::engine::IgExecutionEngine;
 use quantbot::execution::ig::mapping::SymbolMapper;
 use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::router::SizedOrder;
-use quantbot::execution::traits::{ExecutionEngine, OrderRequest};
+use quantbot::execution::traits::{ExecutionEngine, OrderAck, OrderRequest};
 
 #[derive(Parser)]
 #[command(name = "quantbot", version, about = "Quantitative trading system")]
@@ -130,6 +131,22 @@ struct LiveArgs {
     /// Output results as JSON
     #[arg(long)]
     json: bool,
+
+    /// Filter to a single instrument (safety valve for testing)
+    #[arg(long)]
+    instrument: Option<String>,
+
+    /// Maximum number of orders to place in a single run
+    #[arg(long, default_value_t = 6)]
+    max_orders: usize,
+
+    /// Maximum size per order (prevents oversized trades)
+    #[arg(long)]
+    max_size: Option<f64>,
+
+    /// Flatten all positions and exit
+    #[arg(long)]
+    flatten: bool,
 }
 
 #[derive(Parser)]
@@ -400,10 +417,28 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     let app_config = AppConfig::load(&args.config)
         .with_context(|| format!("failed to load config from {}", args.config.display()))?;
 
-    // Resolve instruments from config
-    let symbols: Vec<String> = match &app_config.execution.ig {
+    // ── Handle --flatten early ──────────────────────────────────
+    if args.flatten {
+        if args.dry_run {
+            bail!("--flatten and --dry-run are mutually exclusive");
+        }
+        return run_flatten(&app_config).await;
+    }
+
+    // ── Resolve instruments (respect --instrument filter) ───────
+    let all_symbols: Vec<String> = match &app_config.execution.ig {
         Some(ig) => ig.instruments.keys().cloned().collect(),
         None => TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect(),
+    };
+
+    let symbols: Vec<String> = match &args.instrument {
+        Some(sym) => {
+            if !all_symbols.contains(sym) {
+                bail!("instrument '{}' not found in config", sym);
+            }
+            vec![sym.clone()]
+        }
+        None => all_symbols,
     };
 
     if !args.data_dir.is_dir() {
@@ -413,7 +448,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         );
     }
 
-    // Load bar data
+    // ── Load bar data ──────────────────────────────────────────
     let loader = CsvLoader::new(&args.data_dir);
     let mut bars: HashMap<String, _> = HashMap::new();
 
@@ -433,7 +468,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         bail!("Failed to load data for any instrument");
     }
 
-    // Load prior state
+    // ── Load prior state ───────────────────────────────────────
     let (current_quantities, nav) = match load_state(&args.state_file)? {
         Some(state) => {
             eprintln!(
@@ -447,7 +482,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         None => (HashMap::new(), args.initial_cash),
     };
 
-    // Generate targets
+    // ── Generate targets ───────────────────────────────────────
     let config = BacktestConfig {
         initial_cash: args.initial_cash,
         vol_target: args.vol_target,
@@ -465,8 +500,8 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         args.min_history,
     );
 
-    // Convert SizedOrders to OrderRequests
-    let order_requests: Vec<OrderRequest> = match &app_config.execution.ig {
+    // ── Convert to OrderRequests ───────────────────────────────
+    let mut order_requests: Vec<OrderRequest> = match &app_config.execution.ig {
         Some(ig_config) => {
             let mapper = SymbolMapper::from_config(ig_config);
             snapshot
@@ -482,7 +517,6 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                 .collect()
         }
         None => {
-            // Paper engine — no epic mapping needed, use instrument as epic
             snapshot
                 .orders
                 .iter()
@@ -499,7 +533,26 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         }
     };
 
-    // Print target report
+    // ── Apply safety valves ────────────────────────────────────
+    if let Some(max_size) = args.max_size {
+        let before = order_requests.len();
+        order_requests.retain(|o| o.size <= max_size);
+        let filtered = before - order_requests.len();
+        if filtered > 0 {
+            eprintln!("  Safety: filtered {filtered} orders exceeding --max-size {max_size}");
+        }
+    }
+
+    if order_requests.len() > args.max_orders {
+        eprintln!(
+            "  Safety: truncating {} orders to --max-orders {}",
+            order_requests.len(),
+            args.max_orders
+        );
+        order_requests.truncate(args.max_orders);
+    }
+
+    // ── Print report ───────────────────────────────────────────
     print_live_report(&snapshot, nav, &order_requests);
 
     if args.dry_run {
@@ -507,28 +560,48 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Construct engine and execute
-    match app_config.execution.engine {
+    // ── Execute ────────────────────────────────────────────────
+    let acks: Vec<OrderAck> = match app_config.execution.engine {
         EngineType::Paper => {
             let engine = PaperExecutionEngine::new();
             engine.health_check().await.context("health check failed")?;
-            let acks = engine
-                .place_orders(order_requests)
+            engine
+                .place_orders(order_requests.clone())
                 .await
-                .context("failed to place orders")?;
-            for ack in &acks {
-                eprintln!(
-                    "  {} {} → {:?}",
-                    ack.deal_reference, ack.instrument, ack.status
-                );
-            }
+                .context("failed to place orders")?
         }
         EngineType::Ig => {
-            bail!("IG execution engine not yet implemented (PR 2)");
+            let ig_config = app_config
+                .execution
+                .ig
+                .as_ref()
+                .context("IG config required for engine=ig")?;
+            let engine = IgExecutionEngine::new(ig_config)
+                .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
+
+            eprintln!("  Authenticating with IG...");
+            engine.health_check().await.context("IG health check failed")?;
+            eprintln!("  IG health check passed");
+
+            engine
+                .place_orders(order_requests.clone())
+                .await
+                .context("failed to place IG orders")?
         }
+    };
+
+    // ── Print results ──────────────────────────────────────────
+    for ack in &acks {
+        eprintln!(
+            "  {} {} → {:?}",
+            ack.deal_reference, ack.instrument, ack.status
+        );
     }
 
-    // Save state
+    // ── Write audit log ────────────────────────────────────────
+    write_audit_log(&order_requests, &acks)?;
+
+    // ── Save state ─────────────────────────────────────────────
     save_state(
         &args.state_file,
         &PaperTradeState {
@@ -538,6 +611,62 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         },
     )?;
     eprintln!("  State saved to {}", args.state_file.display());
+
+    Ok(())
+}
+
+async fn run_flatten(app_config: &AppConfig) -> Result<()> {
+    match app_config.execution.engine {
+        EngineType::Paper => {
+            eprintln!("  Paper engine: nothing to flatten");
+        }
+        EngineType::Ig => {
+            let ig_config = app_config
+                .execution
+                .ig
+                .as_ref()
+                .context("IG config required for engine=ig")?;
+            let engine = IgExecutionEngine::new(ig_config)
+                .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
+
+            eprintln!("  Authenticating with IG...");
+            engine.health_check().await.context("IG health check failed")?;
+
+            eprintln!("  Flattening all positions...");
+            engine.flatten_all().await.context("failed to flatten")?;
+            eprintln!("  All positions closed");
+        }
+    }
+    Ok(())
+}
+
+fn write_audit_log(orders: &[OrderRequest], acks: &[OrderAck]) -> Result<()> {
+    let audit_dir = Path::new("data/audit");
+    std::fs::create_dir_all(audit_dir).context("failed to create audit directory")?;
+
+    let now = Utc::now();
+    let filename = format!("{}.jsonl", now.format("%Y-%m-%d_%H%M%S"));
+    let path = audit_dir.join(filename);
+
+    let mut lines = Vec::new();
+
+    for (order, ack) in orders.iter().zip(acks.iter()) {
+        let entry = serde_json::json!({
+            "timestamp": now.to_rfc3339(),
+            "event": "order_placed",
+            "instrument": order.instrument,
+            "epic": order.epic,
+            "direction": format!("{:?}", order.direction),
+            "size": order.size,
+            "deal_reference": ack.deal_reference,
+            "status": format!("{:?}", ack.status),
+        });
+        lines.push(serde_json::to_string(&entry).unwrap());
+    }
+
+    std::fs::write(&path, lines.join("\n") + "\n")
+        .with_context(|| format!("failed to write audit log {}", path.display()))?;
+    eprintln!("  Audit log written to {}", path.display());
 
     Ok(())
 }
