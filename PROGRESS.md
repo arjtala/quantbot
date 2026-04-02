@@ -389,7 +389,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A IG execution live on demo** | 100+ tests, clean clippy
+> **Status: In progress — Track A SQLite recording complete, risk agent next** | 100+ tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -424,7 +424,10 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 | **3-4** | IG demo round-trip verified (auth→place→confirm→flatten) | ✅ **PASSED** |
 | **4** | IG spread-bet sizing calibration (ig_point_value per instrument) | ✅ Done |
 | **4** | Per-run JSONL audit logging + run summaries | ✅ Done |
-| **4** | SQLite recording decorator + risk agent | ← NEXT |
+| **4b** | Audit log polish (schema v2, Z timestamps, signed_deal_size) | ✅ Done |
+| **5** | SQLite recording decorator + `history` subcommand | ✅ Done |
+| **5b** | SQLite polish (user_version, batch inserts, filters) | ← NEXT |
+| **6** | Risk agent with veto authority + drawdown tracking | Planned |
 
 #### IG Execution Architecture (PRs 1-3 Complete)
 
@@ -460,8 +463,8 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 
 **PR 4 — Audit Logging + Run Summaries:**
 - [x] `src/audit.rs` — `AuditLogger` with `BufWriter<File>`, per-run JSONL append, non-blocking write failure handling
-- [x] Events: `run_start`, `targets`, `positions_fetched`, `reconcile`, `breaker_check`, `orders_submitted`, `orders_confirmed`, `verify`, `run_end`
-- [x] Every JSONL line: `ts` (RFC3339), `run_id`, `event`, `level`, `data`
+- [x] Events: `run_start`, `targets`, `auth_ok`, `health_check_ok`, `positions_fetched`, `reconcile`, `breaker_check`, `execution_skipped`, `orders_submitted`, `orders_confirmed`, `verify`, `run_end`
+- [x] Every JSONL line: `schema_version`, `ts` (RFC3339 Z-suffix), `run_id`, `event`, `level`, `data`
 - [x] File per run: `data/audit/<ISO-timestamp>.jsonl`
 - [x] `run_end` always emitted (SUCCESS/DRY_RUN/ERROR/BREAKER_TRIPPED/PARTIAL)
 - [x] Audit write failures never block trading (stderr WARN, `audit_write_failed` flag)
@@ -469,6 +472,39 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 - [x] Human-readable summary line on stderr otherwise
 - [x] Old `write_audit_log()` replaced with structured event trace
 - [x] 7 unit tests (file creation, JSONL validity, event ordering, conversion helpers)
+
+**PR 4b — Audit Log Polish:**
+- [x] Schema bump to v2 (`SCHEMA_VERSION = 2`)
+- [x] Timestamps normalized to `Z` suffix (`to_rfc3339_opts(SecondsFormat::Micros, true)`)
+- [x] `signed_qty` renamed to `signed_deal_size` in `TargetEntry` and `PositionEntry` (clarifies IG deal size units)
+- [x] Float noise removed — sizes rounded to 1dp for logging (`25.700000000000003` → `25.7`)
+- [x] `auth_ok` and `health_check_ok` audit events added (between `run_start` and `positions_fetched`)
+- [x] Event ordering: `run_start → targets → auth_ok → health_check_ok → positions_fetched → reconcile → breaker_check → execution_skipped → run_end`
+
+**PR 5 — SQLite Recording + History CLI:**
+- [x] `rusqlite = { version = "0.32", features = ["bundled"] }` added to `Cargo.toml`
+- [x] `src/db.rs` — Schema (4 tables: `runs`, `signals`, `orders`, `positions`), WAL mode, insert/query helpers, 7 tests
+- [x] `src/recording.rs` — `Recorder` struct with typed `record_*` methods (not trait decorator — avoids RPITIT complexity), 2 tests
+- [x] `history` subcommand: `quantbot history [--run <id>] [--instrument <sym>] [--last <n>] [--json]`
+- [x] Single DB file at `data/quantbot.db` (colocated with audit JSONL)
+- [x] Recorder wired into `run_live`/`run_rebalance` at every stage: signals, targets, actual positions, orders submitted, orders confirmed, post-trade positions, run end
+- [x] SQLite errors never block trading (warn to stderr, continue)
+- [x] `PRAGMA journal_mode=WAL` for concurrent read safety
+- [x] Schema indexed on `run_id` and `instrument` for fast queries
+
+**PR 5b — SQLite Polish (from review):** ← NEXT
+- [ ] Add `PRAGMA user_version` for lightweight schema versioning
+- [ ] Batch inserts in a transaction for multi-signal/order runs
+- [ ] `--status` and `--date` filters for `history` subcommand
+- [ ] Track B readiness: ensure schema can log LLM agent signals and decisions
+- [ ] `db_write_failed` flag in `RunSummary` (parallel to `audit_write_failed`)
+
+**PR 6 — Risk Agent:**
+- [ ] `src/risk/agent.rs` — `RiskAgent::check()` with veto authority
+- [ ] Daily loss limit (-5%), max drawdown (-15%), gross leverage cap, per-position concentration
+- [ ] GLD+GC=F combined weight cap (correlation override)
+- [ ] `risk_veto` audit event
+- [ ] Drawdown high-water mark persisted in SQLite (PR 5 dependency)
 
 #### Validation Results (2026-03-31)
 
@@ -510,11 +546,12 @@ Track A checklist:
 - [x] `src/execution/circuit_breaker.rs` — CircuitBreaker: consecutive failures, pre-trade checks
 - [x] `tests/ig_demo_roundtrip.rs` — Integration test: full IG demo round-trip
 - [x] `config.example.toml` — All 6 instruments with IG epics + sizing calibration
-- [x] `src/audit.rs` — Per-run JSONL audit logging with structured events + RunSummary
+- [x] `src/audit.rs` — Per-run JSONL audit logging with structured events + RunSummary (schema v2)
 - [ ] `src/agents/decision/router.rs` — Per-instrument strategy router (gold: combiner, equity: TSMOM, forex: indicator-heavy) ← Track B
-- [ ] `src/execution/recording.rs` — Decorator: logs all orders/fills to SQLite
-- [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
-- [ ] `src/risk/agent.rs` — Position sizing, drawdown limits, veto authority
+- [x] `src/db.rs` — SQLite schema (runs, orders, positions, signals) + WAL mode + query helpers
+- [x] `src/recording.rs` — Recorder: logs all trading activity to SQLite (standalone struct, not trait decorator)
+- [ ] `src/risk/agent.rs` — RiskAgent: daily loss limit, drawdown cap, veto authority ← PR 6
+- [ ] `src/risk/drawdown.rs` — High-water mark tracker (persisted in SQLite) ← PR 6
 
 ### Track B — Fin-R1 Indicator Agent (Weeks 3-5) — UNCONDITIONAL (Gate Passed)
 
@@ -569,7 +606,7 @@ Alternative quant signals (if vision agents don't pan out):
 | `csv` | 1.x | A | ✅ | Data loading |
 | `mockito` | 1.x | A (dev) | ✅ | HTTP mocking for IG client tests |
 | `tempfile` | 3.x | A (dev) | ✅ | Temp dirs for config tests |
-| `rusqlite` | 0.32+ | A | Planned | SQLite memory/logs |
+| `rusqlite` | 0.32 (bundled) | A | ✅ | SQLite recording/history |
 | `tracing` | 0.1+ | A | Planned | Structured logging |
 | `rig-core` | 0.11+ | B | Planned | LLM client (multi-provider) |
 | `ta` | 0.5+ | B | Planned | Technical analysis |

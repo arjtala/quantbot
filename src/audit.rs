@@ -3,7 +3,7 @@ use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 
 use crate::core::portfolio::OrderSide;
@@ -36,7 +36,7 @@ impl RunId {
 #[derive(Debug, Clone, Serialize)]
 pub struct TargetEntry {
     pub instrument: String,
-    pub signed_qty: f64,
+    pub signed_deal_size: f64,
     pub weight: f64,
 }
 
@@ -58,7 +58,7 @@ pub struct OrderAckEntry {
 #[derive(Debug, Clone, Serialize)]
 pub struct PositionEntry {
     pub instrument: String,
-    pub signed_qty: f64,
+    pub signed_deal_size: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -72,7 +72,7 @@ pub struct MismatchEntry {
 // ─── Audit Event ────────────────────────────────────────────────
 
 /// Schema version. Bump when event payloads change in breaking ways.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Top-level JSONL record. One per line in the audit file.
 #[derive(Debug, Clone, Serialize)]
@@ -143,7 +143,7 @@ impl AuditLogger {
     fn log(&mut self, event: &str, level: &str, data: serde_json::Value) {
         let record = AuditRecord {
             schema_version: SCHEMA_VERSION,
-            ts: Utc::now().to_rfc3339(),
+            ts: Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true),
             run_id: self.run_id.id.clone(),
             event: event.to_string(),
             level: level.to_string(),
@@ -181,6 +181,7 @@ impl AuditLogger {
 
     // ── Typed event methods ─────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     pub fn log_run_start(
         &mut self,
         mode: &str,
@@ -205,6 +206,22 @@ impl AuditLogger {
                 "ig_environment": ig_environment,
                 "state_file": state_file,
             }),
+        );
+    }
+
+    pub fn log_auth_ok(&mut self, engine: &str) {
+        self.log(
+            "auth_ok",
+            "INFO",
+            serde_json::json!({ "engine": engine }),
+        );
+    }
+
+    pub fn log_health_check_ok(&mut self) {
+        self.log(
+            "health_check_ok",
+            "INFO",
+            serde_json::json!({}),
         );
     }
 
@@ -407,7 +424,7 @@ pub fn order_requests_to_entries(orders: &[OrderRequest]) -> Vec<OrderEntry> {
                 OrderSide::Buy => "BUY".to_string(),
                 OrderSide::Sell => "SELL".to_string(),
             },
-            size: o.size,
+            size: (o.size * 10.0).round() / 10.0,
         })
         .collect()
 }
@@ -431,7 +448,7 @@ pub fn positions_to_entries(signed: &HashMap<String, f64>) -> Vec<PositionEntry>
         .iter()
         .map(|(sym, qty)| PositionEntry {
             instrument: sym.clone(),
-            signed_qty: *qty,
+            signed_deal_size: (*qty * 10.0).round() / 10.0,
         })
         .collect();
     entries.sort_by(|a, b| a.instrument.cmp(&b.instrument));
@@ -488,7 +505,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
 
         let record: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(record["schema_version"], 1);
+        assert_eq!(record["schema_version"], 2);
         assert_eq!(record["event"], "run_start");
         assert_eq!(record["level"], "INFO");
         assert_eq!(record["data"]["engine"], "ig");
@@ -538,7 +555,7 @@ mod tests {
         logger.log_run_start("live", "ig", true, "config.toml", &["SPY".into()], 1e6, Some("DEMO"), None);
         logger.log_targets("2025-03-31", 1e6, &[TargetEntry {
             instrument: "SPY".into(),
-            signed_qty: -282.0,
+            signed_deal_size: -282.0,
             weight: -0.16,
         }]);
         logger.log_run_end("DRY_RUN", &RunSummary {
@@ -567,7 +584,7 @@ mod tests {
         // Every line must parse as valid JSON with required fields
         for line in &lines {
             let record: serde_json::Value = serde_json::from_str(line).unwrap();
-            assert_eq!(record["schema_version"], 1);
+            assert_eq!(record["schema_version"], 2);
             assert!(record["ts"].is_string());
             assert_eq!(record["run_id"], run_id_str);
             assert!(record["event"].is_string());
