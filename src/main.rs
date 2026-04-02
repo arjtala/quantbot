@@ -3,10 +3,13 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use anyhow::{bail, Context, Result};
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 
 use quantbot::agents::tsmom::TSMOMAgent;
+use quantbot::audit::{
+    self, AuditLogger, RunId, RunSummary, TargetEntry,
+};
 use quantbot::backtest::engine::{BacktestConfig, BacktestEngine, TargetSnapshot};
 use quantbot::backtest::metrics::BacktestResult;
 use quantbot::config::{AppConfig, EngineType};
@@ -19,7 +22,7 @@ use quantbot::execution::ig::engine::IgExecutionEngine;
 use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::reconcile;
 use quantbot::execution::router::SizedOrder;
-use quantbot::execution::traits::{ExecutionEngine, OrderAck, OrderRequest};
+use quantbot::execution::traits::{ExecutionEngine, OrderRequest};
 
 #[derive(Parser)]
 #[command(name = "quantbot", version, about = "Quantitative trading system")]
@@ -215,8 +218,8 @@ fn load_state(path: &Path) -> Result<Option<PaperTradeState>> {
     if !path.exists() {
         return Ok(None);
     }
-    let contents =
-        std::fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
     let state: PaperTradeState = serde_json::from_str(&contents)
         .with_context(|| format!("failed to parse state file {}", path.display()))?;
     Ok(Some(state))
@@ -253,15 +256,15 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
     // Resolve instruments
     let symbols: Vec<String> = match args.instruments {
         Some(syms) => syms,
-        None => TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect(),
+        None => TRADEABLE_UNIVERSE
+            .iter()
+            .map(|i| i.symbol.clone())
+            .collect(),
     };
 
     // Validate data directory
     if !args.data_dir.is_dir() {
-        bail!(
-            "Data directory does not exist: {}",
-            args.data_dir.display()
-        );
+        bail!("Data directory does not exist: {}", args.data_dir.display());
     }
 
     // Load bars
@@ -332,14 +335,14 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
 fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
     let symbols: Vec<String> = match args.instruments {
         Some(syms) => syms,
-        None => TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect(),
+        None => TRADEABLE_UNIVERSE
+            .iter()
+            .map(|i| i.symbol.clone())
+            .collect(),
     };
 
     if !args.data_dir.is_dir() {
-        bail!(
-            "Data directory does not exist: {}",
-            args.data_dir.display()
-        );
+        bail!("Data directory does not exist: {}", args.data_dir.display());
     }
 
     // Load all bars (no date filter — need full history for lookback)
@@ -392,13 +395,8 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
         }
     };
 
-    let snapshot = engine.generate_targets(
-        &agent,
-        &bars,
-        &current_quantities,
-        nav,
-        args.min_history,
-    );
+    let snapshot =
+        engine.generate_targets(&agent, &bars, &current_quantities, nav, args.min_history);
 
     // Save new state
     save_state(
@@ -412,8 +410,8 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
     eprintln!("  State saved to {}", args.state_file.display());
 
     if args.json {
-        let json = serde_json::to_string_pretty(&snapshot)
-            .context("Failed to serialize targets")?;
+        let json =
+            serde_json::to_string_pretty(&snapshot).context("Failed to serialize targets")?;
         println!("{json}");
     } else {
         print_paper_trade_report(&snapshot, nav, prior_state.as_ref());
@@ -423,6 +421,9 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
 }
 
 async fn run_live(args: LiveArgs) -> Result<()> {
+    let run_id = RunId::now();
+    let mut audit = AuditLogger::new(run_id, Path::new("data/audit"));
+
     let app_config = AppConfig::load(&args.config)
         .with_context(|| format!("failed to load config from {}", args.config.display()))?;
 
@@ -454,10 +455,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     };
 
     if !args.data_dir.is_dir() {
-        bail!(
-            "Data directory does not exist: {}",
-            args.data_dir.display()
-        );
+        bail!("Data directory does not exist: {}", args.data_dir.display());
     }
 
     // ── Load bar data ──────────────────────────────────────────
@@ -490,6 +488,19 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         None => args.initial_cash,
     };
 
+    let engine_name = match app_config.execution.engine {
+        EngineType::Ig => "ig",
+        EngineType::Paper => "paper",
+    };
+    audit.log_run_start(
+        "live",
+        engine_name,
+        args.dry_run,
+        &args.config.display().to_string(),
+        &symbols,
+        nav,
+    );
+
     let config = BacktestConfig {
         initial_cash: args.initial_cash,
         vol_target: args.vol_target,
@@ -503,28 +514,36 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     let agent = TSMOMAgent::new();
 
     // For target generation, use empty quantities (we'll reconcile against live positions)
-    let snapshot = bt_engine.generate_targets(
-        &agent,
-        &bars,
-        &HashMap::new(),
-        nav,
-        args.min_history,
-    );
+    let snapshot =
+        bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
+
+    // Log targets
+    let target_entries: Vec<TargetEntry> = snapshot
+        .target_quantities
+        .iter()
+        .map(|(sym, qty)| TargetEntry {
+            instrument: sym.clone(),
+            signed_qty: *qty,
+            weight: snapshot.target_weights.get(sym).copied().unwrap_or(0.0),
+        })
+        .collect();
+    audit.log_targets(&snapshot.date.to_string(), nav, &target_entries);
 
     // ── Construct engine and run rebalance ───────────────────
-    match app_config.execution.engine {
+    let result = match app_config.execution.engine {
         EngineType::Paper => {
             let engine = PaperExecutionEngine::new();
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav).await?;
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, &mut audit).await
         }
         EngineType::Ig => {
             let engine = IgExecutionEngine::new(ig_config)
                 .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav).await?;
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, &mut audit).await
         }
-    }
+    };
 
-    Ok(())
+    // run_rebalance logs run_end internally; propagate errors after
+    result
 }
 
 async fn run_rebalance(
@@ -534,19 +553,63 @@ async fn run_rebalance(
     ig_config: &quantbot::config::IgConfig,
     args: &LiveArgs,
     nav: f64,
+    audit: &mut AuditLogger,
 ) -> Result<()> {
+    let start_time = std::time::Instant::now();
+    let mut orders_placed: usize = 0;
+    let mut orders_confirmed: usize = 0;
+    let mut orders_rejected: usize = 0;
+
+    // Helper: log run_end + optional --json summary and return result
+    let finish = |audit: &mut AuditLogger,
+                  outcome: &str,
+                  orders_placed: usize,
+                  orders_confirmed: usize,
+                  orders_rejected: usize,
+                  dust_skipped: usize,
+                  mismatches: usize,
+                  start_time: std::time::Instant,
+                  json_flag: bool| {
+        let summary = RunSummary {
+            run_id: audit.run_id().to_string(),
+            outcome: outcome.to_string(),
+            duration_ms: start_time.elapsed().as_millis() as u64,
+            orders_placed,
+            orders_confirmed,
+            orders_rejected,
+            dust_skipped,
+            mismatches,
+            audit_write_failed: audit.write_failed,
+            audit_path: audit.path().display().to_string(),
+        };
+        audit.log_run_end(outcome, &summary);
+
+        if json_flag {
+            if let Ok(json) = serde_json::to_string_pretty(&summary) {
+                println!("{json}");
+            }
+        } else {
+            eprintln!("  {summary}");
+        }
+    };
+
     eprintln!("  Authenticating...");
     engine.health_check().await.context("health check failed")?;
     eprintln!("  Health check passed");
 
     // ── Fetch actual positions and reconcile ────────────────────
-    let live_positions = engine.get_positions().await.context("failed to fetch positions")?;
+    let live_positions = engine
+        .get_positions()
+        .await
+        .context("failed to fetch positions")?;
     let actual_signed = reconcile::positions_to_signed(&live_positions);
 
     eprintln!("  Live positions: {} instrument(s)", actual_signed.len());
     for (sym, qty) in &actual_signed {
         eprintln!("    {}: {:.1}", sym, qty);
     }
+
+    audit.log_positions_fetched(&audit::positions_to_entries(&actual_signed));
 
     // Filter target quantities to only requested instruments
     let target_quantities: HashMap<String, f64> = snapshot
@@ -556,16 +619,22 @@ async fn run_rebalance(
         .map(|(k, v)| (k.clone(), *v))
         .collect();
 
-    let reconcile_result =
-        reconcile::compute_deltas(&target_quantities, &actual_signed, ig_config);
+    let reconcile_result = reconcile::compute_deltas(&target_quantities, &actual_signed, ig_config);
 
     // ── Fail on unknown instruments (missing config = missing leg) ──
     if !reconcile_result.unknown_instruments.is_empty() {
-        bail!(
-            "unknown instruments with no epic mapping: [{}] — fix config or remove from targets",
+        let msg = format!(
+            "unknown instruments with no epic mapping: [{}]",
             reconcile_result.unknown_instruments.join(", ")
         );
+        audit.log_error(&msg);
+        finish(
+            audit, "ERROR", 0, 0, 0, 0, 0, start_time, args.json,
+        );
+        bail!("{msg} — fix config or remove from targets");
     }
+
+    let dust_skipped = reconcile_result.skipped_dust.len();
 
     // ── Report dust deltas ─────────────────────────────────────
     if !reconcile_result.skipped_dust.is_empty() {
@@ -587,6 +656,11 @@ async fn run_rebalance(
         "  Reconciliation: {} orders, {} dust",
         delta_orders.len(),
         reconcile_result.skipped_dust.len(),
+    );
+
+    audit.log_reconcile(
+        &audit::order_requests_to_entries(&delta_orders),
+        &reconcile_result.skipped_dust,
     );
 
     // ── Apply safety valves ────────────────────────────────────
@@ -617,18 +691,28 @@ async fn run_rebalance(
     let max_order_size = delta_orders.iter().map(|o| o.size).fold(0.0_f64, f64::max);
     if let Err(reason) = breaker.check_orders(delta_orders.len(), max_order_size) {
         eprintln!("  CIRCUIT BREAKER: {reason}");
+        audit.log_breaker_check(false, delta_orders.len(), max_order_size, Some(&reason));
+
         eprintln!("  Attempting to flatten all positions...");
         if let Err(e) = engine.flatten_all().await {
             eprintln!("  Flatten failed: {e}");
         }
+        finish(
+            audit, "BREAKER_TRIPPED", 0, 0, 0, dust_skipped, 0, start_time, args.json,
+        );
         bail!("circuit breaker tripped: {reason}");
     }
+
+    audit.log_breaker_check(true, delta_orders.len(), max_order_size, None);
 
     // ── Print report ───────────────────────────────────────────
     print_live_report(snapshot, nav, &delta_orders);
 
     if args.dry_run {
         eprintln!("  --dry-run: no orders placed");
+        finish(
+            audit, "DRY_RUN", 0, 0, 0, dust_skipped, 0, start_time, args.json,
+        );
         return Ok(());
     }
 
@@ -636,7 +720,10 @@ async fn run_rebalance(
         eprintln!("  No orders to place (already at target)");
     } else {
         // ── Execute ────────────────────────────────────────────
-        let acks: Vec<OrderAck> = engine
+        orders_placed = delta_orders.len();
+        audit.log_orders_submitted(&audit::order_requests_to_entries(&delta_orders));
+
+        let acks = engine
             .place_orders(delta_orders.clone())
             .await
             .context("failed to place orders")?;
@@ -648,19 +735,37 @@ async fn run_rebalance(
             );
         }
 
-        write_audit_log(&delta_orders, &acks)?;
+        let ack_entries = audit::order_acks_to_entries(&acks);
+        orders_confirmed = ack_entries
+            .iter()
+            .filter(|a| a.status == "Accepted")
+            .count();
+        orders_rejected = ack_entries
+            .iter()
+            .filter(|a| a.status == "Rejected")
+            .count();
+
+        audit.log_orders_confirmed(&ack_entries);
         breaker.record_success();
     }
 
     // ── Post-trade verification ────────────────────────────────
-    let post_positions = engine.get_positions().await.context("post-trade position fetch failed")?;
+    let post_positions = engine
+        .get_positions()
+        .await
+        .context("post-trade position fetch failed")?;
     let post_signed = reconcile::positions_to_signed(&post_positions);
     let mismatches = reconcile::verify_positions(&target_quantities, &post_signed, ig_config);
+
+    let mismatch_count = mismatches.len();
 
     if mismatches.is_empty() {
         eprintln!("  Post-trade verification: all positions match targets");
     } else {
-        eprintln!("  Post-trade verification: {} mismatch(es)", mismatches.len());
+        eprintln!(
+            "  Post-trade verification: {} mismatch(es)",
+            mismatches.len()
+        );
         for m in &mismatches {
             eprintln!(
                 "    {}: target={:.1}, actual={:.1}, delta={:.1}",
@@ -668,6 +773,8 @@ async fn run_rebalance(
             );
         }
     }
+
+    audit.log_verify(mismatches.is_empty(), &audit::mismatches_to_entries(&mismatches));
 
     // ── Save state with actual quantities ──────────────────────
     save_state(
@@ -679,6 +786,24 @@ async fn run_rebalance(
         },
     )?;
     eprintln!("  State saved to {}", args.state_file.display());
+
+    // ── Final summary ──────────────────────────────────────────
+    let outcome = if orders_rejected > 0 {
+        "PARTIAL"
+    } else {
+        "SUCCESS"
+    };
+    finish(
+        audit,
+        outcome,
+        orders_placed,
+        orders_confirmed,
+        orders_rejected,
+        dust_skipped,
+        mismatch_count,
+        start_time,
+        args.json,
+    );
 
     Ok(())
 }
@@ -698,7 +823,10 @@ async fn run_flatten(app_config: &AppConfig) -> Result<()> {
                 .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
 
             eprintln!("  Authenticating with IG...");
-            engine.health_check().await.context("IG health check failed")?;
+            engine
+                .health_check()
+                .await
+                .context("IG health check failed")?;
 
             eprintln!("  Flattening all positions...");
             engine.flatten_all().await.context("failed to flatten")?;
@@ -720,13 +848,19 @@ async fn run_positions(args: PositionsArgs) -> Result<()> {
     let engine = IgExecutionEngine::new(ig_config)
         .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
 
-    engine.health_check().await.context("IG health check failed")?;
+    engine
+        .health_check()
+        .await
+        .context("IG health check failed")?;
 
-    let positions = engine.get_positions().await.context("failed to fetch positions")?;
+    let positions = engine
+        .get_positions()
+        .await
+        .context("failed to fetch positions")?;
 
     if args.json {
-        let json = serde_json::to_string_pretty(&positions)
-            .context("failed to serialize positions")?;
+        let json =
+            serde_json::to_string_pretty(&positions).context("failed to serialize positions")?;
         println!("{json}");
         return Ok(());
     }
@@ -736,7 +870,10 @@ async fn run_positions(args: PositionsArgs) -> Result<()> {
         return Ok(());
     }
 
-    println!("  {:<14} {:<6} {:>10} {:>10} {:<30}", "Instrument", "Side", "Size", "Level", "Epic");
+    println!(
+        "  {:<14} {:<6} {:>10} {:>10} {:<30}",
+        "Instrument", "Side", "Size", "Level", "Epic"
+    );
     println!("  {}", "─".repeat(74));
 
     for pos in &positions {
@@ -752,37 +889,6 @@ async fn run_positions(args: PositionsArgs) -> Result<()> {
 
     println!("  {}", "─".repeat(74));
     println!("  {} open position(s)", positions.len());
-
-    Ok(())
-}
-
-fn write_audit_log(orders: &[OrderRequest], acks: &[OrderAck]) -> Result<()> {
-    let audit_dir = Path::new("data/audit");
-    std::fs::create_dir_all(audit_dir).context("failed to create audit directory")?;
-
-    let now = Utc::now();
-    let filename = format!("{}.jsonl", now.format("%Y-%m-%d_%H%M%S"));
-    let path = audit_dir.join(filename);
-
-    let mut lines = Vec::new();
-
-    for (order, ack) in orders.iter().zip(acks.iter()) {
-        let entry = serde_json::json!({
-            "timestamp": now.to_rfc3339(),
-            "event": "order_placed",
-            "instrument": order.instrument,
-            "epic": order.epic,
-            "direction": format!("{:?}", order.direction),
-            "size": order.size,
-            "deal_reference": ack.deal_reference,
-            "status": format!("{:?}", ack.status),
-        });
-        lines.push(serde_json::to_string(&entry).unwrap());
-    }
-
-    std::fs::write(&path, lines.join("\n") + "\n")
-        .with_context(|| format!("failed to write audit log {}", path.display()))?;
-    eprintln!("  Audit log written to {}", path.display());
 
     Ok(())
 }
@@ -912,7 +1018,8 @@ fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64, prior: Option<&Pape
         };
         println!(
             "  Total Margin: ${} ({:.1}% of NAV)",
-            format_number(snap.total_margin), margin_pct
+            format_number(snap.total_margin),
+            margin_pct
         );
     }
 
