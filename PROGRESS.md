@@ -423,7 +423,8 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 | **3-4** | Safety valves, reconciliation, circuit breaker | ✅ Done |
 | **3-4** | IG demo round-trip verified (auth→place→confirm→flatten) | ✅ **PASSED** |
 | **4** | IG spread-bet sizing calibration (ig_point_value per instrument) | ✅ Done |
-| **4** | Persistent audit logging (JSONL) + run summaries | ← NEXT |
+| **4** | Per-run JSONL audit logging + run summaries | ✅ Done |
+| **4** | SQLite recording decorator + risk agent | ← NEXT |
 
 #### IG Execution Architecture (PRs 1-3 Complete)
 
@@ -456,6 +457,18 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 - [x] `ig_point_value` in `InstrumentConfig` — converts notional to IG deal size (£/pip for FX, £/point for equity/commodity)
 - [x] `IgConfig::to_execution_router()` — builds ExecutionRouter with IG-correct point values
 - [x] Live path uses `BacktestEngine::new_with_router()` — backtest point values unchanged
+
+**PR 4 — Audit Logging + Run Summaries:**
+- [x] `src/audit.rs` — `AuditLogger` with `BufWriter<File>`, per-run JSONL append, non-blocking write failure handling
+- [x] Events: `run_start`, `targets`, `positions_fetched`, `reconcile`, `breaker_check`, `orders_submitted`, `orders_confirmed`, `verify`, `run_end`
+- [x] Every JSONL line: `ts` (RFC3339), `run_id`, `event`, `level`, `data`
+- [x] File per run: `data/audit/<ISO-timestamp>.jsonl`
+- [x] `run_end` always emitted (SUCCESS/DRY_RUN/ERROR/BREAKER_TRIPPED/PARTIAL)
+- [x] Audit write failures never block trading (stderr WARN, `audit_write_failed` flag)
+- [x] `--json` prints `RunSummary` to stdout for cron scraping
+- [x] Human-readable summary line on stderr otherwise
+- [x] Old `write_audit_log()` replaced with structured event trace
+- [x] 7 unit tests (file creation, JSONL validity, event ordering, conversion helpers)
 
 #### Validation Results (2026-03-31)
 
@@ -497,6 +510,7 @@ Track A checklist:
 - [x] `src/execution/circuit_breaker.rs` — CircuitBreaker: consecutive failures, pre-trade checks
 - [x] `tests/ig_demo_roundtrip.rs` — Integration test: full IG demo round-trip
 - [x] `config.example.toml` — All 6 instruments with IG epics + sizing calibration
+- [x] `src/audit.rs` — Per-run JSONL audit logging with structured events + RunSummary
 - [ ] `src/agents/decision/router.rs` — Per-instrument strategy router (gold: combiner, equity: TSMOM, forex: indicator-heavy) ← Track B
 - [ ] `src/execution/recording.rs` — Decorator: logs all orders/fills to SQLite
 - [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
