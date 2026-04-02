@@ -112,10 +112,7 @@ mod tests {
     #[test]
     fn symbol_to_epic_lookup() {
         let mapper = SymbolMapper::from_config(&test_config());
-        assert_eq!(
-            mapper.quantbot_to_epic("SPY"),
-            Some("IX.D.SPTRD.DAILY.IP")
-        );
+        assert_eq!(mapper.quantbot_to_epic("SPY"), Some("IX.D.SPTRD.DAILY.IP"));
         assert_eq!(mapper.quantbot_to_epic("GC=F"), Some("CC.D.GC.USS.IP"));
         assert_eq!(mapper.quantbot_to_epic("UNKNOWN"), None);
     }
@@ -123,10 +120,7 @@ mod tests {
     #[test]
     fn epic_to_symbol_lookup() {
         let mapper = SymbolMapper::from_config(&test_config());
-        assert_eq!(
-            mapper.epic_to_quantbot("IX.D.SPTRD.DAILY.IP"),
-            Some("SPY")
-        );
+        assert_eq!(mapper.epic_to_quantbot("IX.D.SPTRD.DAILY.IP"), Some("SPY"));
         assert_eq!(mapper.epic_to_quantbot("CC.D.GC.USS.IP"), Some("GC=F"));
         assert_eq!(mapper.epic_to_quantbot("UNKNOWN.EPIC"), None);
     }

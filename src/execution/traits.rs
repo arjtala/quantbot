@@ -109,7 +109,11 @@ mod tests {
 
     #[test]
     fn deal_status_serde_round_trip() {
-        let statuses = vec![DealStatus::Accepted, DealStatus::Rejected, DealStatus::Pending];
+        let statuses = vec![
+            DealStatus::Accepted,
+            DealStatus::Rejected,
+            DealStatus::Pending,
+        ];
         let json = serde_json::to_string(&statuses).unwrap();
         let parsed: Vec<DealStatus> = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, statuses);

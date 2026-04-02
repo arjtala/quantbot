@@ -49,10 +49,7 @@ impl TSMOMAgent {
 
         // Compute daily returns from close prices
         let closes: Vec<f64> = data.iter().map(|b| b.close).collect();
-        let returns: Vec<f64> = closes
-            .windows(2)
-            .map(|w| w[1] / w[0] - 1.0)
-            .collect();
+        let returns: Vec<f64> = closes.windows(2).map(|w| w[1] / w[0] - 1.0).collect();
 
         // Trailing returns and signs for each lookback
         let mut signs = Vec::with_capacity(self.lookbacks.len());

@@ -229,7 +229,12 @@ impl BacktestEngine {
             let fills = if pending_targets.is_empty() {
                 Vec::new()
             } else {
-                self.rebalance(&mut portfolio, &mut pending_targets, &open_prices, &mut spread_tracker)
+                self.rebalance(
+                    &mut portfolio,
+                    &mut pending_targets,
+                    &open_prices,
+                    &mut spread_tracker,
+                )
             };
 
             // Step 2: Mark positions to today's close
@@ -308,7 +313,10 @@ impl BacktestEngine {
     }
 
     /// Get the sorted union of all dates across instruments.
-    fn get_all_dates(&self, bars_by_instrument: &HashMap<String, BarSeries>) -> BTreeSet<NaiveDate> {
+    fn get_all_dates(
+        &self,
+        bars_by_instrument: &HashMap<String, BarSeries>,
+    ) -> BTreeSet<NaiveDate> {
         let mut dates = BTreeSet::new();
         for series in bars_by_instrument.values() {
             for bar in series.bars() {
@@ -559,15 +567,18 @@ mod tests {
     fn spread_cost_applied_in_rebalance() {
         // Build a minimal engine + manually call rebalance to verify spread costs
         let mut specs = std::collections::HashMap::new();
-        specs.insert("X".to_string(), crate::execution::router::ContractSpec {
-            symbol: "X".to_string(),
-            asset_class: crate::execution::router::AssetClass::Equity,
-            point_value: 1.0,
-            min_deal_size: 1.0,
-            lot_step: 1.0,
-            margin_pct: 0.20,
-            spread_bps: 100.0, // 1% spread for easy math
-        });
+        specs.insert(
+            "X".to_string(),
+            crate::execution::router::ContractSpec {
+                symbol: "X".to_string(),
+                asset_class: crate::execution::router::AssetClass::Equity,
+                point_value: 1.0,
+                min_deal_size: 1.0,
+                lot_step: 1.0,
+                margin_pct: 0.20,
+                spread_bps: 100.0, // 1% spread for easy math
+            },
+        );
         let router = ExecutionRouter::new(specs);
         let config = BacktestConfig {
             initial_cash: 100_000.0,
@@ -672,13 +683,8 @@ mod tests {
         let agent = TSMOMAgent::new();
 
         // First run: get target quantities from flat
-        let snap1 = engine.generate_targets(
-            &agent,
-            &instruments,
-            &HashMap::new(),
-            1_000_000.0,
-            253,
-        );
+        let snap1 =
+            engine.generate_targets(&agent, &instruments, &HashMap::new(), 1_000_000.0, 253);
 
         // Second run: already at target quantities
         let snap2 = engine.generate_targets(
@@ -704,20 +710,12 @@ mod tests {
 
         let engine = BacktestEngine::with_defaults();
         let agent = TSMOMAgent::new();
-        let snapshot = engine.generate_targets(
-            &agent,
-            &instruments,
-            &HashMap::new(),
-            1_000_000.0,
-            253,
-        );
+        let snapshot =
+            engine.generate_targets(&agent, &instruments, &HashMap::new(), 1_000_000.0, 253);
 
         // Raw weights should sum to more than 2.0 (6 strong trends)
         let raw_gross: f64 = snapshot.raw_weights.values().map(|w| w.abs()).sum();
-        assert!(
-            raw_gross > 2.0,
-            "Expected raw gross > 2.0, got {raw_gross}"
-        );
+        assert!(raw_gross > 2.0, "Expected raw gross > 2.0, got {raw_gross}");
 
         // Target weights should be capped at max_gross_leverage = 2.0
         let target_gross: f64 = snapshot.target_weights.values().map(|w| w.abs()).sum();

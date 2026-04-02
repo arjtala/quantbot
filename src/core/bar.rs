@@ -91,11 +91,7 @@ mod tests {
 
     #[test]
     fn unsorted_series_rejected() {
-        let err = BarSeries::new(vec![
-            bar(2025, 1, 6, 99.0),
-            bar(2025, 1, 2, 100.0),
-        ])
-        .unwrap_err();
+        let err = BarSeries::new(vec![bar(2025, 1, 6, 99.0), bar(2025, 1, 2, 100.0)]).unwrap_err();
         assert!(matches!(err, BarError::Unsorted(_, _)));
     }
 }

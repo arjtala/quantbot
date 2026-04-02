@@ -66,7 +66,9 @@ mod tests {
 
     #[test]
     fn ewma_vol_positive_for_nonzero_returns() {
-        let returns: Vec<f64> = (0..100).map(|i| if i % 2 == 0 { 0.01 } else { -0.01 }).collect();
+        let returns: Vec<f64> = (0..100)
+            .map(|i| if i % 2 == 0 { 0.01 } else { -0.01 })
+            .collect();
         let vol = ewma_volatility(&returns, 60, 20);
         // After min_periods, all should be positive
         for &v in &vol[20..] {

@@ -73,7 +73,11 @@ fn print_exposure(snapshots: &[Snapshot]) {
         let mut notionals: Vec<_> = last.position_notionals.iter().collect();
         notionals.sort_by(|a, b| b.1.abs().partial_cmp(&a.1.abs()).unwrap());
         for (sym, notional) in &notionals {
-            let pct = if nav > 0.0 { *notional / nav * 100.0 } else { 0.0 };
+            let pct = if nav > 0.0 {
+                *notional / nav * 100.0
+            } else {
+                0.0
+            };
             println!("    {sym:>12}: notional=${notional:>12.0}  ({pct:>+6.1}% of NAV)");
         }
         println!(
@@ -81,10 +85,7 @@ fn print_exposure(snapshots: &[Snapshot]) {
             last.gross_exposure, last.net_exposure, nav
         );
         if nav > 0.0 {
-            println!(
-                "  Gross leverage: {:.2}x",
-                last.gross_exposure / nav
-            );
+            println!("  Gross leverage: {:.2}x", last.gross_exposure / nav);
         }
     }
 }
@@ -124,13 +125,15 @@ fn print_pnl_attribution(snapshots: &[Snapshot]) {
     sorted.sort_by(|a, b| b.1.partial_cmp(a.1).unwrap());
     for (sym, pnl) in &sorted {
         let pct_of_nav = *pnl / first_nav * 100.0;
-        println!(
-            "    {sym:>12}: ${pnl:>+12.0}  ({pct_of_nav:>+6.2}% of starting NAV)"
-        );
+        println!("    {sym:>12}: ${pnl:>+12.0}  ({pct_of_nav:>+6.2}% of starting NAV)");
     }
     println!(
         "  Attributed: ${attributed:>+.0} of ${total_pnl:>+.0} total PnL ({:.0}%)",
-        if total_pnl.abs() > 1.0 { attributed / total_pnl * 100.0 } else { 0.0 }
+        if total_pnl.abs() > 1.0 {
+            attributed / total_pnl * 100.0
+        } else {
+            0.0
+        }
     );
 }
 
@@ -176,7 +179,9 @@ fn validate_252day_tradeable_universe() {
     let data_end = NaiveDate::from_ymd_opt(2025, 3, 31).unwrap();
     let eval_start = NaiveDate::from_ymd_opt(2024, 3, 1).unwrap();
 
-    println!("\n=== Validation 2: Tradeable universe TSMOM (6 instruments, Mar 2024 → Mar 2025) ===");
+    println!(
+        "\n=== Validation 2: Tradeable universe TSMOM (6 instruments, Mar 2024 → Mar 2025) ==="
+    );
     let instruments = load_instruments(&loader, &symbols, data_start, data_end);
     assert_eq!(instruments.len(), 6);
 
@@ -199,10 +204,9 @@ fn validate_252day_tradeable_universe() {
 fn validate_full_universe() {
     let loader = CsvLoader::new(data_dir());
     let symbols = [
-        "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD",
-        "SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD",
-        "ES=F", "NQ=F", "GC=F", "CL=F", "ZB=F",
-        "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCHF=X",
+        "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "SPY", "QQQ", "IWM", "EFA", "EEM", "TLT",
+        "GLD", "ES=F", "NQ=F", "GC=F", "CL=F", "ZB=F", "EURUSD=X", "GBPUSD=X", "USDJPY=X",
+        "AUDUSD=X", "USDCHF=X",
     ];
 
     let data_start = NaiveDate::from_ymd_opt(2021, 1, 1).unwrap();
@@ -231,10 +235,9 @@ fn validate_full_universe() {
 fn benchmark_backtest_speed() {
     let loader = CsvLoader::new(data_dir());
     let symbols = [
-        "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD",
-        "SPY", "QQQ", "IWM", "EFA", "EEM", "TLT", "GLD",
-        "ES=F", "NQ=F", "GC=F", "CL=F", "ZB=F",
-        "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X", "USDCHF=X",
+        "BTC-USD", "ETH-USD", "SOL-USD", "BNB-USD", "SPY", "QQQ", "IWM", "EFA", "EEM", "TLT",
+        "GLD", "ES=F", "NQ=F", "GC=F", "CL=F", "ZB=F", "EURUSD=X", "GBPUSD=X", "USDJPY=X",
+        "AUDUSD=X", "USDCHF=X",
     ];
 
     let start = NaiveDate::from_ymd_opt(2021, 1, 1).unwrap();

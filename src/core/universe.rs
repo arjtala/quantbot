@@ -37,8 +37,7 @@ impl Instrument {
 pub static TRADEABLE_UNIVERSE: LazyLock<Vec<Instrument>> = LazyLock::new(|| {
     vec![
         Instrument::new("GLD", "Gold ETF", AssetClass::Equity),
-        Instrument::new("GC=F", "Gold Futures", AssetClass::Futures)
-            .with_point_value(100.0),
+        Instrument::new("GC=F", "Gold Futures", AssetClass::Futures).with_point_value(100.0),
         Instrument::new("SPY", "S&P 500 ETF", AssetClass::Equity),
         Instrument::new("GBPUSD=X", "GBP/USD", AssetClass::Fx),
         Instrument::new("USDCHF=X", "USD/CHF", AssetClass::Fx),

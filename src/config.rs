@@ -85,7 +85,10 @@ impl IgConfig {
         let defaults = ContractSpec::ig_defaults();
 
         for (symbol, inst) in &self.instruments {
-            let base = defaults.get(symbol).cloned().unwrap_or_else(|| ContractSpec::default_equity(symbol));
+            let base = defaults
+                .get(symbol)
+                .cloned()
+                .unwrap_or_else(|| ContractSpec::default_equity(symbol));
             specs.insert(
                 symbol.clone(),
                 ContractSpec {

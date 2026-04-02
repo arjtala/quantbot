@@ -408,11 +408,19 @@ mod tests {
         let result = compute_deltas(&targets, &actuals, &config);
         assert_eq!(result.orders.len(), 2);
 
-        let gld_order = result.orders.iter().find(|o| o.instrument == "GLD").unwrap();
+        let gld_order = result
+            .orders
+            .iter()
+            .find(|o| o.instrument == "GLD")
+            .unwrap();
         assert!(matches!(gld_order.direction, OrderSide::Buy));
         assert_eq!(gld_order.size, 50.0);
 
-        let spy_order = result.orders.iter().find(|o| o.instrument == "SPY").unwrap();
+        let spy_order = result
+            .orders
+            .iter()
+            .find(|o| o.instrument == "SPY")
+            .unwrap();
         assert!(matches!(spy_order.direction, OrderSide::Sell));
         assert_eq!(spy_order.size, 2.0);
     }

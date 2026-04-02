@@ -143,10 +143,7 @@ impl ExecutionEngine for IgExecutionEngine {
 
             eprintln!(
                 "  IG: {} confirmed — deal_id={}, level={:?}, size={:?}",
-                order.instrument,
-                confirmation.deal_id,
-                confirmation.level,
-                confirmation.size
+                order.instrument, confirmation.deal_id, confirmation.level, confirmation.size
             );
 
             acks.push(OrderAck {
@@ -281,7 +278,10 @@ impl ExecutionEngine for IgExecutionEngine {
                 });
             }
 
-            eprintln!("  IG: closed {} — deal_id={}", pos.instrument, confirmation.deal_id);
+            eprintln!(
+                "  IG: closed {} — deal_id={}",
+                pos.instrument, confirmation.deal_id
+            );
         }
 
         Ok(())

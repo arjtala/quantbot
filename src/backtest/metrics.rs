@@ -80,7 +80,11 @@ impl BacktestResult {
         };
 
         // Sortino ratio (downside deviation)
-        let downside: Vec<f64> = daily_returns.iter().filter(|&&r| r < 0.0).copied().collect();
+        let downside: Vec<f64> = daily_returns
+            .iter()
+            .filter(|&&r| r < 0.0)
+            .copied()
+            .collect();
         let downside_std = if downside.is_empty() {
             1e-8
         } else {

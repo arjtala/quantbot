@@ -22,8 +22,8 @@ pub struct IgClient {
 
 impl IgClient {
     pub fn new(config: &IgConfig) -> Result<Self, IgError> {
-        let api_key =
-            std::env::var("IG_API_KEY").map_err(|_| IgError::AuthFailed("IG_API_KEY not set".into()))?;
+        let api_key = std::env::var("IG_API_KEY")
+            .map_err(|_| IgError::AuthFailed("IG_API_KEY not set".into()))?;
         let username = std::env::var("IG_USERNAME")
             .map_err(|_| IgError::AuthFailed("IG_USERNAME not set".into()))?;
         let password = std::env::var("IG_PASSWORD")
@@ -141,7 +141,9 @@ impl IgClient {
     /// GET /positions (version 2)
     pub async fn get_positions(&mut self) -> Result<PositionsResponse, IgError> {
         let url = format!("{}/positions", self.base_url);
-        let resp = self.authed_request(reqwest::Method::GET, &url, "2", None::<&()>).await?;
+        let resp = self
+            .authed_request(reqwest::Method::GET, &url, "2", None::<&()>)
+            .await?;
         let positions: PositionsResponse = resp.json().await.map_err(IgError::Network)?;
         Ok(positions)
     }
@@ -152,7 +154,9 @@ impl IgClient {
         req: &CreatePositionRequest,
     ) -> Result<DealReferenceResponse, IgError> {
         let url = format!("{}/positions/otc", self.base_url);
-        let resp = self.authed_request(reqwest::Method::POST, &url, "2", Some(req)).await?;
+        let resp = self
+            .authed_request(reqwest::Method::POST, &url, "2", Some(req))
+            .await?;
         let deal_ref: DealReferenceResponse = resp.json().await.map_err(IgError::Network)?;
         Ok(deal_ref)
     }
@@ -189,7 +193,9 @@ impl IgClient {
         deal_ref: &str,
     ) -> Result<DealConfirmation, IgError> {
         let url = format!("{}/confirms/{}", self.base_url, deal_ref);
-        let resp = self.authed_request(reqwest::Method::GET, &url, "1", None::<&()>).await?;
+        let resp = self
+            .authed_request(reqwest::Method::GET, &url, "1", None::<&()>)
+            .await?;
         let confirmation: DealConfirmation = resp.json().await.map_err(IgError::Network)?;
         Ok(confirmation)
     }
@@ -198,7 +204,10 @@ impl IgClient {
 
     fn auth_headers(&self, version: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert("X-IG-API-KEY", HeaderValue::from_str(&self.api_key).unwrap());
+        headers.insert(
+            "X-IG-API-KEY",
+            HeaderValue::from_str(&self.api_key).unwrap(),
+        );
         headers.insert("VERSION", HeaderValue::from_str(version).unwrap());
         headers.insert(
             "Content-Type",
@@ -212,10 +221,7 @@ impl IgClient {
             headers.insert("CST", HeaderValue::from_str(cst).unwrap());
         }
         if let Some(token) = &self.security_token {
-            headers.insert(
-                "X-SECURITY-TOKEN",
-                HeaderValue::from_str(token).unwrap(),
-            );
+            headers.insert("X-SECURITY-TOKEN", HeaderValue::from_str(token).unwrap());
         }
         headers
     }
@@ -233,7 +239,10 @@ impl IgClient {
         for attempt in 0..=MAX_RETRIES {
             self.enforce_rate_limit().await;
 
-            let mut req_builder = self.http.request(method.clone(), url).headers(self.auth_headers(version));
+            let mut req_builder = self
+                .http
+                .request(method.clone(), url)
+                .headers(self.auth_headers(version));
             if let Some(b) = body {
                 req_builder = req_builder.json(b);
             }
@@ -255,7 +264,11 @@ impl IgClient {
             // Retry on 5xx (not on last attempt)
             if status >= 500 && attempt < MAX_RETRIES {
                 let backoff = Duration::from_secs(1 << attempt);
-                eprintln!("  IG: {status} on attempt {}, retrying in {:?}...", attempt + 1, backoff);
+                eprintln!(
+                    "  IG: {status} on attempt {}, retrying in {:?}...",
+                    attempt + 1,
+                    backoff
+                );
                 tokio::time::sleep(backoff).await;
                 continue;
             }
@@ -327,7 +340,10 @@ mod tests {
         assert_eq!(session.current_account_id, "Z69YJL");
         assert!(client.is_authenticated());
         assert_eq!(client.cst.as_deref(), Some("test-cst-token"));
-        assert_eq!(client.security_token.as_deref(), Some("test-security-token"));
+        assert_eq!(
+            client.security_token.as_deref(),
+            Some("test-security-token")
+        );
 
         mock.assert_async().await;
     }
@@ -438,14 +454,16 @@ mod tests {
         let confirm_mock = server
             .mock("GET", "/confirms/REF123")
             .with_status(200)
-            .with_body(r#"{
+            .with_body(
+                r#"{
                 "dealId": "DEAL456",
                 "dealReference": "REF123",
                 "dealStatus": "ACCEPTED",
                 "reason": "SUCCESS",
                 "level": 1.2650,
                 "size": 0.5
-            }"#)
+            }"#,
+            )
             .create_async()
             .await;
 
@@ -567,7 +585,10 @@ mod tests {
 
         let result = client.create_position(&req).await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), IgError::ApiError { status: 400, .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            IgError::ApiError { status: 400, .. }
+        ));
 
         mock.assert_async().await;
     }
@@ -583,7 +604,7 @@ mod tests {
             .with_header("CST", "cst1")
             .with_header("X-SECURITY-TOKEN", "sec1")
             .with_body(r#"{"currentAccountId":"Z69YJL"}"#)
-            .expect(2)  // called twice: initial + re-auth
+            .expect(2) // called twice: initial + re-auth
             .create_async()
             .await;
 

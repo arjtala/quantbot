@@ -149,10 +149,9 @@ mod tests {
     #[test]
     fn portfolio_nav_and_exposure() {
         let mut state = PortfolioState::new(100_000.0);
-        state.positions.insert(
-            "SPY".into(),
-            Position::new("SPY".into(), 10.0, 500.0),
-        );
+        state
+            .positions
+            .insert("SPY".into(), Position::new("SPY".into(), 10.0, 500.0));
         state.positions.insert(
             "GLD".into(),
             Position {

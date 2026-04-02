@@ -62,43 +62,55 @@ impl ContractSpec {
     /// IG default specs for the 6 tradeable instruments.
     pub fn ig_defaults() -> HashMap<String, ContractSpec> {
         let mut m = HashMap::new();
-        m.insert("GLD".into(), ContractSpec {
-            symbol: "GLD".into(),
-            asset_class: AssetClass::Equity,
-            point_value: 1.0,
-            min_deal_size: 1.0,
-            lot_step: 1.0,
-            margin_pct: 0.20,
-            spread_bps: 10.0,
-        });
-        m.insert("GC=F".into(), ContractSpec {
-            symbol: "GC=F".into(),
-            asset_class: AssetClass::Futures,
-            point_value: 100.0,
-            min_deal_size: 1.0,
-            lot_step: 1.0,
-            margin_pct: 0.05,
-            spread_bps: 10.0,
-        });
-        m.insert("SPY".into(), ContractSpec {
-            symbol: "SPY".into(),
-            asset_class: AssetClass::Equity,
-            point_value: 1.0,
-            min_deal_size: 1.0,
-            lot_step: 1.0,
-            margin_pct: 0.20,
-            spread_bps: 5.0,
-        });
-        for sym in &["GBPUSD=X", "USDCHF=X", "USDJPY=X"] {
-            m.insert(sym.to_string(), ContractSpec {
-                symbol: sym.to_string(),
-                asset_class: AssetClass::Fx,
+        m.insert(
+            "GLD".into(),
+            ContractSpec {
+                symbol: "GLD".into(),
+                asset_class: AssetClass::Equity,
                 point_value: 1.0,
-                min_deal_size: 0.5,
-                lot_step: 0.1,
-                margin_pct: 0.0333,
-                spread_bps: 3.0,
-            });
+                min_deal_size: 1.0,
+                lot_step: 1.0,
+                margin_pct: 0.20,
+                spread_bps: 10.0,
+            },
+        );
+        m.insert(
+            "GC=F".into(),
+            ContractSpec {
+                symbol: "GC=F".into(),
+                asset_class: AssetClass::Futures,
+                point_value: 100.0,
+                min_deal_size: 1.0,
+                lot_step: 1.0,
+                margin_pct: 0.05,
+                spread_bps: 10.0,
+            },
+        );
+        m.insert(
+            "SPY".into(),
+            ContractSpec {
+                symbol: "SPY".into(),
+                asset_class: AssetClass::Equity,
+                point_value: 1.0,
+                min_deal_size: 1.0,
+                lot_step: 1.0,
+                margin_pct: 0.20,
+                spread_bps: 5.0,
+            },
+        );
+        for sym in &["GBPUSD=X", "USDCHF=X", "USDJPY=X"] {
+            m.insert(
+                sym.to_string(),
+                ContractSpec {
+                    symbol: sym.to_string(),
+                    asset_class: AssetClass::Fx,
+                    point_value: 1.0,
+                    min_deal_size: 0.5,
+                    lot_step: 0.1,
+                    margin_pct: 0.0333,
+                    spread_bps: 3.0,
+                },
+            );
         }
         m
     }
@@ -469,7 +481,9 @@ mod tests {
     #[test]
     fn sized_order_buy() {
         let router = ExecutionRouter::with_ig_defaults();
-        let order = router.create_sized_order("SPY", 10.0, 0.0, 500.0, 1.0).unwrap();
+        let order = router
+            .create_sized_order("SPY", 10.0, 0.0, 500.0, 1.0)
+            .unwrap();
         assert!(matches!(order.side, OrderSide::Buy));
         assert_eq!(order.quantity, 10.0);
         assert!((order.notional - 5_000.0).abs() < 1e-10);
@@ -481,7 +495,9 @@ mod tests {
     #[test]
     fn sized_order_sell() {
         let router = ExecutionRouter::with_ig_defaults();
-        let order = router.create_sized_order("SPY", -5.0, 5.0, 500.0, 1.0).unwrap();
+        let order = router
+            .create_sized_order("SPY", -5.0, 5.0, 500.0, 1.0)
+            .unwrap();
         assert!(matches!(order.side, OrderSide::Sell));
         assert_eq!(order.quantity, 10.0);
     }
@@ -504,7 +520,9 @@ mod tests {
     #[test]
     fn sized_order_futures() {
         let router = ExecutionRouter::with_ig_defaults();
-        let order = router.create_sized_order("GC=F", 2.0, 0.0, 2000.0, 1.0).unwrap();
+        let order = router
+            .create_sized_order("GC=F", 2.0, 0.0, 2000.0, 1.0)
+            .unwrap();
         assert!(matches!(order.side, OrderSide::Buy));
         assert_eq!(order.quantity, 2.0);
         // notional = 2 * 2000 * 100 = 400_000
@@ -516,7 +534,9 @@ mod tests {
     #[test]
     fn sized_order_flip_cost_multiplier() {
         let router = ExecutionRouter::with_ig_defaults();
-        let order = router.create_sized_order("SPY", 10.0, 0.0, 500.0, 2.0).unwrap();
+        let order = router
+            .create_sized_order("SPY", 10.0, 0.0, 500.0, 2.0)
+            .unwrap();
         // spread cost doubled for flip
         assert!((order.spread_cost - 5.0).abs() < 1e-10);
     }

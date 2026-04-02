@@ -46,10 +46,7 @@ async fn ig_demo_round_trip() {
 
     // 2. Read initial positions
     let initial_positions = engine.get_positions().await.expect("get_positions failed");
-    eprintln!(
-        "  [OK] Initial positions: {} open",
-        initial_positions.len()
-    );
+    eprintln!("  [OK] Initial positions: {} open", initial_positions.len());
 
     // 3. Place a minimal BUY order on GBPUSD
     let order = OrderRequest {
@@ -74,9 +71,7 @@ async fn ig_demo_round_trip() {
 
     // 4. Verify position exists
     let positions = engine.get_positions().await.expect("get_positions failed");
-    let gbp_pos = positions
-        .iter()
-        .find(|p| p.instrument == "GBPUSD=X");
+    let gbp_pos = positions.iter().find(|p| p.instrument == "GBPUSD=X");
     assert!(gbp_pos.is_some(), "GBPUSD=X position not found after order");
     eprintln!(
         "  [OK] Position confirmed: size={}, level={:?}",
@@ -90,9 +85,7 @@ async fn ig_demo_round_trip() {
 
     // 6. Verify flat
     let final_positions = engine.get_positions().await.expect("get_positions failed");
-    let gbp_final = final_positions
-        .iter()
-        .find(|p| p.instrument == "GBPUSD=X");
+    let gbp_final = final_positions.iter().find(|p| p.instrument == "GBPUSD=X");
     assert!(
         gbp_final.is_none(),
         "GBPUSD=X position still exists after flatten"
