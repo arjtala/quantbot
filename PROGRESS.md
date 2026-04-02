@@ -389,7 +389,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A Weeks 1-3 complete, Week 3-4 next (IG API)** | 75 tests, clean clippy
+> **Status: In progress — Track A IG execution live on demo** | 100+ tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -401,9 +401,9 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 
 ### Why IG Over IBKR
 - **Tax-free profits** via spread betting (UK: no CGT, no stamp duty)
-- **Rust crate** `ig_trading_api` v0.3.0 — REST + Lightstreamer streaming, async/Tokio
+- Direct reqwest wrapper (~5 IG REST endpoints), async/Tokio
 - **Demo account** ready (Z69YJL, £10K paper), identical API to live
-- **Demo→Live = one config change** (just the base URL)
+- **Demo→Live = one config change** (just the base URL + environment)
 - IBKR can be added later via same `ExecutionEngine` trait if needed
 
 ### Track A — Proven Alpha (Weeks 1-4)
@@ -418,8 +418,44 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 | **2** | Backtest engine + metrics + validation gate | ✅ **PASSED** |
 | **3** | Per-instrument execution router + spread cost model | ✅ Done |
 | **3** | CLI (clap — backtest, paper-trade modes) + paper-trade state persistence | ✅ Done |
-| **3-4** | IG execution engine (`ig_trading_api`) + Paper engine | ← NEXT |
-| **4** | SQLite memory + risk manager + circuit breaker | |
+| **3-4** | ExecutionEngine trait + TOML config + PaperExecutionEngine | ✅ Done |
+| **3-4** | IG REST client (auth, positions, orders, confirm, flatten) | ✅ Done |
+| **3-4** | Safety valves, reconciliation, circuit breaker | ✅ Done |
+| **3-4** | IG demo round-trip verified (auth→place→confirm→flatten) | ✅ **PASSED** |
+| **4** | IG spread-bet sizing calibration (ig_point_value per instrument) | ✅ Done |
+| **4** | Persistent audit logging (JSONL) + run summaries | ← NEXT |
+
+#### IG Execution Architecture (PRs 1-3 Complete)
+
+**PR 1 — Boundary + Config + Compile-Time Shape:**
+- [x] `src/execution/traits.rs` — `ExecutionEngine` trait (async methods: health_check, get_positions, place_orders, get_order_status, flatten_all)
+- [x] `src/config.rs` — `AppConfig` with TOML parsing, `IgConfig`, `InstrumentConfig` with `ig_point_value`
+- [x] `src/execution/paper.rs` — `PaperExecutionEngine` with simulated fills
+- [x] `src/execution/ig/` — IG module: client, engine, types, errors, mapping
+- [x] `config.example.toml` — All 6 instruments with epics + sizing config
+
+**PR 2 — IG Demo Round-Trip:**
+- [x] `src/execution/ig/client.rs` — Full `IgClient`: auth (CST/X-SECURITY-TOKEN), rate limiting (1050ms), retry on 5xx, re-auth on 401
+- [x] `src/execution/ig/engine.rs` — `IgExecutionEngine` via `tokio::sync::Mutex<IgClient>`: sequential orders with 500ms confirm delay
+- [x] `src/execution/ig/mapping.rs` — `SymbolMapper`: bidirectional symbol↔epic lookup
+- [x] Safety valves: `--instrument`, `--max-orders`, `--max-size`, `--flatten`
+- [x] JSONL audit logging to `data/audit/`
+- [x] `tests/ig_demo_roundtrip.rs` — `#[ignore]` integration test: auth→place 0.5 GBPUSD→confirm→flatten→verify flat
+- [x] **IG demo round-trip passing** (12s end-to-end)
+
+**PR 3 — Reconciliation + Safety:**
+- [x] `src/execution/reconcile.rs` — `positions_to_signed()`, `compute_deltas()`, `verify_positions()` with per-instrument tolerance
+- [x] `src/execution/circuit_breaker.rs` — Consecutive failure tracking, pre-trade order count/size checks
+- [x] `positions` subcommand: `quantbot positions --config config.toml [--json]`
+- [x] Live loop: generate targets → fetch live positions → compute deltas → circuit breaker → place deltas → post-trade verify → save actual quantities
+- [x] Unknown epics → bail (fail-fast, not silent skip)
+- [x] Dust deltas tracked and reported (sub-minimum deltas visible, not hidden)
+- [x] Running twice → 0 orders on second run (idempotency)
+
+**Sizing Calibration:**
+- [x] `ig_point_value` in `InstrumentConfig` — converts notional to IG deal size (£/pip for FX, £/point for equity/commodity)
+- [x] `IgConfig::to_execution_router()` — builds ExecutionRouter with IG-correct point values
+- [x] Live path uses `BacktestEngine::new_with_router()` — backtest point values unchanged
 
 #### Validation Results (2026-03-31)
 
@@ -434,7 +470,7 @@ Key fixes: `eval_start` warmup/eval separation, risk limit ordering (gross scali
 Remaining +5-11% delta on 252-day tests likely from: EWMA `adjust=True` edge effects in first ~60 bars, weekend date handling (crypto 1551 bars vs equity 1065), minor float precision. Not blocking.
 
 Track A checklist:
-- [x] `Cargo.toml` — Core deps (serde, chrono, thiserror, anyhow, csv)
+- [x] `Cargo.toml` — Core deps (serde, chrono, thiserror, anyhow, csv, tokio, reqwest, toml, clap)
 - [x] `src/core/signal.rs` — Signal struct + Direction enum + validation
 - [x] `src/core/portfolio.rs` — Position, Order, Fill, PortfolioState (NAV, exposure)
 - [x] `src/core/bar.rs` — Bar struct + BarSeries with validation (non-empty, sorted)
@@ -447,22 +483,24 @@ Track A checklist:
 - [x] Python code relocated to `lib/` — Rust owns `src/`, Python is reference implementation
 - [x] `tests/validate_sharpe.rs` — 4 validation tests + benchmark + per-instrument PnL diagnostics
 - [x] **Validation gate: Rust Sharpe matches Python** ✅ PASSED
+- [x] `src/main.rs` — CLI (clap — backtest, paper-trade, live, positions subcommands)
+- [x] `src/execution/router.rs` — ExecutionRouter: per-instrument ContractSpec, lot rounding, direction-aware spread costs
+- [x] `src/backtest/engine.rs` — `generate_targets()` for paper-trade + live modes
+- [x] Paper-trade state persistence — `PaperTradeState` JSON file, `--state-file`/`--reset` CLI args
+- [x] `src/config.rs` — TOML config with `ig_point_value` per instrument, `IgConfig::to_execution_router()`
+- [x] `src/execution/traits.rs` — `ExecutionEngine` trait (async, RPITIT)
+- [x] `src/execution/paper.rs` — PaperExecutionEngine with simulated fills
+- [x] `src/execution/ig/client.rs` — IG REST client (auth, positions, create/close, confirm, rate limiting, retry)
+- [x] `src/execution/ig/engine.rs` — IgExecutionEngine (tokio::sync::Mutex, sequential orders with confirmation)
+- [x] `src/execution/ig/mapping.rs` — SymbolMapper: bidirectional symbol↔epic lookup
+- [x] `src/execution/reconcile.rs` — Reconciliation: positions_to_signed, compute_deltas, verify_positions
+- [x] `src/execution/circuit_breaker.rs` — CircuitBreaker: consecutive failures, pre-trade checks
+- [x] `tests/ig_demo_roundtrip.rs` — Integration test: full IG demo round-trip
+- [x] `config.example.toml` — All 6 instruments with IG epics + sizing calibration
 - [ ] `src/agents/decision/router.rs` — Per-instrument strategy router (gold: combiner, equity: TSMOM, forex: indicator-heavy) ← Track B
-- [x] `src/main.rs` — CLI (clap — backtest + paper-trade subcommands, stubs for live/positions)
-- [x] `src/execution/router.rs` — ExecutionRouter: per-instrument ContractSpec, lot rounding, direction-aware spread costs (SpreadCostTracker 0x/1x/2x), integrated into BacktestEngine
-- [x] `src/backtest/engine.rs` — `generate_targets()` for paper-trade mode: single-shot signal→risk limits→sizing→orders pipeline
-- [x] Paper-trade state persistence — `PaperTradeState` JSON file, `--state-file`/`--reset` CLI args, diff-based rebalance orders
-- [ ] `src/config.rs` — Layered config (TOML + env), IG credentials, model selection
-- [ ] `src/execution/traits.rs` — `ExecutionEngine` trait
-- [ ] `src/execution/paper.rs` — Local paper simulation
-- [ ] `src/execution/ig/` — IG REST API (auth, orders, streaming, epics, rate_limiter) ← NEXT
 - [ ] `src/execution/recording.rs` — Decorator: logs all orders/fills to SQLite
 - [ ] `src/memory/store.rs` — SQLite schema (signal_log, decision_log, agent_memory, order_log)
 - [ ] `src/risk/agent.rs` — Position sizing, drawdown limits, veto authority
-- [ ] `src/risk/circuit_breaker.rs` — Auto-flatten after 3 failures, daily loss limit, graceful degradation to TSMOM-only
-- [ ] Integration tests: IG demo round-trip
-
-**75 tests passing, clean clippy, 0 warnings.** Python reference implementation in `lib/`. **Validation gate passed.**
 
 ### Track B — Fin-R1 Indicator Agent (Weeks 3-5) — UNCONDITIONAL (Gate Passed)
 
@@ -505,26 +543,26 @@ Alternative quant signals (if vision agents don't pan out):
 
 ### Crate Ecosystem
 
-| Dependency | Crate | Track | Purpose |
-|---|---|---|---|
-| `tokio` | 1.x | A | Async runtime, streaming |
-| `polars` | 0.46+ | A | OHLCV DataFrames |
-| `ndarray` | 0.16+ | A | EWMA, rolling stats |
-| `ig_trading_api` | 0.3+ | A | IG REST + Lightstreamer |
-| `yahoo_finance_api` | 2.x | A | Backtest data |
-| `rusqlite` | 0.32+ | A | SQLite memory/logs |
-| `clap` | 4.x | A | CLI |
-| `config` + `dotenvy` | latest | A | Layered config |
-| `serde` + `serde_json` | 1.x | A | Serialization |
-| `tracing` | 0.1+ | A | Structured logging |
-| `anyhow` + `thiserror` | latest | A | Error handling |
-| `chrono` | 0.4+ | A | Time handling |
-| `async-trait` | 0.1+ | A | ExecutionEngine trait |
-| `reqwest` | 0.12+ | A | HTTP fallback |
-| `rig-core` | 0.11+ | B | LLM client (multi-provider) |
-| `ta` | 0.5+ | B | Technical analysis |
-| `plotters` | 0.3+ | B | Chart rendering for vision agents |
-| `image` + `base64` | latest | B | Image encoding for vision LLM |
+| Dependency | Crate | Track | Status | Purpose |
+|---|---|---|---|---|
+| `tokio` | 1.x | A | ✅ | Async runtime |
+| `reqwest` | 0.12 (native-tls) | A | ✅ | IG REST API client |
+| `toml` | 0.8 | A | ✅ | Config parsing |
+| `clap` | 4.x | A | ✅ | CLI |
+| `serde` + `serde_json` | 1.x | A | ✅ | Serialization |
+| `anyhow` + `thiserror` | latest | A | ✅ | Error handling |
+| `chrono` | 0.4+ | A | ✅ | Time handling |
+| `csv` | 1.x | A | ✅ | Data loading |
+| `mockito` | 1.x | A (dev) | ✅ | HTTP mocking for IG client tests |
+| `tempfile` | 3.x | A (dev) | ✅ | Temp dirs for config tests |
+| `rusqlite` | 0.32+ | A | Planned | SQLite memory/logs |
+| `tracing` | 0.1+ | A | Planned | Structured logging |
+| `rig-core` | 0.11+ | B | Planned | LLM client (multi-provider) |
+| `ta` | 0.5+ | B | Planned | Technical analysis |
+| `plotters` | 0.3+ | B | Planned | Chart rendering for vision agents |
+| `image` + `base64` | latest | B | Planned | Image encoding for vision LLM |
+
+Note: `polars`, `ndarray`, `ig_trading_api`, `async-trait` were originally planned but not needed. Direct reqwest wrapper replaced ig_trading_api. RPITIT replaced async-trait. Pure Rust iteration replaced ndarray.
 
 ### Key Design Decisions
 

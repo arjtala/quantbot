@@ -5,32 +5,44 @@ engine = "ig"
 environment = "DEMO"
 account_id = "Z69YJL"
 
+# IG spread-bet sizing:
+#   deal_size = (weight × NAV) / (price × ig_point_value)
+#   FX major pairs (pip = 0.0001): ig_point_value = 10000
+#   FX JPY pairs (pip = 0.01):    ig_point_value = 100
+#   Equity/commodity per-point:    ig_point_value = 1
+
 [execution.ig.instruments."SPY"]
 epic = "IX.D.SPTRD.DAILY.IP"
 min_size = 0.1
 size_step = 0.1
+ig_point_value = 1.0
 
 [execution.ig.instruments."GC=F"]
 epic = "CC.D.GC.USS.IP"
 min_size = 1.0
 size_step = 1.0
+ig_point_value = 1.0
 
 [execution.ig.instruments."GLD"]
 epic = "UC.D.GLDUS.DAILY.IP"
 min_size = 1.0
 size_step = 1.0
+ig_point_value = 1.0
 
 [execution.ig.instruments."GBPUSD=X"]
 epic = "CS.D.GBPUSD.TODAY.IP"
 min_size = 0.5
 size_step = 0.1
+ig_point_value = 10000.0
 
 [execution.ig.instruments."USDCHF=X"]
 epic = "CS.D.USDCHF.TODAY.IP"
 min_size = 0.5
 size_step = 0.1
+ig_point_value = 10000.0
 
 [execution.ig.instruments."USDJPY=X"]
 epic = "CS.D.USDJPY.TODAY.IP"
 min_size = 0.5
 size_step = 0.1
+ig_point_value = 100.0

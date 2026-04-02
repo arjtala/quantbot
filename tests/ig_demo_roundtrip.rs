@@ -20,6 +20,7 @@ fn demo_config() -> IgConfig {
             size_step: 0.1,
             currency_code: None,
             expiry: None,
+            ig_point_value: Some(10000.0),
         },
     );
 

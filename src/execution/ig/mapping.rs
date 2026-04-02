@@ -88,6 +88,7 @@ mod tests {
                 size_step: 0.1,
                 currency_code: None,
                 expiry: None,
+                ig_point_value: None,
             },
         );
         instruments.insert(
@@ -98,6 +99,7 @@ mod tests {
                 size_step: 1.0,
                 currency_code: Some("USD".to_string()),
                 expiry: Some("MAR-26".to_string()),
+                ig_point_value: None,
             },
         );
         IgConfig {

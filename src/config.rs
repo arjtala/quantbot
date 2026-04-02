@@ -4,6 +4,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::execution::router::{ContractSpec, ExecutionRouter};
+
 // ─── App Config ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,6 +72,36 @@ impl IgConfig {
             IgEnvironment::Live => "https://api.ig.com/gateway/deal",
         }
     }
+
+    /// Build an ExecutionRouter using config-driven point values for IG spread-bet sizing.
+    ///
+    /// This produces deal sizes in IG units (£/point for equities, £/pip for FX)
+    /// rather than raw quantities. The backtest router uses different point values
+    /// (e.g., GC=F = 100 for futures contracts) and should NOT be used for live sizing.
+    pub fn to_execution_router(&self) -> ExecutionRouter {
+        let mut specs = HashMap::new();
+
+        // Use IG defaults as base, then override with config values
+        let defaults = ContractSpec::ig_defaults();
+
+        for (symbol, inst) in &self.instruments {
+            let base = defaults.get(symbol).cloned().unwrap_or_else(|| ContractSpec::default_equity(symbol));
+            specs.insert(
+                symbol.clone(),
+                ContractSpec {
+                    symbol: symbol.clone(),
+                    asset_class: base.asset_class,
+                    point_value: inst.point_value(),
+                    min_deal_size: inst.min_size,
+                    lot_step: inst.size_step,
+                    margin_pct: base.margin_pct,
+                    spread_bps: base.spread_bps,
+                },
+            );
+        }
+
+        ExecutionRouter::new(specs)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +118,15 @@ pub struct InstrumentConfig {
     pub size_step: f64,
     pub currency_code: Option<String>,
     pub expiry: Option<String>,
+    /// Point value for IG spread-bet sizing.
+    ///
+    /// Converts notional exposure to IG deal size:
+    ///   `deal_size = (weight × NAV) / (price × ig_point_value)`
+    ///
+    /// - FX major pairs (pip = 0.0001): 10000.0
+    /// - FX JPY pairs (pip = 0.01): 100.0
+    /// - Equity/commodity per-point: 1.0
+    pub ig_point_value: Option<f64>,
 }
 
 impl InstrumentConfig {
@@ -95,6 +136,11 @@ impl InstrumentConfig {
 
     pub fn expiry(&self) -> &str {
         self.expiry.as_deref().unwrap_or("DFB")
+    }
+
+    /// Point value for IG spread-bet sizing. Defaults to 1.0.
+    pub fn point_value(&self) -> f64 {
+        self.ig_point_value.unwrap_or(1.0)
     }
 }
 

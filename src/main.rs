@@ -496,7 +496,10 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         max_gross_leverage: args.max_gross_leverage,
         max_position_pct: args.max_position_pct,
     };
-    let bt_engine = BacktestEngine::new(config);
+    // Use IG-calibrated point values so generate_targets() produces deal sizes
+    // in IG spread-bet units (£/pip for FX, £/point for equity/commodity)
+    let ig_router = ig_config.to_execution_router();
+    let bt_engine = BacktestEngine::new_with_router(config, ig_router);
     let agent = TSMOMAgent::new();
 
     // For target generation, use empty quantities (we'll reconcile against live positions)
