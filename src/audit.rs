@@ -71,9 +71,13 @@ pub struct MismatchEntry {
 
 // ─── Audit Event ────────────────────────────────────────────────
 
+/// Schema version. Bump when event payloads change in breaking ways.
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// Top-level JSONL record. One per line in the audit file.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditRecord {
+    pub schema_version: u32,
     pub ts: String,
     pub run_id: String,
     pub event: String,
@@ -138,6 +142,7 @@ impl AuditLogger {
     /// and prints to stderr.
     fn log(&mut self, event: &str, level: &str, data: serde_json::Value) {
         let record = AuditRecord {
+            schema_version: SCHEMA_VERSION,
             ts: Utc::now().to_rfc3339(),
             run_id: self.run_id.id.clone(),
             event: event.to_string(),
@@ -184,6 +189,8 @@ impl AuditLogger {
         config_path: &str,
         instruments: &[String],
         nav: f64,
+        ig_environment: Option<&str>,
+        state_file: Option<&str>,
     ) {
         self.log(
             "run_start",
@@ -195,6 +202,8 @@ impl AuditLogger {
                 "config_path": config_path,
                 "instruments": instruments,
                 "nav_usd": nav,
+                "ig_environment": ig_environment,
+                "state_file": state_file,
             }),
         );
     }
@@ -260,6 +269,17 @@ impl AuditLogger {
                 "order_count": order_count,
                 "max_order_size": max_order_size,
                 "reason": reason,
+            }),
+        );
+    }
+
+    pub fn log_execution_skipped(&mut self, reason: &str, order_count: usize) {
+        self.log(
+            "execution_skipped",
+            "INFO",
+            serde_json::json!({
+                "reason": reason,
+                "order_count": order_count,
             }),
         );
     }
@@ -456,7 +476,7 @@ mod tests {
         assert!(expected_path.exists());
 
         // Write an event and verify JSONL
-        logger.log_run_start("live", "ig", false, "config.toml", &["SPY".into()], 1e6);
+        logger.log_run_start("live", "ig", false, "config.toml", &["SPY".into()], 1e6, Some("DEMO"), Some("data/live-state.json"));
 
         // Flush
         if let Some(w) = logger.writer.as_mut() {
@@ -468,10 +488,13 @@ mod tests {
         assert_eq!(lines.len(), 1);
 
         let record: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        assert_eq!(record["schema_version"], 1);
         assert_eq!(record["event"], "run_start");
         assert_eq!(record["level"], "INFO");
         assert_eq!(record["data"]["engine"], "ig");
         assert_eq!(record["data"]["dry_run"], false);
+        assert_eq!(record["data"]["ig_environment"], "DEMO");
+        assert_eq!(record["data"]["state_file"], "data/live-state.json");
     }
 
     #[test]
@@ -512,7 +535,7 @@ mod tests {
         let run_id_str = rid.id.clone();
         let mut logger = AuditLogger::new(rid, dir.path());
 
-        logger.log_run_start("live", "ig", true, "config.toml", &["SPY".into()], 1e6);
+        logger.log_run_start("live", "ig", true, "config.toml", &["SPY".into()], 1e6, Some("DEMO"), None);
         logger.log_targets("2025-03-31", 1e6, &[TargetEntry {
             instrument: "SPY".into(),
             signed_qty: -282.0,
@@ -544,6 +567,7 @@ mod tests {
         // Every line must parse as valid JSON with required fields
         for line in &lines {
             let record: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(record["schema_version"], 1);
             assert!(record["ts"].is_string());
             assert_eq!(record["run_id"], run_id_str);
             assert!(record["event"].is_string());

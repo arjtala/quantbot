@@ -492,6 +492,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         EngineType::Ig => "ig",
         EngineType::Paper => "paper",
     };
+    let ig_env = ig_config.environment;
     audit.log_run_start(
         "live",
         engine_name,
@@ -499,6 +500,11 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         &args.config.display().to_string(),
         &symbols,
         nav,
+        Some(match ig_env {
+            quantbot::config::IgEnvironment::Demo => "DEMO",
+            quantbot::config::IgEnvironment::Live => "LIVE",
+        }),
+        Some(&args.state_file.display().to_string()),
     );
 
     let config = BacktestConfig {
@@ -710,6 +716,7 @@ async fn run_rebalance(
 
     if args.dry_run {
         eprintln!("  --dry-run: no orders placed");
+        audit.log_execution_skipped("dry_run", delta_orders.len());
         finish(
             audit, "DRY_RUN", 0, 0, 0, dust_skipped, 0, start_time, args.json,
         );
@@ -718,6 +725,7 @@ async fn run_rebalance(
 
     if delta_orders.is_empty() {
         eprintln!("  No orders to place (already at target)");
+        audit.log_execution_skipped("already_at_target", 0);
     } else {
         // ── Execute ────────────────────────────────────────────
         orders_placed = delta_orders.len();
