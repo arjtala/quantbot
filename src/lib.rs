@@ -4,4 +4,6 @@ pub mod backtest;
 pub mod config;
 pub mod core;
 pub mod data;
+pub mod db;
 pub mod execution;
+pub mod recording;

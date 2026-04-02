@@ -17,12 +17,14 @@ use quantbot::core::portfolio::OrderSide;
 use quantbot::core::signal::SignalDirection;
 use quantbot::core::universe::TRADEABLE_UNIVERSE;
 use quantbot::data::loader::CsvLoader;
+use quantbot::db::Db;
 use quantbot::execution::circuit_breaker::CircuitBreaker;
 use quantbot::execution::ig::engine::IgExecutionEngine;
 use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::reconcile;
 use quantbot::execution::router::SizedOrder;
 use quantbot::execution::traits::{ExecutionEngine, OrderRequest};
+use quantbot::recording::Recorder;
 
 #[derive(Parser)]
 #[command(name = "quantbot", version, about = "Quantitative trading system")]
@@ -41,6 +43,8 @@ enum Command {
     Live(LiveArgs),
     /// Show current IG positions
     Positions(PositionsArgs),
+    /// Query trading history from SQLite database
+    History(HistoryArgs),
 }
 
 #[derive(Parser)]
@@ -48,6 +52,29 @@ struct PositionsArgs {
     /// Path to TOML configuration file
     #[arg(long)]
     config: PathBuf,
+
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct HistoryArgs {
+    /// Path to SQLite database
+    #[arg(long, default_value = "data/quantbot.db")]
+    db: PathBuf,
+
+    /// Show details for a specific run ID
+    #[arg(long)]
+    run: Option<String>,
+
+    /// Filter by instrument
+    #[arg(long)]
+    instrument: Option<String>,
+
+    /// Number of recent runs to show (default: 10)
+    #[arg(long, default_value_t = 10)]
+    last: usize,
 
     /// Output as JSON
     #[arg(long)]
@@ -244,6 +271,7 @@ async fn main() {
         Command::PaperTrade(args) => run_paper_trade(args),
         Command::Live(args) => run_live(args).await,
         Command::Positions(args) => run_positions(args).await,
+        Command::History(args) => run_history(args),
     };
 
     if let Err(e) = result {
@@ -529,22 +557,52 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         .iter()
         .map(|(sym, qty)| TargetEntry {
             instrument: sym.clone(),
-            signed_qty: *qty,
+            signed_deal_size: (*qty * 10.0).round() / 10.0,
             weight: snapshot.target_weights.get(sym).copied().unwrap_or(0.0),
         })
         .collect();
     audit.log_targets(&snapshot.date.to_string(), nav, &target_entries);
 
+    // ── SQLite recording ────────────────────────────────────────
+    let db_path = args.data_dir.join("quantbot.db");
+    let recorder = match Db::open(&db_path) {
+        Ok(db) => {
+            let config_json = serde_json::json!({
+                "engine": engine_name,
+                "dry_run": args.dry_run,
+                "instruments": &symbols,
+                "config_path": args.config.display().to_string(),
+            })
+            .to_string();
+            let rec = Recorder::new(db, audit.run_id(), &config_json, nav);
+
+            // Record signals from snapshot
+            let signal_map: HashMap<String, (SignalDirection, f64, f64)> = snapshot
+                .signals
+                .iter()
+                .map(|(sym, sig)| (sym.clone(), (sig.direction, sig.strength, sig.confidence)))
+                .collect();
+            rec.record_signals(&target_entries, &signal_map);
+            rec.record_target_positions(&target_entries);
+
+            Some(rec)
+        }
+        Err(e) => {
+            eprintln!("  WARN: failed to open SQLite database {}: {e}", db_path.display());
+            None
+        }
+    };
+
     // ── Construct engine and run rebalance ───────────────────
     let result = match app_config.execution.engine {
         EngineType::Paper => {
             let engine = PaperExecutionEngine::new();
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, &mut audit).await
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref()).await
         }
         EngineType::Ig => {
             let engine = IgExecutionEngine::new(ig_config)
                 .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, &mut audit).await
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref()).await
         }
     };
 
@@ -552,6 +610,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_rebalance(
     engine: &impl ExecutionEngine,
     snapshot: &TargetSnapshot,
@@ -559,7 +618,9 @@ async fn run_rebalance(
     ig_config: &quantbot::config::IgConfig,
     args: &LiveArgs,
     nav: f64,
+    engine_name: &str,
     audit: &mut AuditLogger,
+    recorder: Option<&Recorder>,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
     let mut orders_placed: usize = 0;
@@ -575,7 +636,8 @@ async fn run_rebalance(
                   dust_skipped: usize,
                   mismatches: usize,
                   start_time: std::time::Instant,
-                  json_flag: bool| {
+                  json_flag: bool,
+                  recorder: Option<&Recorder>| {
         let summary = RunSummary {
             run_id: audit.run_id().to_string(),
             outcome: outcome.to_string(),
@@ -590,6 +652,10 @@ async fn run_rebalance(
         };
         audit.log_run_end(outcome, &summary);
 
+        if let Some(rec) = recorder {
+            rec.record_run_end(outcome, summary.duration_ms);
+        }
+
         if json_flag {
             if let Ok(json) = serde_json::to_string_pretty(&summary) {
                 println!("{json}");
@@ -601,6 +667,8 @@ async fn run_rebalance(
 
     eprintln!("  Authenticating...");
     engine.health_check().await.context("health check failed")?;
+    audit.log_auth_ok(engine_name);
+    audit.log_health_check_ok();
     eprintln!("  Health check passed");
 
     // ── Fetch actual positions and reconcile ────────────────────
@@ -616,6 +684,10 @@ async fn run_rebalance(
     }
 
     audit.log_positions_fetched(&audit::positions_to_entries(&actual_signed));
+
+    if let Some(rec) = recorder {
+        rec.record_actual_positions(&actual_signed);
+    }
 
     // Filter target quantities to only requested instruments
     let target_quantities: HashMap<String, f64> = snapshot
@@ -635,7 +707,7 @@ async fn run_rebalance(
         );
         audit.log_error(&msg);
         finish(
-            audit, "ERROR", 0, 0, 0, 0, 0, start_time, args.json,
+            audit, "ERROR", 0, 0, 0, 0, 0, start_time, args.json, recorder,
         );
         bail!("{msg} — fix config or remove from targets");
     }
@@ -704,7 +776,7 @@ async fn run_rebalance(
             eprintln!("  Flatten failed: {e}");
         }
         finish(
-            audit, "BREAKER_TRIPPED", 0, 0, 0, dust_skipped, 0, start_time, args.json,
+            audit, "BREAKER_TRIPPED", 0, 0, 0, dust_skipped, 0, start_time, args.json, recorder,
         );
         bail!("circuit breaker tripped: {reason}");
     }
@@ -718,7 +790,7 @@ async fn run_rebalance(
         eprintln!("  --dry-run: no orders placed");
         audit.log_execution_skipped("dry_run", delta_orders.len());
         finish(
-            audit, "DRY_RUN", 0, 0, 0, dust_skipped, 0, start_time, args.json,
+            audit, "DRY_RUN", 0, 0, 0, dust_skipped, 0, start_time, args.json, recorder,
         );
         return Ok(());
     }
@@ -730,6 +802,9 @@ async fn run_rebalance(
         // ── Execute ────────────────────────────────────────────
         orders_placed = delta_orders.len();
         audit.log_orders_submitted(&audit::order_requests_to_entries(&delta_orders));
+        if let Some(rec) = recorder {
+            rec.record_orders_submitted(&delta_orders);
+        }
 
         let acks = engine
             .place_orders(delta_orders.clone())
@@ -754,6 +829,9 @@ async fn run_rebalance(
             .count();
 
         audit.log_orders_confirmed(&ack_entries);
+        if let Some(rec) = recorder {
+            rec.record_orders_confirmed(&acks);
+        }
         breaker.record_success();
     }
 
@@ -784,6 +862,10 @@ async fn run_rebalance(
 
     audit.log_verify(mismatches.is_empty(), &audit::mismatches_to_entries(&mismatches));
 
+    if let Some(rec) = recorder {
+        rec.record_post_trade_positions(&post_signed);
+    }
+
     // ── Save state with actual quantities ──────────────────────
     save_state(
         &args.state_file,
@@ -811,6 +893,7 @@ async fn run_rebalance(
         mismatch_count,
         start_time,
         args.json,
+        recorder,
     );
 
     Ok(())
@@ -1032,6 +1115,128 @@ fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64, prior: Option<&Pape
     }
 
     println!("==================================================");
+}
+
+fn run_history(args: HistoryArgs) -> Result<()> {
+    let db = Db::open(&args.db)
+        .map_err(|e| anyhow::anyhow!("failed to open database {}: {e}", args.db.display()))?;
+
+    if let Some(run_id) = &args.run {
+        // Show details for a specific run
+        let orders = db
+            .orders_for_run(run_id)
+            .map_err(|e| anyhow::anyhow!("query failed: {e}"))?;
+        let signals = db
+            .signals_for_run(run_id)
+            .map_err(|e| anyhow::anyhow!("query failed: {e}"))?;
+
+        if args.json {
+            let output = serde_json::json!({
+                "run_id": run_id,
+                "signals": signals,
+                "orders": orders,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            if !signals.is_empty() {
+                eprintln!("  SIGNALS for {run_id}");
+                eprintln!(
+                    "  {:<15} {:>10} {:>10} {:>10} {:>10}",
+                    "Instrument", "Direction", "Strength", "Confidence", "Weight"
+                );
+                for s in &signals {
+                    eprintln!(
+                        "  {:<15} {:>10} {:>+10.2} {:>10.2} {:>+10.2}",
+                        s.instrument, s.direction, s.strength, s.confidence, s.weight
+                    );
+                }
+            }
+            if !orders.is_empty() {
+                eprintln!();
+                eprintln!("  ORDERS for {run_id}");
+                eprintln!(
+                    "  {:<15} {:>10} {:>10} {:>15} {:>10}",
+                    "Instrument", "Direction", "Size", "Deal Ref", "Status"
+                );
+                for o in &orders {
+                    eprintln!(
+                        "  {:<15} {:>10} {:>10.1} {:>15} {:>10}",
+                        o.instrument,
+                        o.direction,
+                        o.size,
+                        o.deal_reference.as_deref().unwrap_or("-"),
+                        o.status.as_deref().unwrap_or("-"),
+                    );
+                }
+            }
+            if signals.is_empty() && orders.is_empty() {
+                eprintln!("  No data found for run {run_id}");
+            }
+        }
+    } else if let Some(instrument) = &args.instrument {
+        // Show orders for a specific instrument
+        let orders = db
+            .orders_for_instrument(instrument, args.last)
+            .map_err(|e| anyhow::anyhow!("query failed: {e}"))?;
+
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&orders)?);
+        } else {
+            if orders.is_empty() {
+                eprintln!("  No orders found for {instrument}");
+            } else {
+                eprintln!("  ORDERS for {instrument} (last {})", args.last);
+                eprintln!(
+                    "  {:>10} {:>10} {:>15} {:>10} {:>24}",
+                    "Direction", "Size", "Deal Ref", "Status", "Time"
+                );
+                for o in &orders {
+                    eprintln!(
+                        "  {:>10} {:>10.1} {:>15} {:>10} {:>24}",
+                        o.direction,
+                        o.size,
+                        o.deal_reference.as_deref().unwrap_or("-"),
+                        o.status.as_deref().unwrap_or("-"),
+                        o.ts,
+                    );
+                }
+            }
+        }
+    } else {
+        // List recent runs
+        let runs = db
+            .list_runs(args.last)
+            .map_err(|e| anyhow::anyhow!("query failed: {e}"))?;
+
+        if args.json {
+            println!("{}", serde_json::to_string_pretty(&runs)?);
+        } else {
+            if runs.is_empty() {
+                eprintln!("  No runs found in {}", args.db.display());
+            } else {
+                eprintln!("  RECENT RUNS (last {})", args.last);
+                eprintln!(
+                    "  {:<22} {:>12} {:>12} {:>10}",
+                    "Run ID", "NAV", "Outcome", "Duration"
+                );
+                for r in &runs {
+                    let duration = r
+                        .duration_ms
+                        .map(|ms| format!("{:.1}s", ms as f64 / 1000.0))
+                        .unwrap_or_else(|| "-".into());
+                    eprintln!(
+                        "  {:<22} {:>12} {:>12} {:>10}",
+                        r.run_id,
+                        format!("${}", format_number(r.nav_usd)),
+                        r.outcome.as_deref().unwrap_or("IN_PROGRESS"),
+                        duration,
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Format a number with thousands separators (e.g., 1234567 → "1,234,567").
