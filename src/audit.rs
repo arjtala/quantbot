@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, SecondsFormat, Utc};
 use serde::Serialize;
 
+use crate::agents::risk::RiskCheckDetail;
 use crate::core::portfolio::OrderSide;
 use crate::execution::reconcile::{DustDelta, PositionMismatch};
 use crate::execution::traits::{DealStatus, OrderAck, OrderRequest};
@@ -225,6 +226,24 @@ impl AuditLogger {
         );
     }
 
+    pub fn log_risk_check(&mut self, detail: &RiskCheckDetail) {
+        let level = if detail.decision == "VETO" { "ERROR" } else { "INFO" };
+        self.log(
+            "risk_check",
+            level,
+            serde_json::json!({
+                "gross_leverage": detail.gross_leverage,
+                "max_position_leverage": detail.max_position_leverage,
+                "max_position_instrument": detail.max_position_instrument,
+                "drawdown_pct": detail.drawdown_pct,
+                "peak_nav": detail.peak_nav,
+                "current_nav": detail.current_nav,
+                "decision": detail.decision,
+                "reason": detail.reason,
+            }),
+        );
+    }
+
     pub fn log_targets(
         &mut self,
         eval_date: &str,
@@ -361,6 +380,7 @@ impl AuditLogger {
                 "dust_skipped": summary.dust_skipped,
                 "mismatches": summary.mismatches,
                 "audit_write_failed": self.write_failed,
+                "db_write_failed": summary.db_write_failed,
             }),
         );
     }
@@ -391,6 +411,7 @@ pub struct RunSummary {
     pub dust_skipped: usize,
     pub mismatches: usize,
     pub audit_write_failed: bool,
+    pub db_write_failed: bool,
     pub audit_path: String,
 }
 
@@ -398,7 +419,7 @@ impl std::fmt::Display for RunSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "RUN {} outcome={} orders={} confirmed={} rejected={} dust={} mismatches={} duration={:.2}s audit={}",
+            "RUN {} outcome={} orders={} confirmed={} rejected={} dust={} mismatches={} duration={:.2}s audit={} db_ok={}",
             self.run_id,
             self.outcome,
             self.orders_placed,
@@ -408,6 +429,7 @@ impl std::fmt::Display for RunSummary {
             self.mismatches,
             self.duration_ms as f64 / 1000.0,
             self.audit_path,
+            !self.db_write_failed,
         )
     }
 }
@@ -537,12 +559,14 @@ mod tests {
             dust_skipped: 1,
             mismatches: 0,
             audit_write_failed: false,
+            db_write_failed: false,
             audit_path: "data/audit/2026-04-02T133500Z.jsonl".into(),
         };
         let s = summary.to_string();
         assert!(s.contains("outcome=SUCCESS"));
         assert!(s.contains("orders=3"));
         assert!(s.contains("duration=12.05s"));
+        assert!(s.contains("db_ok=true"));
     }
 
     #[test]
@@ -568,6 +592,7 @@ mod tests {
             dust_skipped: 0,
             mismatches: 0,
             audit_write_failed: false,
+            db_write_failed: false,
             audit_path: format!("data/audit/{run_id_str}.jsonl"),
         });
 

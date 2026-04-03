@@ -5,6 +5,10 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 // ─── Schema ─────────────────────────────────────────────────────
 
+/// Schema version stored in PRAGMA user_version. Bump when making breaking
+/// changes to the table layout.
+pub const DB_SCHEMA_VERSION: i32 = 2;
+
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS runs (
     run_id      TEXT PRIMARY KEY,
@@ -52,6 +56,17 @@ CREATE INDEX IF NOT EXISTS idx_orders_run ON orders(run_id);
 CREATE INDEX IF NOT EXISTS idx_positions_run ON positions(run_id);
 CREATE INDEX IF NOT EXISTS idx_orders_instrument ON orders(instrument);
 CREATE INDEX IF NOT EXISTS idx_positions_instrument ON positions(instrument);
+CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+";
+
+/// SQL for the risk_state table added in schema v2.
+const RISK_STATE_SQL: &str = "
+CREATE TABLE IF NOT EXISTS risk_state (
+    key         TEXT PRIMARY KEY,
+    value       REAL NOT NULL,
+    updated_at  TEXT NOT NULL
+);
 ";
 
 // ─── Database ───────────────────────────────────────────────────
@@ -68,8 +83,9 @@ impl Db {
             std::fs::create_dir_all(parent).ok();
         }
         let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(SCHEMA_SQL)?;
+        Self::check_schema_version(&conn)?;
         Ok(Self { conn })
     }
 
@@ -79,10 +95,52 @@ impl Db {
         let conn = Connection::open_in_memory()?;
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         conn.execute_batch(SCHEMA_SQL)?;
+        Self::check_schema_version(&conn)?;
         Ok(Self { conn })
     }
 
+    /// Check and set PRAGMA user_version for schema migration tracking.
+    fn check_schema_version(conn: &Connection) -> SqlResult<()> {
+        let current: i32 = conn.query_row("PRAGMA user_version;", [], |row| row.get(0))?;
+        if current == 0 {
+            // Fresh database — create all tables and stamp with current version
+            conn.execute_batch(RISK_STATE_SQL)?;
+            conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
+        } else if current < DB_SCHEMA_VERSION {
+            // Run migrations
+            if current < 2 {
+                conn.execute_batch(RISK_STATE_SQL)?;
+            }
+            conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
+            eprintln!("  DB migrated from schema v{current} to v{DB_SCHEMA_VERSION}");
+        } else if current > DB_SCHEMA_VERSION {
+            eprintln!(
+                "  WARN: DB schema version {current} is newer than expected {DB_SCHEMA_VERSION}; compatibility not guaranteed"
+            );
+        }
+        Ok(())
+    }
+
+    /// Return the schema version stored in the database.
+    pub fn schema_version(&self) -> SqlResult<i32> {
+        self.conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
+    }
+
     // ── Inserts ─────────────────────────────────────────────────
+
+    /// Run a closure inside a transaction. Commits on Ok, rolls back on Err.
+    pub fn with_transaction<F, T>(&self, f: F) -> SqlResult<T>
+    where
+        F: FnOnce(&Connection) -> SqlResult<T>,
+    {
+        let tx = self.conn.unchecked_transaction()?;
+        let result = f(&self.conn);
+        match &result {
+            Ok(_) => tx.commit()?,
+            Err(_) => tx.rollback()?,
+        }
+        result
+    }
 
     pub fn insert_run(
         &self,
@@ -247,6 +305,81 @@ impl Db {
         })?;
         rows.collect()
     }
+
+    /// List runs filtered by date prefix (e.g. "2026-04-03").
+    pub fn list_runs_by_date(&self, date: &str, limit: usize) -> SqlResult<Vec<RunRow>> {
+        let like_pattern = format!("{date}%");
+        let mut stmt = self.conn.prepare(
+            "SELECT run_id, started_at, nav_usd, outcome, duration_ms
+             FROM runs WHERE started_at LIKE ?1 ORDER BY started_at DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![like_pattern, limit as i64], |row| {
+            Ok(RunRow {
+                run_id: row.get(0)?,
+                started_at: row.get(1)?,
+                nav_usd: row.get(2)?,
+                outcome: row.get(3)?,
+                duration_ms: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Get orders for a run, optionally filtered by status.
+    pub fn orders_for_run_filtered(
+        &self,
+        run_id: &str,
+        status: Option<&str>,
+    ) -> SqlResult<Vec<OrderRow>> {
+        match status {
+            Some(status) => {
+                let mut stmt = self.conn.prepare(
+                    "SELECT instrument, epic, direction, size, deal_reference, status, ts
+                     FROM orders WHERE run_id = ?1 AND status = ?2 ORDER BY ts",
+                )?;
+                let rows = stmt.query_map(params![run_id, status], |row| {
+                    Ok(OrderRow {
+                        instrument: row.get(0)?,
+                        epic: row.get(1)?,
+                        direction: row.get(2)?,
+                        size: row.get(3)?,
+                        deal_reference: row.get(4)?,
+                        status: row.get(5)?,
+                        ts: row.get(6)?,
+                    })
+                })?;
+                rows.collect()
+            }
+            None => self.orders_for_run(run_id),
+        }
+    }
+
+    // ── Risk State ────────────────────────────────────────────────
+
+    /// Get the peak NAV from the risk_state table. Returns None if not yet set.
+    pub fn get_peak_nav(&self) -> SqlResult<Option<f64>> {
+        let result = self.conn.query_row(
+            "SELECT value FROM risk_state WHERE key = 'peak_nav'",
+            [],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(v) => Ok(Some(v)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Update the peak NAV in the risk_state table (upsert).
+    pub fn update_peak_nav(&self, peak_nav: f64) -> SqlResult<()> {
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
+        self.conn.execute(
+            "INSERT INTO risk_state (key, value, updated_at) VALUES ('peak_nav', ?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = ?1, updated_at = ?2",
+            params![peak_nav, now],
+        )?;
+        Ok(())
+    }
 }
 
 // ─── Row Types ──────────────────────────────────────────────────
@@ -366,5 +499,94 @@ mod tests {
         let db = Db::open(&db_path).unwrap();
         db.insert_run("test", "{}", 1e6).unwrap();
         assert!(db_path.exists());
+    }
+
+    #[test]
+    fn schema_version_set_on_fresh_db() {
+        let db = Db::open_memory().unwrap();
+        assert_eq!(db.schema_version().unwrap(), DB_SCHEMA_VERSION);
+        assert_eq!(DB_SCHEMA_VERSION, 2);
+    }
+
+    #[test]
+    fn list_runs_by_date() {
+        let db = Db::open_memory().unwrap();
+        db.insert_run("run-1", "{}", 1e6).unwrap();
+        db.insert_run("run-2", "{}", 1e6).unwrap();
+
+        // started_at is set to Utc::now() which contains today's date
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let runs = db.list_runs_by_date(&today, 10).unwrap();
+        assert_eq!(runs.len(), 2);
+
+        // Non-matching date returns empty
+        let runs = db.list_runs_by_date("1999-01-01", 10).unwrap();
+        assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn orders_for_run_filtered_by_status() {
+        let db = Db::open_memory().unwrap();
+        db.insert_run("run-1", "{}", 1e6).unwrap();
+        db.insert_order("run-1", "SPY", "EPIC", "SELL", 100.0, Some("REF1"), Some("Accepted")).unwrap();
+        db.insert_order("run-1", "GLD", "EPIC", "BUY", 50.0, Some("REF2"), Some("Rejected")).unwrap();
+
+        // All orders
+        let all = db.orders_for_run_filtered("run-1", None).unwrap();
+        assert_eq!(all.len(), 2);
+
+        // Only accepted
+        let accepted = db.orders_for_run_filtered("run-1", Some("Accepted")).unwrap();
+        assert_eq!(accepted.len(), 1);
+        assert_eq!(accepted[0].instrument, "SPY");
+
+        // Only rejected
+        let rejected = db.orders_for_run_filtered("run-1", Some("Rejected")).unwrap();
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0].instrument, "GLD");
+    }
+
+    #[test]
+    fn with_transaction_commits_on_success() {
+        let db = Db::open_memory().unwrap();
+        db.insert_run("run-tx", "{}", 1e6).unwrap();
+        let result = db.with_transaction(|conn| {
+            conn.execute(
+                "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
+                 VALUES ('run-tx', 'A', 'Long', 1.0, 1.0, 0.5, 'now')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
+                 VALUES ('run-tx', 'B', 'Short', -1.0, 0.8, 0.3, 'now')",
+                [],
+            )?;
+            Ok(())
+        });
+        assert!(result.is_ok());
+        let signals = db.signals_for_run("run-tx").unwrap();
+        assert_eq!(signals.len(), 2);
+    }
+
+    #[test]
+    fn peak_nav_lifecycle() {
+        let db = Db::open_memory().unwrap();
+
+        // Initially no peak_nav
+        assert!(db.get_peak_nav().unwrap().is_none());
+
+        // Set initial peak
+        db.update_peak_nav(1_000_000.0).unwrap();
+        assert_eq!(db.get_peak_nav().unwrap(), Some(1_000_000.0));
+
+        // Update to higher value
+        db.update_peak_nav(1_050_000.0).unwrap();
+        assert_eq!(db.get_peak_nav().unwrap(), Some(1_050_000.0));
+    }
+
+    #[test]
+    fn schema_version_is_2() {
+        let db = Db::open_memory().unwrap();
+        assert_eq!(db.schema_version().unwrap(), 2);
     }
 }

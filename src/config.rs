@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+use crate::agents::risk::RiskConfig;
 use crate::execution::router::{ContractSpec, ExecutionRouter};
 
 // ─── App Config ──────────────────────────────────────────────────
@@ -11,6 +12,7 @@ use crate::execution::router::{ContractSpec, ExecutionRouter};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub execution: ExecutionConfig,
+    pub risk: Option<RiskConfig>,
 }
 
 impl AppConfig {
@@ -313,6 +315,45 @@ expiry = "MAR-26"
     fn load_missing_file() {
         let result = AppConfig::load(Path::new("/nonexistent/config.toml"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_risk_config() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[risk]
+max_gross_leverage = 3.0
+max_position_pct = 0.30
+max_drawdown_pct = 0.20
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let risk = config.risk.unwrap();
+        assert_eq!(risk.max_gross_leverage, 3.0);
+        assert_eq!(risk.max_position_pct, 0.30);
+        assert_eq!(risk.max_drawdown_pct, 0.20);
+    }
+
+    #[test]
+    fn risk_config_defaults() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[risk]
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let risk = config.risk.unwrap();
+        assert_eq!(risk.max_gross_leverage, 2.5);
+        assert_eq!(risk.max_position_pct, 0.25);
+        assert_eq!(risk.max_drawdown_pct, 0.15);
+    }
+
+    #[test]
+    fn risk_config_omitted() {
+        let config: AppConfig = toml::from_str(sample_toml()).unwrap();
+        assert!(config.risk.is_none());
     }
 
     #[test]

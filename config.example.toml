@@ -1,6 +1,13 @@
 [execution]
 engine = "ig"
 
+# Risk limits — hard veto if any check fails (no orders placed).
+# Omit [risk] section to disable risk checks entirely.
+[risk]
+max_gross_leverage = 2.5     # sum(|notional|) / NAV
+max_position_pct = 0.25      # max single-instrument |notional| / NAV
+max_drawdown_pct = 0.15      # max drawdown from peak NAV (15%)
+
 [execution.ig]
 environment = "DEMO"
 account_id = "Z69YJL"

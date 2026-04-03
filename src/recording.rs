@@ -29,17 +29,33 @@ use crate::execution::traits::{
 pub struct Recorder {
     db: Mutex<Db>,
     run_id: String,
+    write_failed: Mutex<bool>,
 }
 
 impl Recorder {
     /// Create a new recorder. Inserts the run row immediately.
     pub fn new(db: Db, run_id: &str, config_json: &str, nav_usd: f64) -> Self {
+        let mut failed = false;
         if let Err(e) = db.insert_run(run_id, config_json, nav_usd) {
             eprintln!("  WARN: SQLite insert_run failed: {e}");
+            failed = true;
         }
         Self {
             db: Mutex::new(db),
             run_id: run_id.to_string(),
+            write_failed: Mutex::new(failed),
+        }
+    }
+
+    /// Whether any SQLite write has failed during this run.
+    pub fn write_failed(&self) -> bool {
+        *self.write_failed.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Mark a write failure.
+    fn mark_failed(&self) {
+        if let Ok(mut f) = self.write_failed.lock() {
+            *f = true;
         }
     }
 
@@ -49,29 +65,33 @@ impl Recorder {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
                 return;
             }
         };
-        for target in targets {
-            let (direction, strength, confidence) = signals
-                .get(&target.instrument)
-                .copied()
-                .unwrap_or((SignalDirection::Flat, 0.0, 0.0));
-            let dir_str = match direction {
-                SignalDirection::Long => "Long",
-                SignalDirection::Short => "Short",
-                SignalDirection::Flat => "Flat",
-            };
-            if let Err(e) = db.insert_signal(
-                &self.run_id,
-                &target.instrument,
-                dir_str,
-                strength,
-                confidence,
-                target.weight,
-            ) {
-                eprintln!("  WARN: SQLite insert_signal failed: {e}");
+        let result = db.with_transaction(|conn| {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for target in targets {
+                let (direction, strength, confidence) = signals
+                    .get(&target.instrument)
+                    .copied()
+                    .unwrap_or((SignalDirection::Flat, 0.0, 0.0));
+                let dir_str = match direction {
+                    SignalDirection::Long => "Long",
+                    SignalDirection::Short => "Short",
+                    SignalDirection::Flat => "Flat",
+                };
+                conn.execute(
+                    "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    rusqlite::params![&self.run_id, &target.instrument, dir_str, strength, confidence, target.weight, &now],
+                )?;
             }
+            Ok(())
+        });
+        if let Err(e) = result {
+            eprintln!("  WARN: SQLite batch insert_signal failed: {e}");
+            self.mark_failed();
         }
     }
 
@@ -81,18 +101,24 @@ impl Recorder {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
                 return;
             }
         };
-        for t in targets {
-            if let Err(e) = db.insert_position(
-                &self.run_id,
-                &t.instrument,
-                t.signed_deal_size,
-                "target",
-            ) {
-                eprintln!("  WARN: SQLite insert_position failed: {e}");
+        let result = db.with_transaction(|conn| {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for t in targets {
+                conn.execute(
+                    "INSERT INTO positions (run_id, instrument, signed_deal_size, source, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![&self.run_id, &t.instrument, t.signed_deal_size, "target", &now],
+                )?;
             }
+            Ok(())
+        });
+        if let Err(e) = result {
+            eprintln!("  WARN: SQLite batch insert_position failed: {e}");
+            self.mark_failed();
         }
     }
 
@@ -102,18 +128,24 @@ impl Recorder {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
                 return;
             }
         };
-        for (instrument, &size) in positions {
-            if let Err(e) = db.insert_position(
-                &self.run_id,
-                instrument,
-                size,
-                "actual",
-            ) {
-                eprintln!("  WARN: SQLite insert_position failed: {e}");
+        let result = db.with_transaction(|conn| {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for (instrument, &size) in positions {
+                conn.execute(
+                    "INSERT INTO positions (run_id, instrument, signed_deal_size, source, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![&self.run_id, instrument, size, "actual", &now],
+                )?;
             }
+            Ok(())
+        });
+        if let Err(e) = result {
+            eprintln!("  WARN: SQLite batch insert_position (actual) failed: {e}");
+            self.mark_failed();
         }
     }
 
@@ -123,25 +155,28 @@ impl Recorder {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
                 return;
             }
         };
-        for o in orders {
-            let dir_str = match o.direction {
-                crate::core::portfolio::OrderSide::Buy => "BUY",
-                crate::core::portfolio::OrderSide::Sell => "SELL",
-            };
-            if let Err(e) = db.insert_order(
-                &self.run_id,
-                &o.instrument,
-                &o.epic,
-                dir_str,
-                o.size,
-                None,
-                None,
-            ) {
-                eprintln!("  WARN: SQLite insert_order failed: {e}");
+        let result = db.with_transaction(|conn| {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for o in orders {
+                let dir_str = match o.direction {
+                    crate::core::portfolio::OrderSide::Buy => "BUY",
+                    crate::core::portfolio::OrderSide::Sell => "SELL",
+                };
+                conn.execute(
+                    "INSERT INTO orders (run_id, instrument, epic, direction, size, deal_reference, status, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![&self.run_id, &o.instrument, &o.epic, dir_str, o.size, Option::<&str>::None, Option::<&str>::None, &now],
+                )?;
             }
+            Ok(())
+        });
+        if let Err(e) = result {
+            eprintln!("  WARN: SQLite batch insert_order failed: {e}");
+            self.mark_failed();
         }
     }
 
@@ -151,29 +186,29 @@ impl Recorder {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
                 return;
             }
         };
-        for ack in acks {
-            let status_str = match ack.status {
-                DealStatus::Accepted => "Accepted",
-                DealStatus::Rejected => "Rejected",
-                DealStatus::Pending => "Pending",
-            };
-            // Update existing order row by deal_reference, or insert a new one
-            // For simplicity, insert a confirmation row — the orders table has both
-            // submission and confirmation entries, distinguishable by status being set
-            if let Err(e) = db.insert_order(
-                &self.run_id,
-                &ack.instrument,
-                "", // epic not in ack
-                "",  // direction not in ack
-                0.0, // size not in ack
-                Some(&ack.deal_reference),
-                Some(status_str),
-            ) {
-                eprintln!("  WARN: SQLite insert_order (confirm) failed: {e}");
+        let result = db.with_transaction(|conn| {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for ack in acks {
+                let status_str = match ack.status {
+                    DealStatus::Accepted => "Accepted",
+                    DealStatus::Rejected => "Rejected",
+                    DealStatus::Pending => "Pending",
+                };
+                conn.execute(
+                    "INSERT INTO orders (run_id, instrument, epic, direction, size, deal_reference, status, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![&self.run_id, &ack.instrument, "", "", 0.0_f64, Some(&ack.deal_reference), Some(status_str), &now],
+                )?;
             }
+            Ok(())
+        });
+        if let Err(e) = result {
+            eprintln!("  WARN: SQLite batch insert_order (confirm) failed: {e}");
+            self.mark_failed();
         }
     }
 
@@ -183,18 +218,24 @@ impl Recorder {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
                 return;
             }
         };
-        for (instrument, &size) in positions {
-            if let Err(e) = db.insert_position(
-                &self.run_id,
-                instrument,
-                size,
-                "post_trade",
-            ) {
-                eprintln!("  WARN: SQLite insert_position failed: {e}");
+        let result = db.with_transaction(|conn| {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for (instrument, &size) in positions {
+                conn.execute(
+                    "INSERT INTO positions (run_id, instrument, signed_deal_size, source, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    rusqlite::params![&self.run_id, instrument, size, "post_trade", &now],
+                )?;
             }
+            Ok(())
+        });
+        if let Err(e) = result {
+            eprintln!("  WARN: SQLite batch insert_position (post_trade) failed: {e}");
+            self.mark_failed();
         }
     }
 
@@ -204,11 +245,13 @@ impl Recorder {
             Ok(db) => db,
             Err(e) => {
                 eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
                 return;
             }
         };
         if let Err(e) = db.finish_run(&self.run_id, outcome, duration_ms) {
             eprintln!("  WARN: SQLite finish_run failed: {e}");
+            self.mark_failed();
         }
     }
 }
@@ -293,6 +336,8 @@ mod tests {
     fn record_dry_run() {
         let rec = make_recorder();
         rec.record_run_end("DRY_RUN", 500);
+
+        assert!(!rec.write_failed());
 
         let db = rec.db.lock().unwrap();
         let runs = db.list_runs(1).unwrap();

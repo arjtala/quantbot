@@ -6,6 +6,7 @@ use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 
+use quantbot::agents::risk::{RiskAgent, RiskDecision};
 use quantbot::agents::tsmom::TSMOMAgent;
 use quantbot::audit::{
     self, AuditLogger, RunId, RunSummary, TargetEntry,
@@ -71,6 +72,14 @@ struct HistoryArgs {
     /// Filter by instrument
     #[arg(long)]
     instrument: Option<String>,
+
+    /// Filter orders by status (e.g. Accepted, Rejected, Pending)
+    #[arg(long)]
+    status: Option<String>,
+
+    /// Filter runs by date prefix (e.g. 2026-04-03)
+    #[arg(long)]
+    date: Option<String>,
 
     /// Number of recent runs to show (default: 10)
     #[arg(long, default_value_t = 10)]
@@ -565,8 +574,14 @@ async fn run_live(args: LiveArgs) -> Result<()> {
 
     // ── SQLite recording ────────────────────────────────────────
     let db_path = args.data_dir.join("quantbot.db");
-    let recorder = match Db::open(&db_path) {
+    let (recorder, peak_nav) = match Db::open(&db_path) {
         Ok(db) => {
+            // Read peak NAV for risk checks before creating recorder
+            let peak = db.get_peak_nav().unwrap_or_else(|e| {
+                eprintln!("  WARN: SQLite get_peak_nav failed: {e}");
+                None
+            });
+
             let config_json = serde_json::json!({
                 "engine": engine_name,
                 "dry_run": args.dry_run,
@@ -585,13 +600,71 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             rec.record_signals(&target_entries, &signal_map);
             rec.record_target_positions(&target_entries);
 
-            Some(rec)
+            (Some(rec), peak)
         }
         Err(e) => {
             eprintln!("  WARN: failed to open SQLite database {}: {e}", db_path.display());
-            None
+            (None, None)
         }
     };
+
+    // ── Risk check (hard veto) ───────────────────────────────────
+    if let Some(risk_config) = &app_config.risk {
+        let risk_agent = RiskAgent::new(risk_config.clone());
+        let effective_peak = peak_nav.unwrap_or(nav).max(nav);
+
+        let (decision, detail) = risk_agent.check_all(&snapshot.orders, nav, effective_peak);
+        audit.log_risk_check(&detail);
+
+        eprintln!(
+            "  Risk check: leverage={:.2} max_pos={:.1}% drawdown={:.1}% → {}",
+            detail.gross_leverage,
+            detail.max_position_leverage * 100.0,
+            detail.drawdown_pct * 100.0,
+            detail.decision,
+        );
+
+        if let RiskDecision::Veto { reason } = decision {
+            eprintln!("  RISK VETO: {reason}");
+
+            // Record veto outcome
+            if let Some(rec) = recorder.as_ref() {
+                rec.record_run_end("RISK_VETO", 0);
+            }
+
+            let summary = RunSummary {
+                run_id: audit.run_id().to_string(),
+                outcome: "RISK_VETO".to_string(),
+                duration_ms: 0,
+                orders_placed: 0,
+                orders_confirmed: 0,
+                orders_rejected: 0,
+                dust_skipped: 0,
+                mismatches: 0,
+                audit_write_failed: audit.write_failed,
+                db_write_failed: recorder.as_ref().is_some_and(|r| r.write_failed()),
+                audit_path: audit.path().display().to_string(),
+            };
+            audit.log_run_end("RISK_VETO", &summary);
+
+            if args.json {
+                if let Ok(json) = serde_json::to_string_pretty(&summary) {
+                    println!("{json}");
+                }
+            } else {
+                eprintln!("  {summary}");
+            }
+
+            bail!("risk veto: {reason}");
+        }
+
+        // Update peak NAV (only if we passed the check)
+        if let Ok(db) = Db::open(&db_path) {
+            if let Err(e) = db.update_peak_nav(effective_peak) {
+                eprintln!("  WARN: SQLite update_peak_nav failed: {e}");
+            }
+        }
+    }
 
     // ── Construct engine and run rebalance ───────────────────
     let result = match app_config.execution.engine {
@@ -648,6 +721,7 @@ async fn run_rebalance(
             dust_skipped,
             mismatches,
             audit_write_failed: audit.write_failed,
+            db_write_failed: recorder.is_some_and(|r| r.write_failed()),
             audit_path: audit.path().display().to_string(),
         };
         audit.log_run_end(outcome, &summary);
@@ -1124,7 +1198,7 @@ fn run_history(args: HistoryArgs) -> Result<()> {
     if let Some(run_id) = &args.run {
         // Show details for a specific run
         let orders = db
-            .orders_for_run(run_id)
+            .orders_for_run_filtered(run_id, args.status.as_deref())
             .map_err(|e| anyhow::anyhow!("query failed: {e}"))?;
         let signals = db
             .signals_for_run(run_id)
@@ -1203,10 +1277,14 @@ fn run_history(args: HistoryArgs) -> Result<()> {
             }
         }
     } else {
-        // List recent runs
-        let runs = db
-            .list_runs(args.last)
-            .map_err(|e| anyhow::anyhow!("query failed: {e}"))?;
+        // List recent runs, optionally filtered by date
+        let runs = if let Some(date) = &args.date {
+            db.list_runs_by_date(date, args.last)
+                .map_err(|e| anyhow::anyhow!("query failed: {e}"))?
+        } else {
+            db.list_runs(args.last)
+                .map_err(|e| anyhow::anyhow!("query failed: {e}"))?
+        };
 
         if args.json {
             println!("{}", serde_json::to_string_pretty(&runs)?);
