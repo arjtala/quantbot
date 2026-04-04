@@ -7,7 +7,7 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 /// Schema version stored in PRAGMA user_version. Bump when making breaking
 /// changes to the table layout.
-pub const DB_SCHEMA_VERSION: i32 = 4;
+pub const DB_SCHEMA_VERSION: i32 = 5;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS runs (
@@ -74,6 +74,25 @@ CREATE TABLE IF NOT EXISTS risk_state (
 );
 ";
 
+/// SQL for the llm_cache table added in schema v5.
+const LLM_CACHE_SQL: &str = "
+CREATE TABLE IF NOT EXISTS llm_cache (
+    cache_key     TEXT PRIMARY KEY,
+    llm_model     TEXT NOT NULL,
+    prompt_hash   TEXT NOT NULL,
+    instrument    TEXT NOT NULL,
+    eval_date     TEXT NOT NULL,
+    ta_hash       TEXT NOT NULL,
+    response_text TEXT NOT NULL,
+    llm_ok        INTEGER NOT NULL,
+    parse_ok      INTEGER NOT NULL,
+    latency_ms    INTEGER,
+    created_at    TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_llm_cache_instrument_date ON llm_cache(instrument, eval_date);
+CREATE INDEX IF NOT EXISTS idx_llm_cache_model_prompt ON llm_cache(llm_model, prompt_hash);
+";
+
 // ─── Database ───────────────────────────────────────────────────
 
 /// SQLite database for recording trading activity across runs.
@@ -110,6 +129,7 @@ impl Db {
         if current == 0 {
             // Fresh database — create all tables and stamp with current version
             conn.execute_batch(RISK_STATE_SQL)?;
+            conn.execute_batch(LLM_CACHE_SQL)?;
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
         } else if current < DB_SCHEMA_VERSION {
             // Run migrations
@@ -125,6 +145,9 @@ impl Db {
                 conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_hash TEXT;").ok();
                 conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_source TEXT;").ok();
                 conn.execute_batch("ALTER TABLE runs ADD COLUMN llm_model TEXT;").ok();
+            }
+            if current < 5 {
+                conn.execute_batch(LLM_CACHE_SQL)?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
             eprintln!("  DB migrated from schema v{current} to v{DB_SCHEMA_VERSION}");
@@ -418,6 +441,66 @@ impl Db {
         )?;
         Ok(())
     }
+
+    // ── LLM Cache ────────────────────────────────────────────────
+
+    /// Insert a cache entry. Uses INSERT OR IGNORE so existing entries
+    /// are never overwritten.
+    pub fn insert_llm_cache(&self, entry: &LlmCacheEntry) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO llm_cache
+             (cache_key, llm_model, prompt_hash, instrument, eval_date, ta_hash,
+              response_text, llm_ok, parse_ok, latency_ms, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                entry.cache_key,
+                entry.llm_model,
+                entry.prompt_hash,
+                entry.instrument,
+                entry.eval_date,
+                entry.ta_hash,
+                entry.response_text,
+                entry.llm_ok as i32,
+                entry.parse_ok as i32,
+                entry.latency_ms.map(|v| v as i64),
+                entry.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Look up a cached LLM response by cache key.
+    pub fn get_llm_cache(&self, cache_key: &str) -> SqlResult<Option<LlmCacheEntry>> {
+        let result = self.conn.query_row(
+            "SELECT cache_key, llm_model, prompt_hash, instrument, eval_date, ta_hash,
+                    response_text, llm_ok, parse_ok, latency_ms, created_at
+             FROM llm_cache WHERE cache_key = ?1",
+            params![cache_key],
+            |row| {
+                let llm_ok_i: i32 = row.get(7)?;
+                let parse_ok_i: i32 = row.get(8)?;
+                let latency_ms: Option<i64> = row.get(9)?;
+                Ok(LlmCacheEntry {
+                    cache_key: row.get(0)?,
+                    llm_model: row.get(1)?,
+                    prompt_hash: row.get(2)?,
+                    instrument: row.get(3)?,
+                    eval_date: row.get(4)?,
+                    ta_hash: row.get(5)?,
+                    response_text: row.get(6)?,
+                    llm_ok: llm_ok_i != 0,
+                    parse_ok: parse_ok_i != 0,
+                    latency_ms: latency_ms.map(|v| v as u64),
+                    created_at: row.get(10)?,
+                })
+            },
+        );
+        match result {
+            Ok(entry) => Ok(Some(entry)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 // ─── Row Types ──────────────────────────────────────────────────
@@ -454,6 +537,24 @@ pub struct SignalRow {
     pub confidence: f64,
     pub weight: f64,
     pub ts: String,
+}
+
+// ─── LLM Cache Entry ────────────────────────────────────────────
+
+/// A cached LLM indicator response for deterministic replay.
+#[derive(Debug, Clone)]
+pub struct LlmCacheEntry {
+    pub cache_key: String,
+    pub llm_model: String,
+    pub prompt_hash: String,
+    pub instrument: String,
+    pub eval_date: String,
+    pub ta_hash: String,
+    pub response_text: String,
+    pub llm_ok: bool,
+    pub parse_ok: bool,
+    pub latency_ms: Option<u64>,
+    pub created_at: String,
 }
 
 // ─── Tests ──────────────────────────────────────────────────────
@@ -547,7 +648,7 @@ mod tests {
     fn schema_version_set_on_fresh_db() {
         let db = Db::open_memory().unwrap();
         assert_eq!(db.schema_version().unwrap(), DB_SCHEMA_VERSION);
-        assert_eq!(DB_SCHEMA_VERSION, 4);
+        assert_eq!(DB_SCHEMA_VERSION, 5);
     }
 
     #[test]
@@ -627,9 +728,9 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_4() {
+    fn schema_version_is_5() {
         let db = Db::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 4);
+        assert_eq!(db.schema_version().unwrap(), 5);
     }
 
     #[test]
@@ -693,7 +794,7 @@ mod tests {
 
         // Verify version bumped
         let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
 
         // Verify existing row got default agent_name
         let agent: String = conn.query_row(
@@ -763,9 +864,9 @@ mod tests {
         // Run migration
         Db::check_schema_version(&conn).unwrap();
 
-        // Verify version bumped to 4
+        // Verify version bumped to 5
         let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
 
         // Verify prompt columns exist and are nullable
         conn.execute(
@@ -791,5 +892,148 @@ mod tests {
         assert_eq!(runs[0].prompt_hash.as_deref(), Some("abcdef0123456789"));
         assert_eq!(runs[0].prompt_source.as_deref(), Some("embedded"));
         assert_eq!(runs[0].llm_model.as_deref(), Some("llama3"));
+    }
+
+    #[test]
+    fn llm_cache_insert_and_lookup() {
+        let db = Db::open_memory().unwrap();
+        let entry = LlmCacheEntry {
+            cache_key: "model|hash|SPY|2025-03-31|ta123".into(),
+            llm_model: "llama3".into(),
+            prompt_hash: "abc123".into(),
+            instrument: "SPY".into(),
+            eval_date: "2025-03-31".into(),
+            ta_hash: "ta123".into(),
+            response_text: r#"{"direction":"long","confidence":0.8,"strength":0.6}"#.into(),
+            llm_ok: true,
+            parse_ok: true,
+            latency_ms: Some(1500),
+            created_at: "2025-03-31T12:00:00Z".into(),
+        };
+        db.insert_llm_cache(&entry).unwrap();
+
+        let found = db.get_llm_cache(&entry.cache_key).unwrap();
+        assert!(found.is_some());
+        let found = found.unwrap();
+        assert_eq!(found.instrument, "SPY");
+        assert_eq!(found.llm_model, "llama3");
+        assert!(found.llm_ok);
+        assert!(found.parse_ok);
+        assert_eq!(found.latency_ms, Some(1500));
+    }
+
+    #[test]
+    fn llm_cache_insert_or_ignore() {
+        let db = Db::open_memory().unwrap();
+        let entry = LlmCacheEntry {
+            cache_key: "key1".into(),
+            llm_model: "llama3".into(),
+            prompt_hash: "abc".into(),
+            instrument: "SPY".into(),
+            eval_date: "2025-03-31".into(),
+            ta_hash: "ta1".into(),
+            response_text: "first response".into(),
+            llm_ok: true,
+            parse_ok: true,
+            latency_ms: Some(100),
+            created_at: "2025-03-31T12:00:00Z".into(),
+        };
+        db.insert_llm_cache(&entry).unwrap();
+
+        // Second insert with same key but different response — should be ignored
+        let entry2 = LlmCacheEntry {
+            response_text: "second response".into(),
+            ..entry.clone()
+        };
+        db.insert_llm_cache(&entry2).unwrap();
+
+        let found = db.get_llm_cache("key1").unwrap().unwrap();
+        assert_eq!(found.response_text, "first response");
+    }
+
+    #[test]
+    fn llm_cache_error_entry() {
+        let db = Db::open_memory().unwrap();
+        let entry = LlmCacheEntry {
+            cache_key: "err_key".into(),
+            llm_model: "llama3".into(),
+            prompt_hash: "abc".into(),
+            instrument: "GLD".into(),
+            eval_date: "2025-04-01".into(),
+            ta_hash: "ta2".into(),
+            response_text: "LLM request timed out after 30s".into(),
+            llm_ok: false,
+            parse_ok: false,
+            latency_ms: None,
+            created_at: "2025-04-01T12:00:00Z".into(),
+        };
+        db.insert_llm_cache(&entry).unwrap();
+
+        let found = db.get_llm_cache("err_key").unwrap().unwrap();
+        assert!(!found.llm_ok);
+        assert!(!found.parse_ok);
+        assert!(found.latency_ms.is_none());
+    }
+
+    #[test]
+    fn llm_cache_missing_key() {
+        let db = Db::open_memory().unwrap();
+        assert!(db.get_llm_cache("nonexistent").unwrap().is_none());
+    }
+
+    #[test]
+    fn migration_v4_to_v5_adds_llm_cache() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // Create v4 schema (has prompt columns on runs, no llm_cache table)
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
+                config_json TEXT NOT NULL, nav_usd REAL NOT NULL,
+                outcome TEXT, duration_ms INTEGER,
+                prompt_hash TEXT, prompt_source TEXT, llm_model TEXT
+            );
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, agent_name TEXT NOT NULL DEFAULT 'tsmom',
+                direction TEXT NOT NULL, strength REAL NOT NULL,
+                confidence REAL NOT NULL, weight REAL NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, epic TEXT NOT NULL,
+                direction TEXT NOT NULL, size REAL NOT NULL,
+                deal_reference TEXT, status TEXT, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, signed_deal_size REAL NOT NULL,
+                source TEXT NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS risk_state (
+                key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL
+            );
+        ").unwrap();
+        conn.execute_batch("PRAGMA user_version = 4;").unwrap();
+
+        // Run migration
+        Db::check_schema_version(&conn).unwrap();
+
+        // Verify version bumped to 5
+        let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 5);
+
+        // Verify llm_cache table exists
+        conn.execute(
+            "INSERT INTO llm_cache (cache_key, llm_model, prompt_hash, instrument, eval_date, ta_hash, response_text, llm_ok, parse_ok, created_at)
+             VALUES ('k1', 'llama3', 'ph', 'SPY', '2025-03-31', 'th', 'resp', 1, 1, 'now')",
+            [],
+        ).unwrap();
+
+        let count: i32 = conn.query_row("SELECT COUNT(*) FROM llm_cache", [], |r| r.get(0)).unwrap();
+        assert_eq!(count, 1);
     }
 }

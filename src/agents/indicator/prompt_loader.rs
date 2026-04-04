@@ -39,7 +39,7 @@ pub fn load(prompt_path: Option<&str>) -> LoadedPrompt {
     if let Some(path) = prompt_path {
         match std::fs::read_to_string(path) {
             Ok(contents) if !contents.trim().is_empty() => {
-                let hash = hash_prompt(&contents);
+                let hash = sha256_short(&contents);
                 eprintln!("  Loaded prompt from {path} (hash: {hash})");
                 return LoadedPrompt {
                     text: contents,
@@ -56,7 +56,7 @@ pub fn load(prompt_path: Option<&str>) -> LoadedPrompt {
         }
     }
 
-    let hash = hash_prompt(EMBEDDED_PROMPT);
+    let hash = sha256_short(EMBEDDED_PROMPT);
     LoadedPrompt {
         text: EMBEDDED_PROMPT.to_string(),
         hash,
@@ -65,7 +65,7 @@ pub fn load(prompt_path: Option<&str>) -> LoadedPrompt {
 }
 
 /// SHA-256 of raw bytes, truncated to 16 hex chars (64 bits).
-fn hash_prompt(text: &str) -> String {
+pub fn sha256_short(text: &str) -> String {
     let digest = Sha256::digest(text.as_bytes());
     format!("{:x}", digest)[..16].to_string()
 }

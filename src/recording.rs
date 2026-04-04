@@ -3,7 +3,7 @@ use std::sync::Mutex;
 
 use crate::audit::TargetEntry;
 use crate::core::signal::SignalDirection;
-use crate::db::Db;
+use crate::db::{Db, LlmCacheEntry};
 use crate::execution::traits::{
     DealStatus, OrderAck, OrderRequest,
 };
@@ -276,6 +276,33 @@ impl Recorder {
         if let Err(e) = db.update_run_prompt(&self.run_id, prompt_hash, prompt_source, llm_model) {
             eprintln!("  WARN: SQLite update_run_prompt failed: {e}");
             self.mark_failed();
+        }
+    }
+
+    /// Record LLM cache entries (insert-or-ignore). Never blocks trading.
+    pub fn record_llm_cache_entries(&self, entries: &[LlmCacheEntry]) {
+        if entries.is_empty() {
+            return;
+        }
+        let db = match self.db.lock() {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
+                return;
+            }
+        };
+        let mut written = 0;
+        for entry in entries {
+            if let Err(e) = db.insert_llm_cache(entry) {
+                eprintln!("  WARN: SQLite insert_llm_cache failed for {}: {e}", entry.instrument);
+                self.mark_failed();
+            } else {
+                written += 1;
+            }
+        }
+        if written > 0 {
+            eprintln!("  Cached {written} LLM response(s) to SQLite");
         }
     }
 }

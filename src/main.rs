@@ -543,6 +543,25 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
                 indicator_map.insert(sym.clone(), sig);
             }
 
+            // Drain and write LLM cache entries
+            let cache_entries = indicator.take_cache_entries();
+            if !cache_entries.is_empty() {
+                let db_path = args.data_dir.join("quantbot.db");
+                if let Ok(db) = Db::open(&db_path) {
+                    let mut written = 0;
+                    for entry in &cache_entries {
+                        if let Err(e) = db.insert_llm_cache(entry) {
+                            eprintln!("  WARN: cache write failed for {}: {e}", entry.instrument);
+                        } else {
+                            written += 1;
+                        }
+                    }
+                    if written > 0 {
+                        eprintln!("  Cached {written} LLM response(s) to SQLite");
+                    }
+                }
+            }
+
             // Combine
             let results = combiner::combine_signals(&tsmom_signals, &indicator_map, blend_config);
             let mut combined_weights = HashMap::new();
@@ -823,6 +842,8 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     #[cfg(feature = "track-b")]
     let mut prompt_info: Option<(String, String, String)> = None; // (hash, source, model)
     #[cfg(feature = "track-b")]
+    let llm_cache_entries: Vec<quantbot::db::LlmCacheEntry>;
+    #[cfg(feature = "track-b")]
     let indicator_signals: Vec<(String, quantbot::core::signal::Signal)> = {
         let indicator: Box<dyn SignalAgent> = match &app_config.llm {
             Some(llm_config) => match LlmIndicatorAgent::new(llm_config.clone()) {
@@ -854,6 +875,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             sig.metadata.insert("latency_ms".into(), latency);
             sigs.push((sym.clone(), sig));
         }
+        llm_cache_entries = indicator.take_cache_entries();
         sigs
     };
 
@@ -1038,6 +1060,12 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             #[cfg(feature = "track-b")]
             if let Some((ref hash, ref source, ref model)) = prompt_info {
                 rec.record_prompt_info(hash, source, model);
+            }
+
+            // Record LLM cache entries (track-b only)
+            #[cfg(feature = "track-b")]
+            if !llm_cache_entries.is_empty() {
+                rec.record_llm_cache_entries(&llm_cache_entries);
             }
 
             (Some(rec), peak)
