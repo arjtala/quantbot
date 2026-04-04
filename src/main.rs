@@ -17,7 +17,10 @@ use quantbot::config::{AppConfig, EngineType};
 use quantbot::core::portfolio::OrderSide;
 use quantbot::core::signal::SignalDirection;
 use quantbot::core::universe::TRADEABLE_UNIVERSE;
+use quantbot::data::freshness;
 use quantbot::data::loader::CsvLoader;
+use quantbot::data::updater::DataUpdater;
+use quantbot::data::yahoo::YahooClient;
 use quantbot::db::Db;
 use quantbot::execution::circuit_breaker::CircuitBreaker;
 use quantbot::execution::ig::engine::IgExecutionEngine;
@@ -46,6 +49,8 @@ enum Command {
     Positions(PositionsArgs),
     /// Query trading history from SQLite database
     History(HistoryArgs),
+    /// Update CSV data from Yahoo Finance
+    Data(DataArgs),
 }
 
 #[derive(Parser)]
@@ -84,6 +89,25 @@ struct HistoryArgs {
     /// Number of recent runs to show (default: 10)
     #[arg(long, default_value_t = 10)]
     last: usize,
+
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct DataArgs {
+    /// Comma-separated instrument symbols (default: all CSVs or tradeable universe)
+    #[arg(long, value_delimiter = ',')]
+    instruments: Option<Vec<String>>,
+
+    /// Update only the 6 tradeable instruments
+    #[arg(long)]
+    tradeable_only: bool,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
 
     /// Output as JSON
     #[arg(long)]
@@ -198,6 +222,14 @@ struct LiveArgs {
     /// Flatten all positions and exit
     #[arg(long)]
     flatten: bool,
+
+    /// Allow stale data (skip freshness check)
+    #[arg(long)]
+    allow_stale: bool,
+
+    /// Maximum days of data staleness before refusing to trade (default: 3)
+    #[arg(long, default_value_t = 3)]
+    max_stale_days: u32,
 }
 
 #[derive(Parser)]
@@ -281,6 +313,7 @@ async fn main() {
         Command::Live(args) => run_live(args).await,
         Command::Positions(args) => run_positions(args).await,
         Command::History(args) => run_history(args),
+        Command::Data(args) => run_data(args).await,
     };
 
     if let Err(e) = result {
@@ -513,6 +546,36 @@ async fn run_live(args: LiveArgs) -> Result<()> {
 
     if bars.is_empty() {
         bail!("Failed to load data for any instrument");
+    }
+
+    // ── Freshness gate ──────────────────────────────────────────
+    if !args.allow_stale {
+        let today = chrono::Utc::now().date_naive();
+        let symbols_with_dates: Vec<(String, Option<NaiveDate>)> = symbols
+            .iter()
+            .map(|sym| {
+                let last = bars.get(sym).and_then(|s| s.bars().last().map(|b| b.date));
+                (sym.clone(), last)
+            })
+            .collect();
+
+        let stale_errors =
+            freshness::check_all_fresh(&symbols_with_dates, today, args.max_stale_days);
+
+        if !stale_errors.is_empty() {
+            eprintln!("  Data freshness check FAILED:");
+            for err in &stale_errors {
+                eprintln!("    {err}");
+            }
+            eprintln!(
+                "\n  Run `quantbot data --tradeable-only` to update, or pass --allow-stale to override."
+            );
+            bail!(
+                "{} instrument(s) have stale data — refusing to trade",
+                stale_errors.len()
+            );
+        }
+        eprintln!("  Data freshness check passed");
     }
 
     // ── Generate targets ───────────────────────────────────────
@@ -1352,4 +1415,80 @@ fn print_order_row(order: &SizedOrder) {
         format_number(order.margin_required),
         order.spread_cost,
     );
+}
+
+async fn run_data(args: DataArgs) -> Result<()> {
+    let symbols: Vec<String> = if let Some(syms) = args.instruments {
+        syms
+    } else if args.tradeable_only {
+        TRADEABLE_UNIVERSE
+            .iter()
+            .map(|i| i.symbol.clone())
+            .collect()
+    } else {
+        // Discover from existing CSVs, fall back to tradeable universe
+        let updater = DataUpdater::new(&args.data_dir);
+        let discovered = updater.discover_symbols().unwrap_or_default();
+        if discovered.is_empty() {
+            TRADEABLE_UNIVERSE
+                .iter()
+                .map(|i| i.symbol.clone())
+                .collect()
+        } else {
+            discovered
+        }
+    };
+
+    let today = chrono::Utc::now().date_naive();
+    eprintln!(
+        "  Updating {} symbol(s) to {}...",
+        symbols.len(),
+        today
+    );
+
+    let updater = DataUpdater::new(&args.data_dir);
+    let mut client = YahooClient::new();
+    let results = updater.update_all(&mut client, &symbols, today).await;
+
+    let mut any_error = false;
+    if args.json {
+        let json_results: Vec<serde_json::Value> = results
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "symbol": r.symbol,
+                    "bars_fetched": r.bars_fetched,
+                    "bars_appended": r.bars_appended,
+                    "total_bars": r.total_bars,
+                    "error": r.error,
+                })
+            })
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&json_results)?);
+    } else {
+        eprintln!(
+            "  {:<15} {:>10} {:>10} {:>10} Status",
+            "Symbol", "Fetched", "Appended", "Total"
+        );
+        for r in &results {
+            if let Some(err) = &r.error {
+                eprintln!(
+                    "  {:<15} {:>10} {:>10} {:>10} ERROR: {}",
+                    r.symbol, r.bars_fetched, r.bars_appended, r.total_bars, err
+                );
+                any_error = true;
+            } else {
+                eprintln!(
+                    "  {:<15} {:>10} {:>10} {:>10} OK",
+                    r.symbol, r.bars_fetched, r.bars_appended, r.total_bars
+                );
+            }
+        }
+    }
+
+    if any_error {
+        bail!("Some symbols failed to update — see errors above");
+    }
+
+    Ok(())
 }
