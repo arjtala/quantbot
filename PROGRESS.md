@@ -399,7 +399,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A complete (8 PRs), Track B started (PR B1)** | 200+ tests, clean clippy
+> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B3)** | 250+ tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -578,7 +578,7 @@ Track A checklist:
 - [x] `tests/ig_demo_roundtrip.rs` — Integration test: full IG demo round-trip
 - [x] `config.example.toml` — All 6 instruments with IG epics + sizing calibration
 - [x] `src/audit.rs` — Per-run JSONL audit logging with structured events + RunSummary (schema v2)
-- [ ] `src/agents/decision/router.rs` — Per-instrument strategy router (gold: combiner, equity: TSMOM, forex: indicator-heavy) ← Track B
+- [x] `src/agents/combiner.rs` — Per-instrument signal combiner with configurable blend weights (PR B3)
 - [x] `src/db.rs` — SQLite schema (runs, orders, positions, signals) + WAL mode + query helpers
 - [x] `src/recording.rs` — Recorder: logs all trading activity to SQLite (standalone struct, not trait decorator)
 - [x] `src/agents/risk/mod.rs` — RiskAgent: drawdown cap, leverage cap, per-position concentration, veto authority
@@ -615,23 +615,31 @@ Replaced DummyIndicatorAgent's inline RSI with a full TA suite and LLM-based ind
 - [x] `config.example.toml` — Commented `[llm]` section with all fields and defaults
 - [x] All tests pass with and without `track-b` feature, clean clippy
 
-**Remaining Track B PRs:**
-- [ ] **PR B3** — Signal combiner: blend TSMOM + indicator signals with configurable per-asset-class weights
-- [ ] **PR B4** — `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
-- [ ] **PR B5** — `src/agents/decision/combiner.rs` — **Per-instrument router** (not weighted average):
-  ```rust
-  match instrument.asset_type() {
-      Gold   => combine(tsmom, indicator, 0.50, 0.50),
-      Equity => tsmom_only,
-      Forex  => combine(tsmom, indicator, 0.10, 0.90),
-  }
-  ```
+#### PR B3 — Per-Instrument Signal Combiner + Pipeline Integration (2026-04-04)
 
+Wires indicator signals into sizing via per-asset-class combiner with configurable blend weights. Absorbs PR B5's per-instrument router — fixed global weights are wrong, instrument-type routing is the alpha. Blending gated: `enabled=false` preserves existing TSMOM-only behavior. Scope: `run_live` + `run_paper_trade`; backtest unchanged. +950 lines, 15 new tests.
+
+- [x] `src/config.rs` — `BlendCategory` (Gold/Equity/Forex), `BlendWeights`, `BlendConfig` with `weights_for()` safe lookup (TSMOM-only default). Feature-gated `blending: Option<BlendConfig>` on `AppConfig`. Validation: warns on missing category, errors on zero-sum weights. 3 tests
+- [x] `src/agents/combiner.rs` (NEW) — Pure-function combiner module:
+  - `blend_category()`: GLD/GC=F→Gold, SPY→Equity, *=X→Forex, fallback→Equity (with warning)
+  - `combine_signals()`: per-instrument TSMOM+indicator blending using vol_scalar normalization
+  - `build_combined_signal()`: constructs combined Signal with full provenance metadata (tsmom_weight, indicator_weight, blend ratios, vol_scalar, latency_ms, indicator_used)
+  - Graceful TSMOM-only fallback: flat indicator, confidence=0, llm_success=0, or missing signal
+  - 11 tests: 50/50 gold, 100/0 equity passthrough, all fallback cases, category routing, opposing signals, vol_scalar fallback
+- [x] `src/agents/mod.rs` — `pub mod combiner` (feature-gated)
+- [x] `src/backtest/engine.rs` — Refactored `generate_targets()` into shared `build_snapshot()` helper. Added `generate_targets_with_overrides()` (feature-gated) for combined pipeline. 1 test verifying identical output
+- [x] `src/main.rs` — Full pipeline integration:
+  - `run_live`: indicator signals generated before targets (with latency tracking), branching on blend config, combined pipeline via `generate_targets_with_overrides()`, blending summary table, SQLite records tsmom + indicator + combined signal layers
+  - `run_paper_trade`: `--config` arg (feature-gated) enables blended mode with same pipeline
+- [x] `config.example.toml` — Commented `[blending]` section with per-asset-class weights (gold 50/50, equity 100/0, forex 10/90)
+- [x] Fixed pre-existing `ema_basic` test (linear→quadratic series) and MACD clippy warning in `ta.rs`
+- [x] All tests pass with and without `track-b` feature, clean clippy
+
+**Remaining Track B PRs:**
+- [x] **PR B3** — Signal combiner: blend TSMOM + indicator signals with configurable per-asset-class weights
+- [ ] **PR B4** — `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
+- [ ] **PR B5** — Eval harness: backtest LLM + agent ablation (Rust port)
 - [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
-- [ ] Universe: 6 instruments (GLD, GC=F, SPY, GBPUSD=X, USDCHF=X, USDJPY=X)
-- [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
-- [ ] `src/eval/` — Backtest LLM + agent ablation (Rust port)
-- [ ] `prompts/` — Indicator .md template (ported from Python)
 
 ### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED
 

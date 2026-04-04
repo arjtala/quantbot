@@ -410,6 +410,27 @@ Replaced DummyIndicatorAgent's inline RSI with a full TA computation suite and a
 
 **All tests pass with and without `track-b`, clean clippy. +1350 lines.**
 
+**PR B3 — Per-Instrument Signal Combiner + Pipeline Integration (2026-04-04):**
+
+Wires indicator signals into sizing via per-asset-class combiner with configurable blend weights. Absorbs the planned PR B5 per-instrument router — fixed global weights are wrong, instrument-type routing is the alpha (gold 50/50, equity 100/0 TSMOM, forex 10/90 indicator-heavy). Blending gated: `enabled=false` preserves existing TSMOM-only behavior.
+
+| Component | Location | Tests | Notes |
+|---|---|---|---|
+| Blend config types | `src/config.rs` | 3 | `BlendCategory`, `BlendWeights`, `BlendConfig` with `weights_for()` safe lookup. Validation warns missing categories, errors on zero-sum |
+| Signal combiner | `src/agents/combiner.rs` (NEW) | 11 | `blend_category()`, `combine_signals()`, `build_combined_signal()`. Vol-scalar normalization, graceful TSMOM-only fallback |
+| Engine refactor | `src/backtest/engine.rs` | 1 | Shared `build_snapshot()` helper, `generate_targets_with_overrides()` for combined pipeline |
+| Pipeline integration | `src/main.rs` | — | `run_live` + `run_paper_trade` blending, latency tracking, blending summary display, 3-layer SQLite recording (tsmom/indicator/combined) |
+
+**Design decisions:**
+- Per-asset-class routing via `BlendCategory` enum, not global 80/20. `BlendCategory` is separate from `AssetClass` (GLD=Equity and GC=F=Futures both map to Gold).
+- Combiner is a pure function: no state, no async, fully testable. Vol-scalar from TSMOM signal ensures apples-to-apples scale for indicator weights.
+- Graceful fallback to TSMOM-only when indicator is flat, confidence=0, llm_success=0, or missing — per instrument, with `indicator_used` flag logged.
+- `build_snapshot()` refactor eliminates code duplication between `generate_targets()` and `generate_targets_with_overrides()`.
+- Paper-trade requires `--config` flag for blending; absent or `enabled=false` → TSMOM-only, zero behavior change.
+- Backtest unchanged — blending in backtest deferred until cache/replay or deterministic heuristic mode (PR B4/B5).
+
+**All tests pass with and without `track-b`, clean clippy. +950 lines.**
+
 ---
 
 ## References
