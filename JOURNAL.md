@@ -389,6 +389,27 @@ Track A complete (8 PRs, 200+ tests). Track B begins with compile-time shape and
 
 **All tests pass with and without `track-b`, clean clippy.**
 
+**PR B2 — LLM Indicator Client + TA Features (2026-04-04):**
+
+Replaced DummyIndicatorAgent's inline RSI with a full TA computation suite and an LLM-based indicator agent. All code gated behind `track-b` feature.
+
+| Component | Location | Tests | Notes |
+|---|---|---|---|
+| TA computations | `src/agents/indicator/ta.rs` | 15 | Extracted `compute_rsi`, added SMA, EMA, MACD, Bollinger, ATR. `TaSnapshot::compute()` + `format_for_prompt()` |
+| LLM HTTP client | `src/agents/indicator/llm_client.rs` | 5 | OpenAI-compatible `/v1/chat/completions`. Rate limiting (200ms), retry on 5xx, `LlmConfig` with serde defaults |
+| Response parser | `src/agents/indicator/parser.rs` | 11 | Strip `<think>` blocks → markdown fences → JSON parse → regex fallback. Clamps values, direction aliases |
+| System prompt | `src/agents/indicator/prompt.txt` | — | Trading analyst role, JSON output schema, indicator guidelines. `include_str!` |
+| LLM indicator agent | `src/agents/indicator/llm_agent.rs` | 3 | `LlmIndicatorAgent` with `tokio::sync::Mutex<LlmClient>`. Async→sync via `block_in_place`. Graceful degradation → Flat |
+| Config + wiring | `src/config.rs`, `src/main.rs` | 1 | Feature-gated `llm: Option<LlmConfig>`. `Box<dyn SignalAgent>` dynamic dispatch. Agent column in display |
+
+**Design decisions:**
+- `SignalAgent` stays sync/object-safe — bridged with `block_in_place` + `Handle::current().block_on()`.
+- Sequential LLM calls per instrument (6 × 30s max = 180s worst case). Acceptable for advisory signals.
+- `OnceLock<Regex>` for think-block regex (compiled once). `regex` crate added to deps.
+- TOML ignores unknown keys when `track-b` disabled — existing configs work unchanged.
+
+**All tests pass with and without `track-b`, clean clippy. +1350 lines.**
+
 ---
 
 ## References

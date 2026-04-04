@@ -601,10 +601,23 @@ Track A checklist:
 - [x] `src/main.rs` — Conditional indicator agent in `run_live` (behind `#[cfg(feature = "track-b")]`), signals recorded to SQLite with `weight=0` (advisory only), printed in report. `run_history` shows Agent column.
 - [x] All tests pass with and without `track-b` feature, clean clippy
 
+#### PR B2 — LLM Indicator Client + TA Features (2026-04-04)
+
+Replaced DummyIndicatorAgent's inline RSI with a full TA suite and LLM-based indicator agent. All code gated behind `track-b` feature. +1350 lines.
+
+- [x] `src/agents/indicator/ta.rs` — Extracted `compute_rsi`, added SMA, EMA, MACD (12/26/9), Bollinger Bands (20,2), ATR (Wilder's smoothing). `TaSnapshot::compute()` + `format_for_prompt()`. 15 tests
+- [x] `src/agents/indicator/llm_client.rs` — OpenAI-compatible `/v1/chat/completions` client (Ollama/SGLang). `LlmConfig` with serde defaults (temp=0.3, max_tokens=512, timeout=30s, retries=2). Rate limiting (200ms), retry on 5xx with exponential backoff (1s/2s/4s), no retry on timeout/4xx. 5 mockito tests
+- [x] `src/agents/indicator/parser.rs` — `parse_llm_response()` pipeline: strip `<think>` blocks (OnceLock regex) → strip markdown fences → try direct JSON → regex fallback for embedded JSON. Clamps confidence/strength, direction aliases (long/buy/short/sell/flat/neutral/hold). 11 tests
+- [x] `src/agents/indicator/prompt.txt` — System prompt: trading analyst role, JSON output schema `{direction, confidence, strength, horizon_days, reasoning}`, indicator analysis guidelines. Loaded via `include_str!`
+- [x] `src/agents/indicator/llm_agent.rs` — `LlmIndicatorAgent` with `tokio::sync::Mutex<LlmClient>`. `generate_signal_async()`: TaSnapshot → format prompt → LLM call → parse → Signal. `SignalAgent` impl via `block_in_place` + `Handle::current().block_on()`. Graceful degradation: any error → Flat + `llm_success=0.0` in metadata. 3 mockito tests
+- [x] `src/config.rs` — Feature-gated `llm: Option<LlmConfig>` on `AppConfig`. 1 test
+- [x] `src/main.rs` — `Box<dyn SignalAgent>` dynamic dispatch: `config.llm.is_some()` → `LlmIndicatorAgent`, else `DummyIndicatorAgent`. Agent column in display, RSI display conditional ("-" when absent). `sig.agent_name` for recording
+- [x] `config.example.toml` — Commented `[llm]` section with all fields and defaults
+- [x] All tests pass with and without `track-b` feature, clean clippy
+
 **Remaining Track B PRs:**
-- [ ] **PR B2** — `rig-core` LLM client (Ollama routing — Fin-R1 runs locally on Mac Mini M4 Pro)
-- [ ] **PR B3** — `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
-- [ ] **PR B4** — `src/agents/indicator/` — Replace dummy RSI with `ta` crate computations → LLM interpretation
+- [ ] **PR B3** — Signal combiner: blend TSMOM + indicator signals with configurable per-asset-class weights
+- [ ] **PR B4** — `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
 - [ ] **PR B5** — `src/agents/decision/combiner.rs` — **Per-instrument router** (not weighted average):
   ```rust
   match instrument.asset_type() {
