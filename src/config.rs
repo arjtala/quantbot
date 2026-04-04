@@ -9,6 +9,55 @@ use crate::agents::indicator::llm_client::LlmConfig;
 use crate::agents::risk::RiskConfig;
 use crate::execution::router::{ContractSpec, ExecutionRouter};
 
+// ─── Blend Config (track-b) ─────────────────────────────────────
+
+#[cfg(feature = "track-b")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlendCategory {
+    Gold,
+    Equity,
+    Forex,
+}
+
+#[cfg(feature = "track-b")]
+impl std::fmt::Display for BlendCategory {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BlendCategory::Gold => write!(f, "gold"),
+            BlendCategory::Equity => write!(f, "equity"),
+            BlendCategory::Forex => write!(f, "forex"),
+        }
+    }
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendWeights {
+    pub tsmom: f64,
+    pub indicator: f64,
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlendConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub weights: HashMap<BlendCategory, BlendWeights>,
+}
+
+#[cfg(feature = "track-b")]
+impl BlendConfig {
+    /// Safe lookup: returns category weights if found, else TSMOM-only default.
+    pub fn weights_for(&self, cat: BlendCategory) -> &BlendWeights {
+        static TSMOM_ONLY: BlendWeights = BlendWeights {
+            tsmom: 1.0,
+            indicator: 0.0,
+        };
+        self.weights.get(&cat).unwrap_or(&TSMOM_ONLY)
+    }
+}
+
 // ─── App Config ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +66,8 @@ pub struct AppConfig {
     pub risk: Option<RiskConfig>,
     #[cfg(feature = "track-b")]
     pub llm: Option<LlmConfig>,
+    #[cfg(feature = "track-b")]
+    pub blending: Option<BlendConfig>,
 }
 
 impl AppConfig {
@@ -41,6 +92,21 @@ impl AppConfig {
             }
             if ig.instruments.is_empty() {
                 anyhow::bail!("execution.ig.instruments must not be empty");
+            }
+        }
+        #[cfg(feature = "track-b")]
+        if let Some(blend) = &self.blending {
+            if blend.enabled {
+                for cat in [BlendCategory::Gold, BlendCategory::Equity, BlendCategory::Forex] {
+                    if !blend.weights.contains_key(&cat) {
+                        eprintln!("  WARN: blending enabled but no weights for {cat} — defaulting to TSMOM-only");
+                    }
+                }
+                for (cat, w) in &blend.weights {
+                    if w.tsmom + w.indicator <= 0.0 {
+                        anyhow::bail!("blending.weights.{cat}: tsmom + indicator must be > 0");
+                    }
+                }
             }
         }
         Ok(())
@@ -385,5 +451,79 @@ model = "llama3"
         assert_eq!(llm.model, "llama3");
         assert_eq!(llm.temperature, 0.3);
         assert_eq!(llm.max_tokens, 512);
+    }
+
+    #[test]
+    #[cfg(feature = "track-b")]
+    fn parse_blend_config() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[blending]
+enabled = true
+
+[blending.weights.gold]
+tsmom = 0.50
+indicator = 0.50
+
+[blending.weights.equity]
+tsmom = 1.00
+indicator = 0.00
+
+[blending.weights.forex]
+tsmom = 0.10
+indicator = 0.90
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let blend = config.blending.unwrap();
+        assert!(blend.enabled);
+        assert_eq!(blend.weights.len(), 3);
+
+        let gold = &blend.weights[&BlendCategory::Gold];
+        assert_eq!(gold.tsmom, 0.50);
+        assert_eq!(gold.indicator, 0.50);
+
+        let equity = &blend.weights[&BlendCategory::Equity];
+        assert_eq!(equity.tsmom, 1.00);
+        assert_eq!(equity.indicator, 0.00);
+
+        let forex = &blend.weights[&BlendCategory::Forex];
+        assert_eq!(forex.tsmom, 0.10);
+        assert_eq!(forex.indicator, 0.90);
+    }
+
+    #[test]
+    #[cfg(feature = "track-b")]
+    fn blend_missing_category_fallback() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[blending]
+enabled = true
+
+[blending.weights.gold]
+tsmom = 0.50
+indicator = 0.50
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let blend = config.blending.unwrap();
+        // Missing equity/forex → weights_for returns TSMOM-only default
+        let equity_w = blend.weights_for(BlendCategory::Equity);
+        assert_eq!(equity_w.tsmom, 1.0);
+        assert_eq!(equity_w.indicator, 0.0);
+    }
+
+    #[test]
+    #[cfg(feature = "track-b")]
+    fn blend_weights_for_default() {
+        let blend = BlendConfig {
+            enabled: true,
+            weights: HashMap::new(),
+        };
+        let w = blend.weights_for(BlendCategory::Gold);
+        assert_eq!(w.tsmom, 1.0);
+        assert_eq!(w.indicator, 0.0);
     }
 }

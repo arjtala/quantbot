@@ -124,6 +124,46 @@ impl BacktestEngine {
             signals.insert(sym.clone(), sig);
         }
 
+        self.build_snapshot(signals, raw_weights, bars_by_instrument, current_quantities, nav)
+    }
+
+    /// Generate target positions with externally-provided signals and weights.
+    ///
+    /// Used by the combined signal pipeline (track-b) to pass blended weights
+    /// through the same risk limits → sizing → order diff → margin pipeline.
+    #[cfg(feature = "track-b")]
+    pub fn generate_targets_with_overrides(
+        &self,
+        signals: HashMap<String, Signal>,
+        raw_weights: HashMap<String, f64>,
+        bars_by_instrument: &HashMap<String, BarSeries>,
+        current_quantities: &HashMap<String, f64>,
+        nav: f64,
+    ) -> TargetSnapshot {
+        self.build_snapshot(signals, raw_weights, bars_by_instrument, current_quantities, nav)
+    }
+
+    /// Shared pipeline: apply risk limits, size positions, diff orders, compute margin.
+    fn build_snapshot(
+        &self,
+        signals: HashMap<String, Signal>,
+        raw_weights: HashMap<String, f64>,
+        bars_by_instrument: &HashMap<String, BarSeries>,
+        current_quantities: &HashMap<String, f64>,
+        nav: f64,
+    ) -> TargetSnapshot {
+        // Collect close prices and max date from bars
+        let mut close_prices: HashMap<String, f64> = HashMap::new();
+        let mut max_date = NaiveDate::from_ymd_opt(2000, 1, 1).unwrap();
+        for (sym, series) in bars_by_instrument {
+            if let Some(last_bar) = series.bars().last() {
+                close_prices.insert(sym.clone(), last_bar.close);
+                if last_bar.date > max_date {
+                    max_date = last_bar.date;
+                }
+            }
+        }
+
         // Apply risk limits to a clone of the weights
         let mut target_weights = raw_weights.clone();
         self.apply_risk_limits(&mut target_weights);
@@ -723,5 +763,47 @@ mod tests {
             target_gross <= 2.0 + 1e-10,
             "Expected target gross <= 2.0, got {target_gross}"
         );
+    }
+
+    #[test]
+    #[cfg(feature = "track-b")]
+    fn generate_targets_with_overrides_matches() {
+        let bars = trending_bars(300, 100.0, 0.002);
+        let mut instruments = HashMap::new();
+        instruments.insert("TEST".into(), bars);
+
+        let engine = BacktestEngine::with_defaults();
+        let agent = TSMOMAgent::new();
+
+        // Get the standard result
+        let snap1 =
+            engine.generate_targets(&agent, &instruments, &HashMap::new(), 1_000_000.0, 253);
+
+        // Use overrides with the same signals and weights
+        let snap2 = engine.generate_targets_with_overrides(
+            snap1.signals.clone(),
+            snap1.raw_weights.clone(),
+            &instruments,
+            &HashMap::new(),
+            1_000_000.0,
+        );
+
+        // Should produce identical target weights and quantities
+        assert_eq!(snap1.target_weights.len(), snap2.target_weights.len());
+        for (sym, &w1) in &snap1.target_weights {
+            let w2 = snap2.target_weights[sym];
+            assert!(
+                (w1 - w2).abs() < 1e-10,
+                "Weight mismatch for {sym}: {w1} vs {w2}"
+            );
+        }
+        assert_eq!(snap1.target_quantities.len(), snap2.target_quantities.len());
+        for (sym, &q1) in &snap1.target_quantities {
+            let q2 = snap2.target_quantities[sym];
+            assert!(
+                (q1 - q2).abs() < 1e-10,
+                "Quantity mismatch for {sym}: {q1} vs {q2}"
+            );
+        }
     }
 }

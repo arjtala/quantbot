@@ -203,11 +203,7 @@ pub fn compute_macd(
         if i < slow {
             continue;
         }
-        if i == slow {
-            slow_ema = (c - slow_ema) * slow_mult + slow_ema;
-        } else {
-            slow_ema = (c - slow_ema) * slow_mult + slow_ema;
-        }
+        slow_ema = (c - slow_ema) * slow_mult + slow_ema;
         macd_values.push(fast_ema - slow_ema);
     }
 
@@ -376,9 +372,9 @@ mod tests {
 
     #[test]
     fn ema_basic() {
-        let values: Vec<f64> = (1..=20).map(|i| i as f64).collect();
+        // Exponentially increasing series — EMA weights recent (larger) values more
+        let values: Vec<f64> = (1..=20).map(|i| (i as f64).powi(2)).collect();
         let ema = compute_ema(&values, 10).unwrap();
-        // EMA of a linearly increasing series should be > SMA
         let sma = compute_sma(&values, 10).unwrap();
         assert!(ema > sma, "EMA ({ema}) should weight recent values more than SMA ({sma})");
     }

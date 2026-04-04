@@ -63,3 +63,21 @@ ig_point_value = 100.0
 # max_tokens = 512                       # Max response tokens
 # timeout_secs = 30                      # Request timeout
 # max_retries = 2                        # Retries on 5xx errors
+
+# Signal blending (track-b feature).
+# Combines TSMOM + indicator signals per asset class.
+# Omit [blending] or set enabled = false for TSMOM-only mode.
+# [blending]
+# enabled = false
+#
+# [blending.weights.gold]
+# tsmom = 0.50
+# indicator = 0.50
+#
+# [blending.weights.equity]
+# tsmom = 1.00
+# indicator = 0.00
+#
+# [blending.weights.forex]
+# tsmom = 0.10
+# indicator = 0.90

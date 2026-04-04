@@ -7,6 +7,8 @@ use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 
 #[cfg(feature = "track-b")]
+use quantbot::agents::combiner;
+#[cfg(feature = "track-b")]
 use quantbot::agents::indicator::DummyIndicatorAgent;
 #[cfg(feature = "track-b")]
 use quantbot::agents::indicator::llm_agent::LlmIndicatorAgent;
@@ -249,6 +251,11 @@ struct PaperTradeArgs {
     #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
     data_dir: PathBuf,
 
+    /// Path to TOML configuration file (enables blending when [blending] section present)
+    #[cfg(feature = "track-b")]
+    #[arg(long)]
+    config: Option<PathBuf>,
+
     /// Initial portfolio cash (NAV)
     #[arg(long, default_value_t = 1_000_000.0)]
     initial_cash: f64,
@@ -472,6 +479,124 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
         }
     };
 
+    // ── Optional blending (track-b with --config) ─────────────────
+    #[cfg(feature = "track-b")]
+    let (snapshot, _combined_results): (TargetSnapshot, Option<Vec<combiner::CombinedResult>>) = {
+        let app_config = args
+            .config
+            .as_ref()
+            .map(|p| AppConfig::load(p))
+            .transpose()
+            .with_context(|| "failed to load config for blending")?;
+
+        let blend_enabled = app_config
+            .as_ref()
+            .and_then(|c| c.blending.as_ref())
+            .is_some_and(|b| b.enabled);
+
+        if blend_enabled {
+            let app_config = app_config.as_ref().unwrap();
+            let blend_config = app_config.blending.as_ref().unwrap();
+            eprintln!("  Blending mode: ENABLED");
+
+            // Create indicator agent
+            let indicator: Box<dyn SignalAgent> = match &app_config.llm {
+                Some(llm_config) => match LlmIndicatorAgent::new(llm_config.clone()) {
+                    Ok(a) => {
+                        eprintln!("  Using LLM indicator agent (model: {})", llm_config.model);
+                        Box::new(a)
+                    }
+                    Err(e) => {
+                        eprintln!("  WARN: LLM agent init failed: {e}, falling back to RSI");
+                        Box::new(DummyIndicatorAgent::new())
+                    }
+                },
+                None => Box::new(DummyIndicatorAgent::new()),
+            };
+
+            // Generate TSMOM signals
+            let mut tsmom_signals = HashMap::new();
+            let mut tsmom_weights = HashMap::new();
+            for (sym, series) in &bars {
+                if series.bars().len() < args.min_history {
+                    continue;
+                }
+                let sig = agent.generate_signal(series, sym);
+                let weight = if sig.direction != SignalDirection::Flat {
+                    TSMOMAgent::compute_target_weight(&sig)
+                } else {
+                    0.0
+                };
+                tsmom_weights.insert(sym.clone(), weight);
+                tsmom_signals.insert(sym.clone(), sig);
+            }
+
+            // Generate indicator signals with latency
+            let mut indicator_map = HashMap::new();
+            let mut syms: Vec<&String> = bars.keys().collect();
+            syms.sort();
+            for sym in syms {
+                let start = std::time::Instant::now();
+                let mut sig = indicator.generate_signal(&bars[sym], sym);
+                let latency = start.elapsed().as_secs_f64() * 1000.0;
+                sig.metadata.insert("latency_ms".into(), latency);
+                indicator_map.insert(sym.clone(), sig);
+            }
+
+            // Combine
+            let results = combiner::combine_signals(&tsmom_signals, &indicator_map, blend_config);
+            let mut combined_weights = HashMap::new();
+            let mut combined_signals = HashMap::new();
+            for r in &results {
+                combined_weights.insert(r.instrument.clone(), r.combined_weight);
+                let combined_sig = combiner::build_combined_signal(
+                    r,
+                    &tsmom_signals[&r.instrument],
+                    indicator_map.get(&r.instrument),
+                );
+                combined_signals.insert(r.instrument.clone(), combined_sig);
+            }
+
+            let snap = engine.generate_targets_with_overrides(
+                combined_signals,
+                combined_weights,
+                &bars,
+                &current_quantities,
+                nav,
+            );
+
+            // Print blending summary
+            println!();
+            println!("  BLENDED WEIGHTS");
+            println!(
+                "  {:<14} {:<10} {:>8} {:>10} {:>10} {:>6}",
+                "Instrument", "Category", "TSMOM", "Indicator", "Combined", "Used?"
+            );
+            for r in &results {
+                let used_str = if r.indicator_used {
+                    "yes"
+                } else if r.blend_indicator == 0.0 {
+                    "no (100% tsmom)"
+                } else {
+                    "no (fallback)"
+                };
+                println!(
+                    "  {:<14} {:<10} {:>+8.2} {:>+10.2} {:>+10.2} {:>6}",
+                    r.instrument, r.blend_category, r.tsmom_weight, r.indicator_weight,
+                    r.combined_weight, used_str,
+                );
+            }
+            println!();
+
+            (snap, Some(results))
+        } else {
+            let snap =
+                engine.generate_targets(&agent, &bars, &current_quantities, nav, args.min_history);
+            (snap, None)
+        }
+    };
+
+    #[cfg(not(feature = "track-b"))]
     let snapshot =
         engine.generate_targets(&agent, &bars, &current_quantities, nav, args.min_history);
 
@@ -694,22 +819,6 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     let bt_engine = BacktestEngine::new_with_router(config, ig_router);
     let agent = TSMOMAgent::new();
 
-    // For target generation, use empty quantities (we'll reconcile against live positions)
-    let snapshot =
-        bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
-
-    // Log targets
-    let target_entries: Vec<TargetEntry> = snapshot
-        .target_quantities
-        .iter()
-        .map(|(sym, qty)| TargetEntry {
-            instrument: sym.clone(),
-            signed_deal_size: (*qty * 10.0).round() / 10.0,
-            weight: snapshot.target_weights.get(sym).copied().unwrap_or(0.0),
-        })
-        .collect();
-    audit.log_targets(&snapshot.date.to_string(), nav, &target_entries);
-
     // ── Generate indicator signals (track-b only) ────────────────
     #[cfg(feature = "track-b")]
     let indicator_signals: Vec<(String, quantbot::core::signal::Signal)> = {
@@ -730,11 +839,95 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         let mut syms: Vec<&String> = bars.keys().collect();
         syms.sort();
         for sym in syms {
-            let sig = indicator.generate_signal(&bars[sym], sym);
+            let start = std::time::Instant::now();
+            let mut sig = indicator.generate_signal(&bars[sym], sym);
+            let latency = start.elapsed().as_secs_f64() * 1000.0;
+            sig.metadata.insert("latency_ms".into(), latency);
             sigs.push((sym.clone(), sig));
         }
         sigs
     };
+
+    // ── Generate targets (with optional blending) ─────────────────
+    #[cfg(feature = "track-b")]
+    let (snapshot, combined_results): (TargetSnapshot, Option<Vec<combiner::CombinedResult>>) =
+        if app_config
+            .blending
+            .as_ref()
+            .is_some_and(|b| b.enabled)
+        {
+            let blend_config = app_config.blending.as_ref().unwrap();
+            eprintln!("  Blending mode: ENABLED");
+
+            // Generate TSMOM signals (same logic as generate_targets)
+            let mut tsmom_signals = HashMap::new();
+            let mut tsmom_weights = HashMap::new();
+            for (sym, series) in &bars {
+                if series.bars().len() < args.min_history {
+                    continue;
+                }
+                let sig = agent.generate_signal(series, sym);
+                let weight = if sig.direction != SignalDirection::Flat {
+                    TSMOMAgent::compute_target_weight(&sig)
+                } else {
+                    0.0
+                };
+                tsmom_weights.insert(sym.clone(), weight);
+                tsmom_signals.insert(sym.clone(), sig);
+            }
+
+            // Build indicator signal map
+            let indicator_map: HashMap<String, quantbot::core::signal::Signal> = indicator_signals
+                .iter()
+                .map(|(sym, sig)| (sym.clone(), sig.clone()))
+                .collect();
+
+            // Combine
+            let results = combiner::combine_signals(&tsmom_signals, &indicator_map, blend_config);
+
+            // Build override maps
+            let mut combined_weights = HashMap::new();
+            let mut combined_signals = HashMap::new();
+            for r in &results {
+                combined_weights.insert(r.instrument.clone(), r.combined_weight);
+                let combined_sig = combiner::build_combined_signal(
+                    r,
+                    &tsmom_signals[&r.instrument],
+                    indicator_map.get(&r.instrument),
+                );
+                combined_signals.insert(r.instrument.clone(), combined_sig);
+            }
+
+            let snap = bt_engine.generate_targets_with_overrides(
+                combined_signals,
+                combined_weights,
+                &bars,
+                &HashMap::new(),
+                nav,
+            );
+            (snap, Some(results))
+        } else {
+            eprintln!("  Blending mode: disabled (TSMOM-only)");
+            let snap =
+                bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
+            (snap, None)
+        };
+
+    #[cfg(not(feature = "track-b"))]
+    let snapshot =
+        bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
+
+    // Log targets
+    let target_entries: Vec<TargetEntry> = snapshot
+        .target_quantities
+        .iter()
+        .map(|(sym, qty)| TargetEntry {
+            instrument: sym.clone(),
+            signed_deal_size: (*qty * 10.0).round() / 10.0,
+            weight: snapshot.target_weights.get(sym).copied().unwrap_or(0.0),
+        })
+        .collect();
+    audit.log_targets(&snapshot.date.to_string(), nav, &target_entries);
 
     // ── SQLite recording ────────────────────────────────────────
     let db_path = args.data_dir.join("quantbot.db");
@@ -760,9 +953,10 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             let mut signal_records: Vec<SignalRecord> = snapshot
                 .signals
                 .iter()
+                .filter(|(_, sig)| sig.agent_name != "combined")
                 .map(|(sym, sig)| SignalRecord {
                     instrument: sym.clone(),
-                    agent_name: "tsmom".into(),
+                    agent_name: sig.agent_name.clone(),
                     direction: sig.direction,
                     strength: sig.strength,
                     confidence: sig.confidence,
@@ -773,6 +967,30 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                         .unwrap_or(0.0),
                 })
                 .collect();
+
+            // When blending is active, snapshot.signals are "combined" — also record raw TSMOM
+            #[cfg(feature = "track-b")]
+            if let Some(ref results) = combined_results {
+                // Record raw TSMOM signals (from the combiner results)
+                for r in results {
+                    // Raw tsmom weight is available in the combiner result
+                    signal_records.push(SignalRecord {
+                        instrument: r.instrument.clone(),
+                        agent_name: "tsmom".into(),
+                        direction: if r.tsmom_weight > 0.0 {
+                            SignalDirection::Long
+                        } else if r.tsmom_weight < 0.0 {
+                            SignalDirection::Short
+                        } else {
+                            SignalDirection::Flat
+                        },
+                        strength: r.tsmom_weight.abs().min(1.0)
+                            * if r.tsmom_weight < 0.0 { -1.0 } else { 1.0 },
+                        confidence: 1.0, // TSMOM confidence is baked into weight
+                        weight: r.tsmom_weight,
+                    });
+                }
+            }
 
             // Add indicator signals (track-b only)
             #[cfg(feature = "track-b")]
@@ -785,6 +1003,23 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                     confidence: sig.confidence,
                     weight: 0.0, // advisory only
                 });
+            }
+
+            // Add combined signals (track-b blending only)
+            #[cfg(feature = "track-b")]
+            if let Some(ref results) = combined_results {
+                for r in results {
+                    if let Some(sig) = snapshot.signals.get(&r.instrument) {
+                        signal_records.push(SignalRecord {
+                            instrument: r.instrument.clone(),
+                            agent_name: "combined".into(),
+                            direction: sig.direction,
+                            strength: sig.strength,
+                            confidence: sig.confidence,
+                            weight: r.combined_weight,
+                        });
+                    }
+                }
             }
 
             rec.record_signals(&signal_records);
@@ -882,6 +1117,30 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             );
         }
         println!();
+
+        // Print blending summary if enabled
+        if let Some(ref results) = combined_results {
+            println!("  BLENDED WEIGHTS");
+            println!(
+                "  {:<14} {:<10} {:>8} {:>10} {:>10} {:>6}",
+                "Instrument", "Category", "TSMOM", "Indicator", "Combined", "Used?"
+            );
+            for r in results {
+                let used_str = if r.indicator_used {
+                    "yes"
+                } else if r.blend_indicator == 0.0 {
+                    "no (100% tsmom)"
+                } else {
+                    "no (fallback)"
+                };
+                println!(
+                    "  {:<14} {:<10} {:>+8.2} {:>+10.2} {:>+10.2} {:>6}",
+                    r.instrument, r.blend_category, r.tsmom_weight, r.indicator_weight,
+                    r.combined_weight, used_str,
+                );
+            }
+            println!();
+        }
     }
 
     let result = match app_config.execution.engine {

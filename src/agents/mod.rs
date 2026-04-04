@@ -1,4 +1,6 @@
 #[cfg(feature = "track-b")]
+pub mod combiner;
+#[cfg(feature = "track-b")]
 pub mod indicator;
 pub mod risk;
 pub mod tsmom;
