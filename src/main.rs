@@ -9,6 +9,8 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "track-b")]
 use quantbot::agents::indicator::DummyIndicatorAgent;
 #[cfg(feature = "track-b")]
+use quantbot::agents::indicator::llm_agent::LlmIndicatorAgent;
+#[cfg(feature = "track-b")]
 use quantbot::agents::SignalAgent;
 use quantbot::agents::risk::{RiskAgent, RiskDecision};
 use quantbot::agents::tsmom::TSMOMAgent;
@@ -711,12 +713,24 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     // ── Generate indicator signals (track-b only) ────────────────
     #[cfg(feature = "track-b")]
     let indicator_signals: Vec<(String, quantbot::core::signal::Signal)> = {
-        let indicator = DummyIndicatorAgent::new();
+        let indicator: Box<dyn SignalAgent> = match &app_config.llm {
+            Some(llm_config) => match LlmIndicatorAgent::new(llm_config.clone()) {
+                Ok(agent) => {
+                    eprintln!("  Using LLM indicator agent (model: {})", llm_config.model);
+                    Box::new(agent)
+                }
+                Err(e) => {
+                    eprintln!("  WARN: LLM agent init failed: {e}, falling back to RSI");
+                    Box::new(DummyIndicatorAgent::new())
+                }
+            },
+            None => Box::new(DummyIndicatorAgent::new()),
+        };
         let mut sigs = Vec::new();
         let mut syms: Vec<&String> = bars.keys().collect();
         syms.sort();
         for sym in syms {
-            let sig = SignalAgent::generate_signal(&indicator, &bars[sym], sym);
+            let sig = indicator.generate_signal(&bars[sym], sym);
             sigs.push((sym.clone(), sig));
         }
         sigs
@@ -765,11 +779,11 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             for (sym, sig) in &indicator_signals {
                 signal_records.push(SignalRecord {
                     instrument: sym.clone(),
-                    agent_name: "indicator".into(),
+                    agent_name: sig.agent_name.clone(),
                     direction: sig.direction,
                     strength: sig.strength,
                     confidence: sig.confidence,
-                    weight: 0.0, // advisory only in B1
+                    weight: 0.0, // advisory only
                 });
             }
 
@@ -849,8 +863,8 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         println!();
         println!("  INDICATOR SIGNALS (advisory)");
         println!(
-            "  {:<14} {:<10} {:>8} {:>10} {:>6}",
-            "Instrument", "Direction", "Strength", "Confidence", "RSI"
+            "  {:<14} {:<15} {:<10} {:>8} {:>10} {:>6}",
+            "Instrument", "Agent", "Direction", "Strength", "Confidence", "RSI"
         );
         for (sym, sig) in &indicator_signals {
             let dir_str = match sig.direction {
@@ -858,10 +872,13 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                 SignalDirection::Short => "Short",
                 SignalDirection::Flat => "Flat",
             };
-            let rsi = sig.metadata.get("rsi").copied().unwrap_or(0.0);
+            let rsi_str = match sig.metadata.get("rsi") {
+                Some(rsi) => format!("{:.1}", rsi),
+                None => "-".into(),
+            };
             println!(
-                "  {:<14} {:<10} {:>+8.2} {:>10.2} {:>6.1}",
-                sym, dir_str, sig.strength, sig.confidence, rsi,
+                "  {:<14} {:<15} {:<10} {:>+8.2} {:>10.2} {:>6}",
+                sym, sig.agent_name, dir_str, sig.strength, sig.confidence, rsi_str,
             );
         }
         println!();

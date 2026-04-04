@@ -4,6 +4,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "track-b")]
+use crate::agents::indicator::llm_client::LlmConfig;
 use crate::agents::risk::RiskConfig;
 use crate::execution::router::{ContractSpec, ExecutionRouter};
 
@@ -13,6 +15,8 @@ use crate::execution::router::{ContractSpec, ExecutionRouter};
 pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub risk: Option<RiskConfig>,
+    #[cfg(feature = "track-b")]
+    pub llm: Option<LlmConfig>,
 }
 
 impl AppConfig {
@@ -362,5 +366,24 @@ engine = "paper"
         let ig = config.execution.ig.unwrap();
         assert!(ig.instruments.contains_key("GC=F"));
         assert!(ig.instruments.contains_key("GBPUSD=X"));
+    }
+
+    #[test]
+    #[cfg(feature = "track-b")]
+    fn parse_llm_config() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[llm]
+base_url = "http://localhost:11434"
+model = "llama3"
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let llm = config.llm.unwrap();
+        assert_eq!(llm.base_url, "http://localhost:11434");
+        assert_eq!(llm.model, "llama3");
+        assert_eq!(llm.temperature, 0.3);
+        assert_eq!(llm.max_tokens, 512);
     }
 }

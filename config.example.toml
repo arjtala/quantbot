@@ -53,3 +53,13 @@ epic = "CS.D.USDJPY.TODAY.IP"
 min_size = 0.5
 size_step = 0.1
 ig_point_value = 100.0
+
+# LLM indicator agent (track-b feature).
+# Omit [llm] section to use the default RSI-only indicator.
+# [llm]
+# base_url = "http://localhost:11434"   # Ollama/SGLang endpoint
+# model = "llama3"                       # Model name
+# temperature = 0.3                      # Sampling temperature
+# max_tokens = 512                       # Max response tokens
+# timeout_secs = 30                      # Request timeout
+# max_retries = 2                        # Retries on 5xx errors

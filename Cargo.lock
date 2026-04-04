@@ -1016,6 +1016,7 @@ dependencies = [
  "clap",
  "csv",
  "mockito",
+ "regex",
  "reqwest",
  "rusqlite",
  "serde",

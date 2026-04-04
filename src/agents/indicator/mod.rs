@@ -1,8 +1,15 @@
+pub mod ta;
+
+pub mod llm_client;
+pub mod parser;
+pub mod llm_agent;
+
 use std::collections::HashMap;
 
 use crate::agents::SignalAgent;
 use crate::core::bar::BarSeries;
 use crate::core::signal::{Signal, SignalDirection, SignalType};
+use ta::compute_rsi;
 
 /// RSI period for the dummy indicator.
 const RSI_PERIOD: usize = 14;
@@ -81,44 +88,6 @@ impl SignalAgent for DummyIndicatorAgent {
         sig.metadata = metadata;
         sig
     }
-}
-
-/// Compute RSI using Wilder's smoothing (exponential moving average of gains/losses).
-fn compute_rsi(closes: &[f64], period: usize) -> f64 {
-    debug_assert!(closes.len() > period);
-
-    let changes: Vec<f64> = closes.windows(2).map(|w| w[1] - w[0]).collect();
-
-    // Initial average gain/loss from first `period` changes
-    let mut avg_gain = 0.0;
-    let mut avg_loss = 0.0;
-    for &change in &changes[..period] {
-        if change > 0.0 {
-            avg_gain += change;
-        } else {
-            avg_loss += -change;
-        }
-    }
-    avg_gain /= period as f64;
-    avg_loss /= period as f64;
-
-    // Wilder's smoothing for remaining changes
-    for &change in &changes[period..] {
-        if change > 0.0 {
-            avg_gain = (avg_gain * (period as f64 - 1.0) + change) / period as f64;
-            avg_loss = (avg_loss * (period as f64 - 1.0)) / period as f64;
-        } else {
-            avg_gain = (avg_gain * (period as f64 - 1.0)) / period as f64;
-            avg_loss = (avg_loss * (period as f64 - 1.0) + (-change)) / period as f64;
-        }
-    }
-
-    if avg_loss < 1e-14 {
-        return 100.0;
-    }
-
-    let rs = avg_gain / avg_loss;
-    100.0 - (100.0 / (1.0 + rs))
 }
 
 fn flat_signal(instrument: &str, rsi: f64) -> Signal {
