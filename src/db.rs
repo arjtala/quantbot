@@ -7,7 +7,7 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 /// Schema version stored in PRAGMA user_version. Bump when making breaking
 /// changes to the table layout.
-pub const DB_SCHEMA_VERSION: i32 = 2;
+pub const DB_SCHEMA_VERSION: i32 = 3;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS runs (
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS signals (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     run_id      TEXT NOT NULL REFERENCES runs(run_id),
     instrument  TEXT NOT NULL,
+    agent_name  TEXT NOT NULL DEFAULT 'tsmom',
     direction   TEXT NOT NULL,
     strength    REAL NOT NULL,
     confidence  REAL NOT NULL,
@@ -52,6 +53,7 @@ CREATE TABLE IF NOT EXISTS positions (
 );
 
 CREATE INDEX IF NOT EXISTS idx_signals_run ON signals(run_id);
+CREATE INDEX IF NOT EXISTS idx_signals_agent ON signals(agent_name);
 CREATE INDEX IF NOT EXISTS idx_orders_run ON orders(run_id);
 CREATE INDEX IF NOT EXISTS idx_positions_run ON positions(run_id);
 CREATE INDEX IF NOT EXISTS idx_orders_instrument ON orders(instrument);
@@ -111,6 +113,10 @@ impl Db {
             if current < 2 {
                 conn.execute_batch(RISK_STATE_SQL)?;
             }
+            if current < 3 {
+                conn.execute_batch("ALTER TABLE signals ADD COLUMN agent_name TEXT NOT NULL DEFAULT 'tsmom';")?;
+                conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_signals_agent ON signals(agent_name);")?;
+            }
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
             eprintln!("  DB migrated from schema v{current} to v{DB_SCHEMA_VERSION}");
         } else if current > DB_SCHEMA_VERSION {
@@ -169,10 +175,12 @@ impl Db {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_signal(
         &self,
         run_id: &str,
         instrument: &str,
+        agent_name: &str,
         direction: &str,
         strength: f64,
         confidence: f64,
@@ -180,9 +188,9 @@ impl Db {
     ) -> SqlResult<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
         self.conn.execute(
-            "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![run_id, instrument, direction, strength, confidence, weight, now],
+            "INSERT INTO signals (run_id, instrument, agent_name, direction, strength, confidence, weight, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![run_id, instrument, agent_name, direction, strength, confidence, weight, now],
         )?;
         Ok(())
     }
@@ -290,17 +298,18 @@ impl Db {
     /// Get signals for a specific run.
     pub fn signals_for_run(&self, run_id: &str) -> SqlResult<Vec<SignalRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT instrument, direction, strength, confidence, weight, ts
-             FROM signals WHERE run_id = ?1 ORDER BY ts",
+            "SELECT instrument, agent_name, direction, strength, confidence, weight, ts
+             FROM signals WHERE run_id = ?1 ORDER BY agent_name, ts",
         )?;
         let rows = stmt.query_map(params![run_id], |row| {
             Ok(SignalRow {
                 instrument: row.get(0)?,
-                direction: row.get(1)?,
-                strength: row.get(2)?,
-                confidence: row.get(3)?,
-                weight: row.get(4)?,
-                ts: row.get(5)?,
+                agent_name: row.get(1)?,
+                direction: row.get(2)?,
+                strength: row.get(3)?,
+                confidence: row.get(4)?,
+                weight: row.get(5)?,
+                ts: row.get(6)?,
             })
         })?;
         rows.collect()
@@ -407,6 +416,7 @@ pub struct OrderRow {
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SignalRow {
     pub instrument: String,
+    pub agent_name: String,
     pub direction: String,
     pub strength: f64,
     pub confidence: f64,
@@ -452,7 +462,7 @@ mod tests {
     fn insert_and_query_signals() {
         let db = Db::open_memory().unwrap();
         db.insert_run("run-1", "{}", 1e6).unwrap();
-        db.insert_signal("run-1", "GBPUSD=X", "Long", 0.5, 0.75, 0.33)
+        db.insert_signal("run-1", "GBPUSD=X", "tsmom", "Long", 0.5, 0.75, 0.33)
             .unwrap();
 
         let signals = db.signals_for_run("run-1").unwrap();
@@ -505,7 +515,7 @@ mod tests {
     fn schema_version_set_on_fresh_db() {
         let db = Db::open_memory().unwrap();
         assert_eq!(db.schema_version().unwrap(), DB_SCHEMA_VERSION);
-        assert_eq!(DB_SCHEMA_VERSION, 2);
+        assert_eq!(DB_SCHEMA_VERSION, 3);
     }
 
     #[test]
@@ -552,13 +562,13 @@ mod tests {
         db.insert_run("run-tx", "{}", 1e6).unwrap();
         let result = db.with_transaction(|conn| {
             conn.execute(
-                "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
-                 VALUES ('run-tx', 'A', 'Long', 1.0, 1.0, 0.5, 'now')",
+                "INSERT INTO signals (run_id, instrument, agent_name, direction, strength, confidence, weight, ts)
+                 VALUES ('run-tx', 'A', 'tsmom', 'Long', 1.0, 1.0, 0.5, 'now')",
                 [],
             )?;
             conn.execute(
-                "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
-                 VALUES ('run-tx', 'B', 'Short', -1.0, 0.8, 0.3, 'now')",
+                "INSERT INTO signals (run_id, instrument, agent_name, direction, strength, confidence, weight, ts)
+                 VALUES ('run-tx', 'B', 'tsmom', 'Short', -1.0, 0.8, 0.3, 'now')",
                 [],
             )?;
             Ok(())
@@ -585,8 +595,93 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_2() {
+    fn schema_version_is_3() {
         let db = Db::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 2);
+        assert_eq!(db.schema_version().unwrap(), 3);
+    }
+
+    #[test]
+    fn migration_v2_to_v3_adds_agent_name() {
+        // Simulate a v2 database (no agent_name column)
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // Create tables without agent_name (v2 schema)
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
+                config_json TEXT NOT NULL, nav_usd REAL NOT NULL,
+                outcome TEXT, duration_ms INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, direction TEXT NOT NULL,
+                strength REAL NOT NULL, confidence REAL NOT NULL,
+                weight REAL NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, epic TEXT NOT NULL,
+                direction TEXT NOT NULL, size REAL NOT NULL,
+                deal_reference TEXT, status TEXT, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, signed_deal_size REAL NOT NULL,
+                source TEXT NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS risk_state (
+                key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_signals_run ON signals(run_id);
+            CREATE INDEX IF NOT EXISTS idx_orders_run ON orders(run_id);
+            CREATE INDEX IF NOT EXISTS idx_positions_run ON positions(run_id);
+            CREATE INDEX IF NOT EXISTS idx_orders_instrument ON orders(instrument);
+            CREATE INDEX IF NOT EXISTS idx_positions_instrument ON positions(instrument);
+            CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
+            CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+        ").unwrap();
+        // Stamp as v2
+        conn.execute_batch("PRAGMA user_version = 2;").unwrap();
+        // Insert a v2 signal (no agent_name)
+        conn.execute(
+            "INSERT INTO runs (run_id, started_at, config_json, nav_usd) VALUES ('r1', 'now', '{}', 1e6)",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
+             VALUES ('r1', 'SPY', 'Long', 0.5, 0.75, 0.33, 'now')",
+            [],
+        ).unwrap();
+
+        // Now run migration
+        Db::check_schema_version(&conn).unwrap();
+
+        // Verify version bumped
+        let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 3);
+
+        // Verify existing row got default agent_name
+        let agent: String = conn.query_row(
+            "SELECT agent_name FROM signals WHERE run_id = 'r1'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(agent, "tsmom");
+
+        // Verify new inserts with agent_name work
+        conn.execute(
+            "INSERT INTO signals (run_id, instrument, agent_name, direction, strength, confidence, weight, ts)
+             VALUES ('r1', 'GLD', 'indicator', 'Short', -0.5, 0.7, 0.0, 'now')",
+            [],
+        ).unwrap();
+        let agent2: String = conn.query_row(
+            "SELECT agent_name FROM signals WHERE instrument = 'GLD'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(agent2, "indicator");
     }
 }

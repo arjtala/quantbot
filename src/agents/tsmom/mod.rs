@@ -2,6 +2,7 @@ mod volatility;
 
 use std::collections::HashMap;
 
+use crate::agents::SignalAgent;
 use crate::core::bar::BarSeries;
 use crate::core::signal::{Signal, SignalDirection, SignalType};
 
@@ -139,6 +140,20 @@ impl TSMOMAgent {
         .expect("flat signal values are always valid");
         sig.metadata = metadata;
         sig
+    }
+}
+
+impl SignalAgent for TSMOMAgent {
+    fn name(&self) -> &str {
+        "tsmom"
+    }
+
+    fn signal_type(&self) -> SignalType {
+        SignalType::Quant
+    }
+
+    fn generate_signal(&self, bars: &BarSeries, instrument: &str) -> Signal {
+        self.generate_signal(bars, instrument)
     }
 }
 

@@ -6,6 +6,10 @@ use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
 use clap::{Parser, Subcommand};
 
+#[cfg(feature = "track-b")]
+use quantbot::agents::indicator::DummyIndicatorAgent;
+#[cfg(feature = "track-b")]
+use quantbot::agents::SignalAgent;
 use quantbot::agents::risk::{RiskAgent, RiskDecision};
 use quantbot::agents::tsmom::TSMOMAgent;
 use quantbot::audit::{
@@ -29,7 +33,7 @@ use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::reconcile;
 use quantbot::execution::router::SizedOrder;
 use quantbot::execution::traits::{ExecutionEngine, OrderRequest};
-use quantbot::recording::Recorder;
+use quantbot::recording::{Recorder, SignalRecord};
 
 #[derive(Parser)]
 #[command(name = "quantbot", version, about = "Quantitative trading system")]
@@ -704,6 +708,20 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         .collect();
     audit.log_targets(&snapshot.date.to_string(), nav, &target_entries);
 
+    // ── Generate indicator signals (track-b only) ────────────────
+    #[cfg(feature = "track-b")]
+    let indicator_signals: Vec<(String, quantbot::core::signal::Signal)> = {
+        let indicator = DummyIndicatorAgent::new();
+        let mut sigs = Vec::new();
+        let mut syms: Vec<&String> = bars.keys().collect();
+        syms.sort();
+        for sym in syms {
+            let sig = SignalAgent::generate_signal(&indicator, &bars[sym], sym);
+            sigs.push((sym.clone(), sig));
+        }
+        sigs
+    };
+
     // ── SQLite recording ────────────────────────────────────────
     let db_path = args.data_dir.join("quantbot.db");
     let (recorder, peak_nav) = match Db::open(&db_path) {
@@ -723,13 +741,39 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             .to_string();
             let rec = Recorder::new(db, audit.run_id(), &config_json, nav);
 
-            // Record signals from snapshot
-            let signal_map: HashMap<String, (SignalDirection, f64, f64)> = snapshot
+            // Build signal records from TSMOM snapshot
+            #[allow(unused_mut)]
+            let mut signal_records: Vec<SignalRecord> = snapshot
                 .signals
                 .iter()
-                .map(|(sym, sig)| (sym.clone(), (sig.direction, sig.strength, sig.confidence)))
+                .map(|(sym, sig)| SignalRecord {
+                    instrument: sym.clone(),
+                    agent_name: "tsmom".into(),
+                    direction: sig.direction,
+                    strength: sig.strength,
+                    confidence: sig.confidence,
+                    weight: target_entries
+                        .iter()
+                        .find(|t| t.instrument == *sym)
+                        .map(|t| t.weight)
+                        .unwrap_or(0.0),
+                })
                 .collect();
-            rec.record_signals(&target_entries, &signal_map);
+
+            // Add indicator signals (track-b only)
+            #[cfg(feature = "track-b")]
+            for (sym, sig) in &indicator_signals {
+                signal_records.push(SignalRecord {
+                    instrument: sym.clone(),
+                    agent_name: "indicator".into(),
+                    direction: sig.direction,
+                    strength: sig.strength,
+                    confidence: sig.confidence,
+                    weight: 0.0, // advisory only in B1
+                });
+            }
+
+            rec.record_signals(&signal_records);
             rec.record_target_positions(&target_entries);
 
             (Some(rec), peak)
@@ -799,6 +843,30 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     }
 
     // ── Construct engine and run rebalance ───────────────────
+    // Print indicator signals before rebalance (they appear after TSMOM in the report)
+    #[cfg(feature = "track-b")]
+    {
+        println!();
+        println!("  INDICATOR SIGNALS (advisory)");
+        println!(
+            "  {:<14} {:<10} {:>8} {:>10} {:>6}",
+            "Instrument", "Direction", "Strength", "Confidence", "RSI"
+        );
+        for (sym, sig) in &indicator_signals {
+            let dir_str = match sig.direction {
+                SignalDirection::Long => "Long",
+                SignalDirection::Short => "Short",
+                SignalDirection::Flat => "Flat",
+            };
+            let rsi = sig.metadata.get("rsi").copied().unwrap_or(0.0);
+            println!(
+                "  {:<14} {:<10} {:>+8.2} {:>10.2} {:>6.1}",
+                sym, dir_str, sig.strength, sig.confidence, rsi,
+            );
+        }
+        println!();
+    }
+
     let result = match app_config.execution.engine {
         EngineType::Paper => {
             let engine = PaperExecutionEngine::new();
@@ -1347,13 +1415,13 @@ fn run_history(args: HistoryArgs) -> Result<()> {
             if !signals.is_empty() {
                 eprintln!("  SIGNALS for {run_id}");
                 eprintln!(
-                    "  {:<15} {:>10} {:>10} {:>10} {:>10}",
-                    "Instrument", "Direction", "Strength", "Confidence", "Weight"
+                    "  {:<15} {:>10} {:>10} {:>10} {:>10} {:>10}",
+                    "Instrument", "Agent", "Direction", "Strength", "Confidence", "Weight"
                 );
                 for s in &signals {
                     eprintln!(
-                        "  {:<15} {:>10} {:>+10.2} {:>10.2} {:>+10.2}",
-                        s.instrument, s.direction, s.strength, s.confidence, s.weight
+                        "  {:<15} {:>10} {:>10} {:>+10.2} {:>10.2} {:>+10.2}",
+                        s.instrument, s.agent_name, s.direction, s.strength, s.confidence, s.weight
                     );
                 }
             }

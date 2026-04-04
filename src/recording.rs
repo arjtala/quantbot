@@ -8,6 +8,18 @@ use crate::execution::traits::{
     DealStatus, OrderAck, OrderRequest,
 };
 
+// ─── Signal Record ──────────────────────────────────────────────
+
+/// A signal record for multi-agent provenance recording.
+pub struct SignalRecord {
+    pub instrument: String,
+    pub agent_name: String,
+    pub direction: SignalDirection,
+    pub strength: f64,
+    pub confidence: f64,
+    pub weight: f64,
+}
+
 // ─── Recorder ───────────────────────────────────────────────────
 
 /// Records trading activity to SQLite alongside live execution.
@@ -60,7 +72,7 @@ impl Recorder {
     }
 
     /// Record target signals from the signal generation phase.
-    pub fn record_signals(&self, targets: &[TargetEntry], signals: &HashMap<String, (SignalDirection, f64, f64)>) {
+    pub fn record_signals(&self, records: &[SignalRecord]) {
         let db = match self.db.lock() {
             Ok(db) => db,
             Err(e) => {
@@ -71,20 +83,16 @@ impl Recorder {
         };
         let result = db.with_transaction(|conn| {
             let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
-            for target in targets {
-                let (direction, strength, confidence) = signals
-                    .get(&target.instrument)
-                    .copied()
-                    .unwrap_or((SignalDirection::Flat, 0.0, 0.0));
-                let dir_str = match direction {
+            for rec in records {
+                let dir_str = match rec.direction {
                     SignalDirection::Long => "Long",
                     SignalDirection::Short => "Short",
                     SignalDirection::Flat => "Flat",
                 };
                 conn.execute(
-                    "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    rusqlite::params![&self.run_id, &target.instrument, dir_str, strength, confidence, target.weight, &now],
+                    "INSERT INTO signals (run_id, instrument, agent_name, direction, strength, confidence, weight, ts)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    rusqlite::params![&self.run_id, &rec.instrument, &rec.agent_name, dir_str, rec.strength, rec.confidence, rec.weight, &now],
                 )?;
             }
             Ok(())
@@ -285,10 +293,25 @@ mod tests {
                 weight: 0.40,
             },
         ];
-        let mut signals = HashMap::new();
-        signals.insert("SPY".to_string(), (SignalDirection::Short, -0.5, 0.75));
-        signals.insert("GLD".to_string(), (SignalDirection::Long, 1.0, 1.0));
-        rec.record_signals(&targets, &signals);
+        let signal_records = vec![
+            SignalRecord {
+                instrument: "SPY".into(),
+                agent_name: "tsmom".into(),
+                direction: SignalDirection::Short,
+                strength: -0.5,
+                confidence: 0.75,
+                weight: -0.16,
+            },
+            SignalRecord {
+                instrument: "GLD".into(),
+                agent_name: "tsmom".into(),
+                direction: SignalDirection::Long,
+                strength: 1.0,
+                confidence: 1.0,
+                weight: 0.40,
+            },
+        ];
+        rec.record_signals(&signal_records);
 
         // Record target positions
         rec.record_target_positions(&targets);
