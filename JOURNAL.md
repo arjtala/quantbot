@@ -431,6 +431,42 @@ Wires indicator signals into sizing via per-asset-class combiner with configurab
 
 **All tests pass with and without `track-b`, clean clippy. +950 lines.**
 
+**PR B4 — Runtime Prompt Loading with Hash Provenance (2026-04-04):**
+
+Decoupled system prompt from compiled binary. `PromptLoader` loads from optional `prompt_path` file with graceful fallback to embedded `prompt.txt`. SHA-256 hash (truncated to 16 hex chars) of raw file bytes provides deterministic provenance for cache/replay and prompt A/B testing. No normalization — any edit changes the hash.
+
+| Component | Location | Tests | Notes |
+|---|---|---|---|
+| Prompt loader | `src/agents/indicator/prompt_loader.rs` (NEW) | 7 | `load()` with file/embedded fallback, empty file detection, `sha256_short()` reusable hash |
+| Config | `src/agents/indicator/llm_client.rs` | — | `prompt_path: Option<String>` on `LlmConfig` |
+| Agent wiring | `src/agents/indicator/llm_agent.rs` | — | Uses `PromptLoader` instead of `include_str!`, exposes `loaded_prompt()` accessor |
+| Audit event | `src/audit.rs` | — | `prompt_info` event (hash, source, model) |
+| SQLite schema v4 | `src/db.rs` | 2 | `prompt_hash`, `prompt_source`, `llm_model` nullable columns on `runs`, v3→v4 migration |
+| Recorder | `src/recording.rs` | — | `record_prompt_info()` writes to runs row |
+
+**All tests pass with and without `track-b`, clean clippy.**
+
+**PR B5a — LLM Cache Write-Through (2026-04-04):**
+
+Every LLM indicator call (success or error) is now cached to SQLite with a deterministic key = `(llm_model, prompt_hash, instrument, eval_date, ta_hash)`. INSERT OR IGNORE semantics ensure entries are never overwritten. Enables deterministic replay in B5b.
+
+| Component | Location | Tests | Notes |
+|---|---|---|---|
+| Cache table | `src/db.rs` | 5 | Schema v5: `llm_cache` table, `LlmCacheEntry` struct, `insert_llm_cache` (INSERT OR IGNORE), `get_llm_cache` (for B5b), v4→v5 migration |
+| Signal trait | `src/agents/mod.rs` | — | `take_cache_entries()` default method on `SignalAgent` (returns empty vec for non-LLM agents) |
+| Agent caching | `src/agents/indicator/llm_agent.rs` | 7 | Collects cache entries in `generate_signal_async` (eval_date from bars, ta_hash from user prompt, latency measured). `take_cache_entries()` drains accumulated entries |
+| Recorder | `src/recording.rs` | — | `record_llm_cache_entries()` non-blocking batch write with count logging |
+| Pipeline | `src/main.rs` | — | `run_live` writes via recorder, `run_paper_trade` writes directly to Db |
+
+**Design decisions:**
+- `ta_hash` = SHA-256 of the exact user prompt string sent to `chat()` (includes instrument prefix + formatted TA snapshot). Same bars + same instrument = same hash, regardless of prompt source.
+- `cache_key` = pipe-delimited composite: `model|prompt_hash|instrument|eval_date|ta_hash`. Human-readable, deterministic.
+- `std::sync::Mutex` for `cache_entries` (brief lock, no .await held), `tokio::sync::Mutex` for LLM client (held across .await).
+- Cache write failures never block trading — same pattern as all other SQLite writes.
+- `sha256_short()` extracted as pub function in `prompt_loader.rs` for reuse.
+
+**All tests pass with and without `track-b`, clean clippy. +480 lines.**
+
 ---
 
 ## References

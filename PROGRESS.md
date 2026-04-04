@@ -399,7 +399,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B3)** | 250+ tests, clean clippy
+> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B5a)** | 270+ tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -635,10 +635,37 @@ Wires indicator signals into sizing via per-asset-class combiner with configurab
 - [x] Fixed pre-existing `ema_basic` test (linear→quadratic series) and MACD clippy warning in `ta.rs`
 - [x] All tests pass with and without `track-b` feature, clean clippy
 
+#### PR B4 — Runtime Prompt Loading with Hash Provenance (2026-04-04)
+
+Decoupled system prompt from compiled binary. Runtime loading from optional `prompt_path` file with graceful fallback to embedded prompt. SHA-256 hash (16 hex chars, raw bytes) for deterministic provenance. Logged to both audit JSONL (`prompt_info` event) and SQLite `runs` table. +400 lines, 9 new tests.
+
+- [x] `src/agents/indicator/prompt_loader.rs` (NEW) — `load()` with file/embedded fallback, empty file detection, `sha256_short()` pub hash function. 7 tests
+- [x] `src/agents/indicator/llm_client.rs` — `prompt_path: Option<String>` on `LlmConfig`
+- [x] `src/agents/indicator/llm_agent.rs` — Uses `PromptLoader` instead of `include_str!`, exposes `loaded_prompt()` for audit/recording
+- [x] `src/audit.rs` — `log_prompt_info()` method: `prompt_info` event with hash, source, model
+- [x] `src/db.rs` — Schema v3→v4: `prompt_hash TEXT`, `prompt_source TEXT`, `llm_model TEXT` nullable columns on `runs` table. `update_run_prompt()` method. Migration with `.ok()` idempotency. 2 tests
+- [x] `src/recording.rs` — `record_prompt_info()` writes to runs row
+- [x] `src/main.rs` — `run_live` emits `prompt_info` audit event + SQLite recording (feature-gated)
+- [x] `config.example.toml` — Commented `prompt_path` option
+- [x] All tests pass with and without `track-b` feature, clean clippy
+
+#### PR B5a — LLM Cache Write-Through (2026-04-04)
+
+Every LLM indicator call cached to SQLite for deterministic replay. Cache key = `(llm_model, prompt_hash, instrument, eval_date, ta_hash)`. INSERT OR IGNORE semantics — entries never overwritten. Error cases cached for transparency. +480 lines, 12 new tests.
+
+- [x] `src/db.rs` — Schema v4→v5: `llm_cache` table with `cache_key TEXT PRIMARY KEY`, indexes on `(instrument, eval_date)` and `(llm_model, prompt_hash)`. `LlmCacheEntry` struct. `insert_llm_cache` (INSERT OR IGNORE), `get_llm_cache` (for B5b). Migration v4→v5. 5 tests
+- [x] `src/agents/indicator/prompt_loader.rs` — `sha256_short()` made pub for `ta_hash` reuse
+- [x] `src/agents/mod.rs` — `take_cache_entries()` default method on `SignalAgent` trait (returns empty vec for non-LLM agents)
+- [x] `src/agents/indicator/llm_agent.rs` — Added `model`, `cache_entries: Mutex<Vec<LlmCacheEntry>>` fields. `generate_signal_async` computes eval_date/ta_hash/cache_key, measures latency, pushes cache entry on every call (success, parse error, LLM error). `take_cache_entries()` drains. 7 tests (3 existing enhanced + 4 new: deterministic key, key varies by instrument, drain semantics)
+- [x] `src/recording.rs` — `record_llm_cache_entries()` non-blocking batch write with count logging
+- [x] `src/main.rs` — `run_live` drains entries via trait, writes to recorder. `run_paper_trade` drains and writes directly to Db
+- [x] All tests pass with and without `track-b` feature, clean clippy
+
 **Remaining Track B PRs:**
 - [x] **PR B3** — Signal combiner: blend TSMOM + indicator signals with configurable per-asset-class weights
-- [ ] **PR B4** — `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
-- [ ] **PR B5** — Eval harness: backtest LLM + agent ablation (Rust port)
+- [x] **PR B4** — `src/agents/indicator/prompt_loader.rs` — Runtime `.md` prompt loading with SHA-256 hash provenance
+- [x] **PR B5a** — LLM cache write-through to SQLite (deterministic cache key, INSERT OR IGNORE, error caching)
+- [ ] **PR B5b** — Deterministic replay harness: `CachedIndicatorAgent` + `eval replay` subcommand
 - [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
 
 ### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED
