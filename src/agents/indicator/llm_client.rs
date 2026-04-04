@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 const DEFAULT_TEMPERATURE: f64 = 0.3;
-const DEFAULT_MAX_TOKENS: u32 = 2048;
+const DEFAULT_MAX_TOKENS: u32 = 4096;
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RETRIES: u32 = 2;
 const RATE_LIMIT_INTERVAL: Duration = Duration::from_millis(200);
@@ -170,24 +170,23 @@ impl LlmClient {
                             }
                         };
                         let choice = chat_resp.choices.into_iter().next();
-                        let (content, reasoning) = match choice {
+                        let (content, has_reasoning) = match choice {
                             Some(c) => (
                                 c.message.content.unwrap_or_default(),
-                                c.message.reasoning.unwrap_or_default(),
+                                c.message.reasoning.is_some(),
                             ),
-                            None => (String::new(), String::new()),
+                            None => (String::new(), false),
                         };
-                        // Prefer content; fall back to reasoning (Ollama thinking models
-                        // put the answer in reasoning when content is empty)
-                        let text = if !content.trim().is_empty() {
-                            content
-                        } else if !reasoning.trim().is_empty() {
-                            reasoning
-                        } else {
+                        if content.trim().is_empty() {
                             let snippet = truncate_snippet(&raw_text, 300);
+                            if has_reasoning {
+                                return Err(LlmError::EmptyResponse(format!(
+                                    "content empty but reasoning present (model likely ran out of tokens) | body: {snippet}"
+                                )));
+                            }
                             return Err(LlmError::EmptyResponse(snippet));
-                        };
-                        return Ok(text);
+                        }
+                        return Ok(content);
                     }
 
                     let status_code = status.as_u16();
@@ -325,22 +324,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_reasoning_fallback() {
+    async fn chat_reasoning_without_content_is_error() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
             .mock("POST", "/v1/chat/completions")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning":"I think the answer is {\"direction\":\"long\"}"}}]}"#,
+                r#"{"choices":[{"index":0,"message":{"role":"assistant","content":"","reasoning":"I think the answer is..."}}]}"#,
             )
             .create_async()
             .await;
 
         let mut client = LlmClient::new_test(test_config(&server.url()));
         let result = client.chat("sys", "usr").await;
-        assert!(result.is_ok());
-        assert!(result.unwrap().contains("long"));
+        assert!(matches!(result, Err(LlmError::EmptyResponse(_))));
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("ran out of tokens"));
         mock.assert_async().await;
     }
 
@@ -366,7 +366,7 @@ mod tests {
         let json = r#"{"base_url":"http://localhost:11434","model":"llama3"}"#;
         let config: LlmConfig = serde_json::from_str(json).unwrap();
         assert_eq!(config.temperature, 0.3);
-        assert_eq!(config.max_tokens, 2048);
+        assert_eq!(config.max_tokens, 4096);
         assert_eq!(config.timeout_secs, 30);
         assert_eq!(config.max_retries, 2);
     }
