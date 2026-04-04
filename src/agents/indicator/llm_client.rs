@@ -69,7 +69,7 @@ struct ChatMessage {
     #[serde(default)]
     content: Option<String>,
     /// Ollama/thinking-model extension: reasoning content separate from answer.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning: Option<String>,
 }
 
@@ -131,10 +131,12 @@ impl LlmClient {
                 ChatMessage {
                     role: "system".into(),
                     content: Some(system.into()),
+                    reasoning: None,
                 },
                 ChatMessage {
                     role: "user".into(),
                     content: Some(user.into()),
+                    reasoning: None,
                 },
             ],
             temperature: self.config.temperature,
