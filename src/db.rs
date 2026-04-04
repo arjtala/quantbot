@@ -7,16 +7,19 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 /// Schema version stored in PRAGMA user_version. Bump when making breaking
 /// changes to the table layout.
-pub const DB_SCHEMA_VERSION: i32 = 3;
+pub const DB_SCHEMA_VERSION: i32 = 4;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS runs (
-    run_id      TEXT PRIMARY KEY,
-    started_at  TEXT NOT NULL,
-    config_json TEXT NOT NULL,
-    nav_usd     REAL NOT NULL,
-    outcome     TEXT,
-    duration_ms INTEGER
+    run_id        TEXT PRIMARY KEY,
+    started_at    TEXT NOT NULL,
+    config_json   TEXT NOT NULL,
+    nav_usd       REAL NOT NULL,
+    outcome       TEXT,
+    duration_ms   INTEGER,
+    prompt_hash   TEXT,
+    prompt_source TEXT,
+    llm_model     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS signals (
@@ -117,6 +120,12 @@ impl Db {
                 conn.execute_batch("ALTER TABLE signals ADD COLUMN agent_name TEXT NOT NULL DEFAULT 'tsmom';")?;
                 conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_signals_agent ON signals(agent_name);")?;
             }
+            if current < 4 {
+                // Best-effort: ignore errors if columns already exist
+                conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_hash TEXT;").ok();
+                conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_source TEXT;").ok();
+                conn.execute_batch("ALTER TABLE runs ADD COLUMN llm_model TEXT;").ok();
+            }
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
             eprintln!("  DB migrated from schema v{current} to v{DB_SCHEMA_VERSION}");
         } else if current > DB_SCHEMA_VERSION {
@@ -171,6 +180,20 @@ impl Db {
         self.conn.execute(
             "UPDATE runs SET outcome = ?1, duration_ms = ?2 WHERE run_id = ?3",
             params![outcome, duration_ms as i64, run_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_run_prompt(
+        &self,
+        run_id: &str,
+        prompt_hash: &str,
+        prompt_source: &str,
+        llm_model: &str,
+    ) -> SqlResult<()> {
+        self.conn.execute(
+            "UPDATE runs SET prompt_hash = ?1, prompt_source = ?2, llm_model = ?3 WHERE run_id = ?4",
+            params![prompt_hash, prompt_source, llm_model, run_id],
         )?;
         Ok(())
     }
@@ -236,7 +259,7 @@ impl Db {
     /// List recent runs (most recent first).
     pub fn list_runs(&self, limit: usize) -> SqlResult<Vec<RunRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT run_id, started_at, nav_usd, outcome, duration_ms
+            "SELECT run_id, started_at, nav_usd, outcome, duration_ms, prompt_hash, prompt_source, llm_model
              FROM runs ORDER BY started_at DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
@@ -246,6 +269,9 @@ impl Db {
                 nav_usd: row.get(2)?,
                 outcome: row.get(3)?,
                 duration_ms: row.get(4)?,
+                prompt_hash: row.get(5)?,
+                prompt_source: row.get(6)?,
+                llm_model: row.get(7)?,
             })
         })?;
         rows.collect()
@@ -319,7 +345,7 @@ impl Db {
     pub fn list_runs_by_date(&self, date: &str, limit: usize) -> SqlResult<Vec<RunRow>> {
         let like_pattern = format!("{date}%");
         let mut stmt = self.conn.prepare(
-            "SELECT run_id, started_at, nav_usd, outcome, duration_ms
+            "SELECT run_id, started_at, nav_usd, outcome, duration_ms, prompt_hash, prompt_source, llm_model
              FROM runs WHERE started_at LIKE ?1 ORDER BY started_at DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![like_pattern, limit as i64], |row| {
@@ -329,6 +355,9 @@ impl Db {
                 nav_usd: row.get(2)?,
                 outcome: row.get(3)?,
                 duration_ms: row.get(4)?,
+                prompt_hash: row.get(5)?,
+                prompt_source: row.get(6)?,
+                llm_model: row.get(7)?,
             })
         })?;
         rows.collect()
@@ -400,6 +429,9 @@ pub struct RunRow {
     pub nav_usd: f64,
     pub outcome: Option<String>,
     pub duration_ms: Option<i64>,
+    pub prompt_hash: Option<String>,
+    pub prompt_source: Option<String>,
+    pub llm_model: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -515,7 +547,7 @@ mod tests {
     fn schema_version_set_on_fresh_db() {
         let db = Db::open_memory().unwrap();
         assert_eq!(db.schema_version().unwrap(), DB_SCHEMA_VERSION);
-        assert_eq!(DB_SCHEMA_VERSION, 3);
+        assert_eq!(DB_SCHEMA_VERSION, 4);
     }
 
     #[test]
@@ -595,9 +627,9 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_3() {
+    fn schema_version_is_4() {
         let db = Db::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 3);
+        assert_eq!(db.schema_version().unwrap(), 4);
     }
 
     #[test]
@@ -661,7 +693,7 @@ mod tests {
 
         // Verify version bumped
         let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
 
         // Verify existing row got default agent_name
         let agent: String = conn.query_row(
@@ -683,5 +715,81 @@ mod tests {
             |r| r.get(0),
         ).unwrap();
         assert_eq!(agent2, "indicator");
+    }
+
+    #[test]
+    fn migration_v3_to_v4_adds_prompt_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        // Create v3 schema (no prompt columns on runs)
+        conn.execute_batch("
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
+                config_json TEXT NOT NULL, nav_usd REAL NOT NULL,
+                outcome TEXT, duration_ms INTEGER
+            );
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, agent_name TEXT NOT NULL DEFAULT 'tsmom',
+                direction TEXT NOT NULL, strength REAL NOT NULL,
+                confidence REAL NOT NULL, weight REAL NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, epic TEXT NOT NULL,
+                direction TEXT NOT NULL, size REAL NOT NULL,
+                deal_reference TEXT, status TEXT, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, signed_deal_size REAL NOT NULL,
+                source TEXT NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS risk_state (
+                key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL
+            );
+        ").unwrap();
+        conn.execute_batch("PRAGMA user_version = 3;").unwrap();
+
+        // Insert a v3 run
+        conn.execute(
+            "INSERT INTO runs (run_id, started_at, config_json, nav_usd) VALUES ('r1', 'now', '{}', 1e6)",
+            [],
+        ).unwrap();
+
+        // Run migration
+        Db::check_schema_version(&conn).unwrap();
+
+        // Verify version bumped to 4
+        let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, 4);
+
+        // Verify prompt columns exist and are nullable
+        conn.execute(
+            "UPDATE runs SET prompt_hash = 'abc123', prompt_source = 'file:test.txt', llm_model = 'llama3' WHERE run_id = 'r1'",
+            [],
+        ).unwrap();
+
+        let hash: Option<String> = conn.query_row(
+            "SELECT prompt_hash FROM runs WHERE run_id = 'r1'",
+            [],
+            |r| r.get(0),
+        ).unwrap();
+        assert_eq!(hash, Some("abc123".to_string()));
+    }
+
+    #[test]
+    fn update_run_prompt() {
+        let db = Db::open_memory().unwrap();
+        db.insert_run("run-p", "{}", 1e6).unwrap();
+        db.update_run_prompt("run-p", "abcdef0123456789", "embedded", "llama3").unwrap();
+
+        let runs = db.list_runs(1).unwrap();
+        assert_eq!(runs[0].prompt_hash.as_deref(), Some("abcdef0123456789"));
+        assert_eq!(runs[0].prompt_source.as_deref(), Some("embedded"));
+        assert_eq!(runs[0].llm_model.as_deref(), Some("llama3"));
     }
 }

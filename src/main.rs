@@ -821,11 +821,20 @@ async fn run_live(args: LiveArgs) -> Result<()> {
 
     // ── Generate indicator signals (track-b only) ────────────────
     #[cfg(feature = "track-b")]
+    let mut prompt_info: Option<(String, String, String)> = None; // (hash, source, model)
+    #[cfg(feature = "track-b")]
     let indicator_signals: Vec<(String, quantbot::core::signal::Signal)> = {
         let indicator: Box<dyn SignalAgent> = match &app_config.llm {
             Some(llm_config) => match LlmIndicatorAgent::new(llm_config.clone()) {
                 Ok(agent) => {
                     eprintln!("  Using LLM indicator agent (model: {})", llm_config.model);
+                    let lp = agent.loaded_prompt();
+                    prompt_info = Some((
+                        lp.hash.clone(),
+                        lp.source.to_string(),
+                        llm_config.model.clone(),
+                    ));
+                    audit.log_prompt_info(&lp.hash, &lp.source.to_string(), &llm_config.model);
                     Box::new(agent)
                 }
                 Err(e) => {
@@ -1024,6 +1033,12 @@ async fn run_live(args: LiveArgs) -> Result<()> {
 
             rec.record_signals(&signal_records);
             rec.record_target_positions(&target_entries);
+
+            // Record prompt provenance (track-b only)
+            #[cfg(feature = "track-b")]
+            if let Some((ref hash, ref source, ref model)) = prompt_info {
+                rec.record_prompt_info(hash, source, model);
+            }
 
             (Some(rec), peak)
         }

@@ -22,6 +22,9 @@ pub struct LlmConfig {
     pub timeout_secs: u64,
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
+    /// Optional path to an external system prompt file.
+    /// If omitted or the file cannot be read, the embedded prompt is used.
+    pub prompt_path: Option<String>,
 }
 
 fn default_temperature() -> f64 {
@@ -211,6 +214,7 @@ mod tests {
             max_tokens: 512,
             timeout_secs: 5,
             max_retries: 1,
+            prompt_path: None,
         }
     }
 

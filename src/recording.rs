@@ -262,6 +262,22 @@ impl Recorder {
             self.mark_failed();
         }
     }
+
+    /// Record prompt provenance (hash, source, model) on the run row.
+    pub fn record_prompt_info(&self, prompt_hash: &str, prompt_source: &str, llm_model: &str) {
+        let db = match self.db.lock() {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
+                return;
+            }
+        };
+        if let Err(e) = db.update_run_prompt(&self.run_id, prompt_hash, prompt_source, llm_model) {
+            eprintln!("  WARN: SQLite update_run_prompt failed: {e}");
+            self.mark_failed();
+        }
+    }
 }
 
 // ─── Tests ──────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ pub mod ta;
 pub mod llm_client;
 pub mod parser;
 pub mod llm_agent;
+pub mod prompt_loader;
 
 use std::collections::HashMap;
 

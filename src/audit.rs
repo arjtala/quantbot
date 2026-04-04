@@ -226,6 +226,23 @@ impl AuditLogger {
         );
     }
 
+    pub fn log_prompt_info(
+        &mut self,
+        prompt_hash: &str,
+        prompt_source: &str,
+        llm_model: &str,
+    ) {
+        self.log(
+            "prompt_info",
+            "INFO",
+            serde_json::json!({
+                "prompt_hash": prompt_hash,
+                "prompt_source": prompt_source,
+                "llm_model": llm_model,
+            }),
+        );
+    }
+
     pub fn log_nav_mtm(&mut self, initial_cash: f64, unrealized_pnl: f64, mtm_nav: f64, positions: &[crate::execution::mtm::MtmPosition]) {
         self.log(
             "nav_mark_to_market",

@@ -9,9 +9,8 @@ use crate::core::signal::{Signal, SignalDirection, SignalType};
 
 use super::llm_client::{LlmClient, LlmConfig};
 use super::parser::parse_llm_response;
+use super::prompt_loader::{self, LoadedPrompt};
 use super::ta::TaSnapshot;
-
-const SYSTEM_PROMPT: &str = include_str!("prompt.txt");
 
 /// LLM-based indicator agent that computes TA features, sends them to an
 /// OpenAI-compatible endpoint, and parses the structured response into a Signal.
@@ -19,22 +18,32 @@ const SYSTEM_PROMPT: &str = include_str!("prompt.txt");
 /// On any LLM error, degrades gracefully to a Flat signal with `llm_success=0.0`.
 pub struct LlmIndicatorAgent {
     client: Mutex<LlmClient>,
+    prompt: LoadedPrompt,
 }
 
 impl LlmIndicatorAgent {
     pub fn new(config: LlmConfig) -> Result<Self, super::llm_client::LlmError> {
+        let prompt = prompt_loader::load(config.prompt_path.as_deref());
         let client = LlmClient::new(config)?;
         Ok(Self {
             client: Mutex::new(client),
+            prompt,
         })
     }
 
     #[cfg(test)]
     pub fn new_test(config: LlmConfig) -> Self {
+        let prompt = prompt_loader::load(config.prompt_path.as_deref());
         let client = LlmClient::new_test(config);
         Self {
             client: Mutex::new(client),
+            prompt,
         }
+    }
+
+    /// Return the loaded prompt metadata for audit/recording.
+    pub fn loaded_prompt(&self) -> &LoadedPrompt {
+        &self.prompt
     }
 
     /// Async implementation: compute TA → call LLM → parse → Signal.
@@ -48,7 +57,7 @@ impl LlmIndicatorAgent {
 
         let result = {
             let mut client = self.client.lock().await;
-            client.chat(SYSTEM_PROMPT, &user_prompt).await
+            client.chat(&self.prompt.text, &user_prompt).await
         };
 
         match result {
@@ -154,6 +163,7 @@ mod tests {
             max_tokens: 512,
             timeout_secs: 5,
             max_retries: 0,
+            prompt_path: None,
         }
     }
 
