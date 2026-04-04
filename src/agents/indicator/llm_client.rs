@@ -44,8 +44,8 @@ fn default_max_retries() -> u32 {
 pub enum LlmError {
     #[error("LLM request timed out after {0}s")]
     Timeout(u64),
-    #[error("LLM returned empty response")]
-    EmptyResponse,
+    #[error("LLM returned empty response (body: {0})")]
+    EmptyResponse(String),
     #[error("LLM API error: HTTP {status}: {body}")]
     Api { status: u16, body: String },
     #[error("HTTP error: {0}")]
@@ -60,12 +60,14 @@ struct ChatRequest {
     messages: Vec<ChatMessage>,
     temperature: f64,
     max_tokens: u32,
+    stream: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ChatMessage {
     role: String,
-    content: String,
+    #[serde(default)]
+    content: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -125,15 +127,16 @@ impl LlmClient {
             messages: vec![
                 ChatMessage {
                     role: "system".into(),
-                    content: system.into(),
+                    content: Some(system.into()),
                 },
                 ChatMessage {
                     role: "user".into(),
-                    content: user.into(),
+                    content: Some(user.into()),
                 },
             ],
             temperature: self.config.temperature,
             max_tokens: self.config.max_tokens,
+            stream: false,
         };
 
         let mut last_err = None;
@@ -150,15 +153,26 @@ impl LlmClient {
                     let status = resp.status();
                     if status.is_success() {
                         self.last_request = Some(Instant::now());
-                        let chat_resp: ChatResponse = resp.json().await.map_err(LlmError::Http)?;
+                        // Read raw text first for debugging
+                        let raw_text = resp.text().await.map_err(LlmError::Http)?;
+                        let chat_resp: ChatResponse = match serde_json::from_str(&raw_text) {
+                            Ok(r) => r,
+                            Err(e) => {
+                                let snippet = truncate_snippet(&raw_text, 300);
+                                return Err(LlmError::EmptyResponse(format!(
+                                    "JSON parse failed: {e} | body: {snippet}"
+                                )));
+                            }
+                        };
                         let content = chat_resp
                             .choices
                             .into_iter()
                             .next()
-                            .map(|c| c.message.content)
+                            .and_then(|c| c.message.content)
                             .unwrap_or_default();
                         if content.trim().is_empty() {
-                            return Err(LlmError::EmptyResponse);
+                            let snippet = truncate_snippet(&raw_text, 300);
+                            return Err(LlmError::EmptyResponse(snippet));
                         }
                         return Ok(content);
                     }
@@ -189,7 +203,7 @@ impl LlmClient {
             }
         }
 
-        Err(last_err.unwrap_or(LlmError::EmptyResponse))
+        Err(last_err.unwrap_or(LlmError::EmptyResponse("no response after retries".into())))
     }
 
     async fn enforce_rate_limit(&self) {
@@ -199,6 +213,14 @@ impl LlmClient {
                 tokio::time::sleep(RATE_LIMIT_INTERVAL - elapsed).await;
             }
         }
+    }
+}
+
+fn truncate_snippet(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
     }
 }
 
@@ -285,7 +307,24 @@ mod tests {
 
         let mut client = LlmClient::new_test(test_config(&server.url()));
         let result = client.chat("sys", "usr").await;
-        assert!(matches!(result, Err(LlmError::EmptyResponse)));
+        assert!(matches!(result, Err(LlmError::EmptyResponse(_))));
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn chat_null_content() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/v1/chat/completions")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{"choices":[{"message":{"role":"assistant","content":null}}]}"#)
+            .create_async()
+            .await;
+
+        let mut client = LlmClient::new_test(test_config(&server.url()));
+        let result = client.chat("sys", "usr").await;
+        assert!(matches!(result, Err(LlmError::EmptyResponse(_))));
         mock.assert_async().await;
     }
 
