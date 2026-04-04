@@ -131,6 +131,9 @@ impl BacktestEngine {
     ///
     /// Used by the combined signal pipeline (track-b) to pass blended weights
     /// through the same risk limits → sizing → order diff → margin pipeline.
+    ///
+    /// This is synchronous — all signals and weights must be precomputed by the
+    /// caller (e.g., via `combiner::combine_signals()`) before calling this method.
     #[cfg(feature = "track-b")]
     pub fn generate_targets_with_overrides(
         &self,

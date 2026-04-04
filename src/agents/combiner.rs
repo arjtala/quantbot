@@ -25,7 +25,10 @@ pub fn blend_category(symbol: &str) -> BlendCategory {
         "GLD" | "GC=F" => BlendCategory::Gold,
         "SPY" => BlendCategory::Equity,
         s if s.ends_with("=X") => BlendCategory::Forex,
-        _ => BlendCategory::Equity,
+        _ => {
+            eprintln!("  WARN: unknown symbol '{symbol}' for blending — defaulting to Equity");
+            BlendCategory::Equity
+        }
     }
 }
 
@@ -137,6 +140,7 @@ pub fn build_combined_signal(
     if let Some(lat) = result.latency_ms {
         metadata.insert("latency_ms".into(), lat);
     }
+    metadata.insert("indicator_used".into(), if result.indicator_used { 1.0 } else { 0.0 });
 
     let mut sig = Signal::new(
         result.instrument.clone(),
