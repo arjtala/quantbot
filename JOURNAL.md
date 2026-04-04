@@ -316,6 +316,79 @@ Evaluated [microsoft/qlib](https://github.com/microsoft/qlib). Impressive ML res
 
 **Next: position state persistence (JSON file for consecutive paper-trade diffs), then IG API client.**
 
+### 2025-03/04 — Track A: IG Execution + Live Infrastructure (PRs 1-8)
+
+**PR 1 — Boundary + Config + Compile-Time Shape:**
+
+Established the execution trait boundary and TOML config. `ExecutionEngine` trait with async methods (health_check, get_positions, place_orders, flatten_all). `PaperExecutionEngine` for simulated fills. `AppConfig` with `IgConfig` + per-instrument `InstrumentConfig` including `ig_point_value`. `config.example.toml` with all 6 instruments.
+
+**PR 2 — IG Demo Round-Trip:**
+
+Full `IgClient` REST client: auth (CST/X-SECURITY-TOKEN), rate limiting (1050ms between calls), retry on 5xx, re-auth on 401. `IgExecutionEngine` via `tokio::sync::Mutex<IgClient>` — sequential orders with 500ms confirm delay. `SymbolMapper` for bidirectional symbol↔epic lookup. Safety valves: `--instrument`, `--max-orders`, `--max-size`, `--flatten`. JSONL audit logging to `data/audit/`. Integration test passing on IG demo account Z69YJL (auth→place 0.5 GBPUSD→confirm→flatten, 12s end-to-end).
+
+Key learning: `tokio::sync::Mutex` required (not `std::sync`) because guard is held across `.await` points. reqwest needs `native-tls` — `rustls-tls` fails to connect to IG's API.
+
+**PR 3 — Reconciliation + Safety:**
+
+`positions_to_signed()`, `compute_deltas()`, `verify_positions()` with per-instrument tolerance. `CircuitBreaker` for consecutive failure tracking and pre-trade checks. `positions` subcommand. Full live loop: generate targets → fetch positions → compute deltas → circuit breaker → place deltas → post-trade verify → save state. Running twice → 0 orders (idempotent). Dust deltas tracked and reported.
+
+**PR 4 — Audit Logging + Run Summaries:**
+
+`AuditLogger` with `BufWriter<File>`, per-run JSONL append. Events: run_start, targets, auth_ok, health_check_ok, positions_fetched, reconcile, breaker_check, execution_skipped, orders_submitted, orders_confirmed, verify, run_end. `RunSummary` struct for `--json` output. Write failures never block trading.
+
+**PR 4b — Audit Log Polish:**
+
+Schema v2. Timestamps normalized to Z suffix. `signed_qty` renamed to `signed_deal_size`. Float noise removed (1dp rounding). `auth_ok`/`health_check_ok` events added.
+
+**PR 5 — SQLite Recording + History CLI:**
+
+`rusqlite` (bundled) added. `src/db.rs` with 4 tables (runs, signals, orders, positions), WAL mode, `PRAGMA busy_timeout=5000`. `src/recording.rs` — `Recorder` struct with typed `record_*` methods, `write_failed` tracking. `history` subcommand with `--run`, `--instrument`, `--last`, `--json` filters. DB at `data/quantbot.db`.
+
+**PR 5b — SQLite Polish:**
+
+`PRAGMA user_version` for schema versioning with migration support (v1→v2). Batch inserts in transactions. `--status` and `--date` filters for history. `db_write_failed` flag in `RunSummary`.
+
+**PR 6 — Risk Agent:**
+
+`src/agents/risk/mod.rs` — `RiskAgent` with hard-veto authority. Checks: gross leverage, per-instrument exposure, drawdown from peak NAV. `RiskConfig` in TOML (optional `[risk]` section). `risk_state` table in SQLite for peak NAV persistence. `risk_check` audit event. Veto → outcome `RISK_VETO`, logged to audit + SQLite. 10 unit tests.
+
+**PR 7 — Data Pipeline (Yahoo Update + Freshness Gate):**
+
+`YahooClient` (`src/data/yahoo.rs`): Yahoo v8 chart API with rate limiting (500ms), null filtering, serde response parsing. `DataUpdater` (`src/data/updater.rs`): CSV merge/append, last_date detection, `update_all` orchestrator, `discover_symbols`. `freshness.rs`: `previous_trading_day` weekday logic, `check_all_fresh`, max_stale_days tolerance (default 3). `data` CLI subcommand. Freshness gate in `run_live` with `--allow-stale` override. 20 unit tests + 5 Yahoo mockito tests.
+
+Key learning: mockito tests need `.no_proxy()` on reqwest client to bypass HTTP proxy on cluster login node. Also fixed in IG client tests.
+
+**PR 8 — NAV Mark-to-Market:**
+
+`src/execution/mtm.rs` — `mark_to_market()` pure function computing NAV = initial_cash + Σ(signed_size × (current_price - open_level)) from live IG positions + latest bar close prices. MTM NAV feeds into `generate_targets` sizing, risk agent drawdown check, state file save, and audit log. IG engine created early in `run_live` and reused for MTM + `run_rebalance` (single auth). Paper engine falls back to state file NAV. 6 unit tests.
+
+**200+ tests passing, clean clippy. Track A complete.**
+
+---
+
+### 2026-04 — Track B: Multi-Agent Plumbing
+
+**PR B1 — Multi-Agent Plumbing + Dummy RSI Indicator (2026-04-04):**
+
+Track A complete (8 PRs, 200+ tests). Track B begins with compile-time shape and multi-agent recording infrastructure.
+
+| Component | Location | Tests | Notes |
+|---|---|---|---|
+| `SignalAgent` trait | `src/agents/mod.rs` | — | Object-safe: `name()`, `signal_type()`, `generate_signal()`. `Box<dyn SignalAgent>` ready for B4/B5 |
+| `impl SignalAgent for TSMOMAgent` | `src/agents/tsmom/mod.rs` | 0 new | Delegates to existing inherent method — Rust prefers inherent for direct calls, so 200+ tests unaffected |
+| `DummyIndicatorAgent` (RSI) | `src/agents/indicator/mod.rs` | 7 | 14-period RSI via Wilder's smoothing (inline, no `ta` crate). RSI<30→Long, RSI>70→Short, else Flat |
+| SQLite schema v3 | `src/db.rs` | 1 new | `agent_name TEXT NOT NULL DEFAULT 'tsmom'` on signals, migration from v2, `idx_signals_agent` index |
+| `SignalRecord` type | `src/recording.rs` | 0 new (updated) | Replaces `HashMap<String, (SignalDirection, f64, f64)>` for multi-agent provenance |
+| Indicator in `run_live` | `src/main.rs` | — | Behind `#[cfg(feature = "track-b")]`. Advisory signals recorded to SQLite with `weight=0`. Printed in report. |
+| `track-b` cargo feature | `Cargo.toml` | — | No extra deps — RSI is inline arithmetic |
+
+**Design decisions:**
+- `DummyIndicatorAgent` produces real LONG/SHORT/FLAT signals so the routing/combiner (PR B5) can be tested before LLM integration. Only TSMOM drives weights/sizing in B1 — indicator signals are recorded but advisory.
+- `generate_targets()` signature stays `&TSMOMAgent`, not `&[&dyn SignalAgent]` — generalization deferred to B4/B5.
+- No changes to `TargetSnapshot`, `run_backtest`, `run_paper_trade`, or audit JSONL in B1.
+
+**All tests pass with and without `track-b`, clean clippy.**
+
 ---
 
 ## References

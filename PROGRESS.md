@@ -166,6 +166,16 @@ Round 1 used local Ollama qwen3:14b (51% accuracy). Rerun with 3 models via SGLa
 - Cluster proxy blocks outbound HTTPS — yfinance cannot download data. Use `scripts/download_data.py` locally, then `--data-dir data/` on cluster.
 - Use `NO_PROXY=<node>` when running eval to bypass proxy for SGLang server.
 
+**Qwen3-235B-A22B on SGLang — flashinfer incompatibility (2026-03-29):**
+
+The MoE model (235B total, ~22B active, ~440GB in bf16) could not complete inference on the H200 cluster due to a flashinfer JIT compilation failure. The server starts and appears healthy but crashes on the first real request.
+
+- **Root cause:** SGLang's MoE execution path triggers flashinfer's `trtllm_moe_allreduce_fusion` JIT compilation regardless of all backend override flags (`--attention-backend triton`, `--sampling-backend pytorch`, `--disable-cuda-graph`, `--disable-custom-all-reduce`, `--disable-shared-experts-fusion`, `--moe-runner-backend triton`). The kernel (`trtllm_moe_allreduce_fusion.cu`) is incompatible with flashinfer 0.6.3 on the cluster's CUDA toolkit — 90 compilation errors from `MoeFinalizeAllReduceFusionParams` struct member mismatches.
+- **SLURM config:** `--gres=gpu:h200:8 --mem=1024G --cpus-per-task=16 --qos=h200_comm_shared`
+- **Measured:** 484GB RSS at runtime; 512GB caused SLURM OOM kill. 4× H200 OOM during weight loading.
+- **Workarounds not tried:** vLLM (different MoE backend, no flashinfer dependency), FP8/AWQ quantization (different code path), pre-compiling flashinfer on a dev node.
+- **Resolution:** Used DeepSeek-R1-Distill-Qwen-32B (dense 32B, 1 H200) and Qwen3-32B instead. Both worked fine. Fin-R1 7B ultimately won on performance anyway.
+
 **Headline results (60-day eval, 21 instruments, Oct-Dec 2024):**
 
 | Metric | TSMOM | DeepSeek Indicator | Qwen3 Indicator | Fin-R1 Indicator |
@@ -389,7 +399,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A MTM NAV complete, data pipeline done** | 200+ tests, clean clippy
+> **Status: In progress — Track A complete (8 PRs), Track B started (PR B1)** | 200+ tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -507,6 +517,26 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 - [x] `risk_check` audit event
 - [x] Drawdown high-water mark persisted in SQLite (PR 5 dependency)
 
+**PR 7 — Data Pipeline (Yahoo Update + Freshness Gate):**
+- [x] `src/data/yahoo.rs` — `YahooClient`: Yahoo v8 chart API, rate limiting (500ms), null filtering, serde response parsing, mockito test constructor
+- [x] `src/data/updater.rs` — `DataUpdater`: CSV merge/append, last_date detection, `update_all` orchestrator, `discover_symbols`. Preserves `Date,Close,High,Low,Open,Volume` column order
+- [x] `src/data/freshness.rs` — `previous_trading_day` (weekday logic), `check_freshness`, `check_all_fresh`, max_stale_days tolerance (default 3)
+- [x] `data` CLI subcommand: `quantbot data [--instruments SYM,...] [--tradeable-only] [--data-dir PATH] [--json]`
+- [x] Freshness gate in `run_live`: checks all instruments before trading, `--allow-stale` override, `--max-stale-days` config
+- [x] 20 unit tests (13 freshness + 7 updater), 5 Yahoo mockito tests
+- [x] Mockito tests use `.no_proxy()` on reqwest client to bypass HTTP proxy on cluster login node (also fixed in IG client tests)
+
+**PR 8 — NAV Mark-to-Market:**
+- [x] `src/execution/mtm.rs` — `mark_to_market()` pure function, `MtmResult`/`MtmPosition` structs
+- [x] NAV = initial_cash + Σ(signed_size × (current_price - open_level))
+- [x] Computed from live IG positions + latest bar close prices each run
+- [x] MTM NAV used for: `generate_targets` sizing, risk agent drawdown check, state file save, audit log
+- [x] `nav_mark_to_market` audit event with per-position breakdown
+- [x] IG engine created early in `run_live`, reused for MTM + `run_rebalance` (single auth)
+- [x] Paper engine falls back to state file NAV / initial_cash
+- [x] 6 unit tests (empty, long up, short down, mixed, missing price, missing level)
+- [x] Fixed mockito proxy issue (`.no_proxy()` on reqwest client)
+
 #### Validation Results (2026-03-31)
 
 | Test | Rust | Python | Delta |
@@ -558,10 +588,24 @@ Track A checklist:
 
 **Gate passed:** Round 4 combiner simulation confirms Sharpe 1.228→1.112 after costs on focused universe. Per-instrument routing is the key — not universal weighting.
 
-- [ ] `rig-core` LLM client (Ollama routing — Fin-R1 runs locally on Mac Mini M4 Pro)
-- [ ] `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
-- [ ] `src/agents/indicator/` — `ta` crate computations → LLM interpretation
-- [ ] `src/agents/decision/combiner.rs` — **Per-instrument router** (not weighted average):
+**PR B1 — Multi-Agent Plumbing + Dummy RSI Indicator:** ✅ Done
+- [x] `track-b` cargo feature gate in `Cargo.toml` (no extra deps — RSI is inline arithmetic)
+- [x] `src/agents/mod.rs` — `SignalAgent` trait (object-safe: `name()`, `signal_type()`, `generate_signal()`)
+- [x] `src/agents/tsmom/mod.rs` — `impl SignalAgent for TSMOMAgent` (delegates to inherent method, zero test breakage)
+- [x] `src/agents/indicator/mod.rs` — `DummyIndicatorAgent` with 14-period RSI (Wilder's smoothing), 7 unit tests
+  - RSI < 30 → Long (oversold), RSI > 70 → Short (overbought), else Flat
+  - Strength = distance from threshold scaled to [0,1], confidence = 0.7
+  - RSI value stored in `metadata["rsi"]`
+- [x] `src/db.rs` — Schema v2→v3: `agent_name TEXT NOT NULL DEFAULT 'tsmom'` on signals table, migration, `idx_signals_agent` index, migration test
+- [x] `src/recording.rs` — `SignalRecord` struct replaces `HashMap` for multi-agent provenance
+- [x] `src/main.rs` — Conditional indicator agent in `run_live` (behind `#[cfg(feature = "track-b")]`), signals recorded to SQLite with `weight=0` (advisory only), printed in report. `run_history` shows Agent column.
+- [x] All tests pass with and without `track-b` feature, clean clippy
+
+**Remaining Track B PRs:**
+- [ ] **PR B2** — `rig-core` LLM client (Ollama routing — Fin-R1 runs locally on Mac Mini M4 Pro)
+- [ ] **PR B3** — `src/agents/prompt_loader.rs` — Runtime `.md` prompt loading
+- [ ] **PR B4** — `src/agents/indicator/` — Replace dummy RSI with `ta` crate computations → LLM interpretation
+- [ ] **PR B5** — `src/agents/decision/combiner.rs` — **Per-instrument router** (not weighted average):
   ```rust
   match instrument.asset_type() {
       Gold   => combine(tsmom, indicator, 0.50, 0.50),
@@ -569,6 +613,8 @@ Track A checklist:
       Forex  => combine(tsmom, indicator, 0.10, 0.90),
   }
   ```
+
+- [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
 - [ ] Universe: 6 instruments (GLD, GC=F, SPY, GBPUSD=X, USDCHF=X, USDJPY=X)
 - [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
 - [ ] `src/eval/` — Backtest LLM + agent ablation (Rust port)
