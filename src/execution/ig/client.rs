@@ -47,6 +47,7 @@ impl IgClient {
     }
 
     /// For testing: construct with explicit credentials and base URL.
+    /// Uses `.no_proxy()` to prevent HTTP proxy from intercepting localhost requests.
     #[cfg(test)]
     pub fn new_with_credentials(
         base_url: String,
@@ -55,7 +56,7 @@ impl IgClient {
         password: String,
     ) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder().no_proxy().build().unwrap(),
             base_url,
             api_key,
             username,

@@ -24,6 +24,7 @@ use quantbot::data::yahoo::YahooClient;
 use quantbot::db::Db;
 use quantbot::execution::circuit_breaker::CircuitBreaker;
 use quantbot::execution::ig::engine::IgExecutionEngine;
+use quantbot::execution::mtm;
 use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::reconcile;
 use quantbot::execution::router::SizedOrder;
@@ -578,14 +579,72 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         eprintln!("  Data freshness check passed");
     }
 
-    // ── Generate targets ───────────────────────────────────────
-    // Use prior state for NAV, but actual positions come from IG
-    let nav = match load_state(&args.state_file)? {
-        Some(state) => {
-            eprintln!("  Loaded NAV from state: ${}", format_number(state.nav));
-            state.nav
+    // ── Compute NAV (MTM for IG, state for Paper) ───────────
+    // For IG: fetch live positions, compute mark-to-market NAV from
+    //   initial_cash + unrealized P&L (signed_size * (current_price - open_level))
+    // For Paper: use saved state NAV or initial_cash
+    let ig_engine = if matches!(app_config.execution.engine, EngineType::Ig) {
+        Some(
+            IgExecutionEngine::new(ig_config)
+                .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?,
+        )
+    } else {
+        None
+    };
+
+    let (nav, mtm_result) = if let Some(engine) = &ig_engine {
+        eprintln!("  Authenticating for MTM NAV...");
+        engine
+            .health_check()
+            .await
+            .context("health check failed")?;
+        let positions = engine
+            .get_positions()
+            .await
+            .context("failed to fetch positions for MTM")?;
+
+        // Extract open levels (first deal per instrument)
+        let mut open_levels: HashMap<String, f64> = HashMap::new();
+        for pos in &positions {
+            open_levels
+                .entry(pos.instrument.clone())
+                .or_insert(pos.open_level);
         }
-        None => args.initial_cash,
+
+        // Extract current prices from loaded bars (latest close)
+        let mut current_prices: HashMap<String, f64> = HashMap::new();
+        for (sym, series) in &bars {
+            if let Some(last) = series.bars().last() {
+                current_prices.insert(sym.clone(), last.close);
+            }
+        }
+
+        let actual_signed = reconcile::positions_to_signed(&positions);
+        let result = mtm::mark_to_market(
+            args.initial_cash,
+            &actual_signed,
+            &open_levels,
+            &current_prices,
+        );
+
+        eprintln!(
+            "  MTM NAV: ${} (unrealized P&L: ${}, {} position(s))",
+            format_number(result.nav),
+            format_number(result.unrealized_pnl),
+            result.positions.len(),
+        );
+
+        (result.nav, Some(result))
+    } else {
+        // Paper engine: use state NAV or initial_cash
+        let nav = match load_state(&args.state_file)? {
+            Some(state) => {
+                eprintln!("  Loaded NAV from state: ${}", format_number(state.nav));
+                state.nav
+            }
+            None => args.initial_cash,
+        };
+        (nav, None)
     };
 
     let engine_name = match app_config.execution.engine {
@@ -606,6 +665,16 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         }),
         Some(&args.state_file.display().to_string()),
     );
+
+    // Log MTM NAV audit event (after run_start)
+    if let Some(ref mtm) = mtm_result {
+        audit.log_nav_mtm(
+            args.initial_cash,
+            mtm.unrealized_pnl,
+            mtm.nav,
+            &mtm.positions,
+        );
+    }
 
     let config = BacktestConfig {
         initial_cash: args.initial_cash,
@@ -736,8 +805,8 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref()).await
         }
         EngineType::Ig => {
-            let engine = IgExecutionEngine::new(ig_config)
-                .map_err(|e| anyhow::anyhow!("failed to create IG engine: {e}"))?;
+            // Reuse IG engine created for MTM (already authenticated)
+            let engine = ig_engine.expect("IG engine already created for MTM");
             run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref()).await
         }
     };

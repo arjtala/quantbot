@@ -226,6 +226,20 @@ impl AuditLogger {
         );
     }
 
+    pub fn log_nav_mtm(&mut self, initial_cash: f64, unrealized_pnl: f64, mtm_nav: f64, positions: &[crate::execution::mtm::MtmPosition]) {
+        self.log(
+            "nav_mark_to_market",
+            "INFO",
+            serde_json::json!({
+                "initial_cash": (initial_cash * 10.0).round() / 10.0,
+                "unrealized_pnl": (unrealized_pnl * 10.0).round() / 10.0,
+                "mtm_nav": (mtm_nav * 10.0).round() / 10.0,
+                "position_count": positions.len(),
+                "positions": positions,
+            }),
+        );
+    }
+
     pub fn log_risk_check(&mut self, detail: &RiskCheckDetail) {
         let level = if detail.decision == "VETO" { "ERROR" } else { "INFO" };
         self.log(

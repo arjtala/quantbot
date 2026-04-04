@@ -389,7 +389,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A SQLite recording complete, risk agent next** | 100+ tests, clean clippy
+> **Status: In progress — Track A MTM NAV complete, data pipeline done** | 200+ tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -426,8 +426,10 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 | **4** | Per-run JSONL audit logging + run summaries | ✅ Done |
 | **4b** | Audit log polish (schema v2, Z timestamps, signed_deal_size) | ✅ Done |
 | **5** | SQLite recording decorator + `history` subcommand | ✅ Done |
-| **5b** | SQLite polish (user_version, batch inserts, filters) | ← NEXT |
-| **6** | Risk agent with veto authority + drawdown tracking | Planned |
+| **5b** | SQLite polish (user_version, batch inserts, filters) | ✅ Done |
+| **6** | Risk agent with veto authority + drawdown tracking | ✅ Done |
+| **7** | Data pipeline (Yahoo update + freshness gate) | ✅ Done |
+| **8** | NAV mark-to-market (MTM from live positions + bar prices) | ✅ Done |
 
 #### IG Execution Architecture (PRs 1-3 Complete)
 
@@ -492,19 +494,18 @@ Round 4 combiner simulation on 252-day data confirms Sharpe 1.228 (1.112 after I
 - [x] `PRAGMA journal_mode=WAL` for concurrent read safety
 - [x] Schema indexed on `run_id` and `instrument` for fast queries
 
-**PR 5b — SQLite Polish (from review):** ← NEXT
-- [ ] Add `PRAGMA user_version` for lightweight schema versioning
-- [ ] Batch inserts in a transaction for multi-signal/order runs
-- [ ] `--status` and `--date` filters for `history` subcommand
-- [ ] Track B readiness: ensure schema can log LLM agent signals and decisions
-- [ ] `db_write_failed` flag in `RunSummary` (parallel to `audit_write_failed`)
+**PR 5b — SQLite Polish (from review):**
+- [x] Add `PRAGMA user_version` for lightweight schema versioning
+- [x] Batch inserts in a transaction for multi-signal/order runs
+- [x] `--status` and `--date` filters for `history` subcommand
+- [x] Track B readiness: ensure schema can log LLM agent signals and decisions
+- [x] `db_write_failed` flag in `RunSummary` (parallel to `audit_write_failed`)
 
 **PR 6 — Risk Agent:**
-- [ ] `src/risk/agent.rs` — `RiskAgent::check()` with veto authority
-- [ ] Daily loss limit (-5%), max drawdown (-15%), gross leverage cap, per-position concentration
-- [ ] GLD+GC=F combined weight cap (correlation override)
-- [ ] `risk_veto` audit event
-- [ ] Drawdown high-water mark persisted in SQLite (PR 5 dependency)
+- [x] `src/agents/risk/mod.rs` — `RiskAgent::check()` with veto authority
+- [x] Daily loss limit (-5%), max drawdown (-15%), gross leverage cap, per-position concentration
+- [x] `risk_check` audit event
+- [x] Drawdown high-water mark persisted in SQLite (PR 5 dependency)
 
 #### Validation Results (2026-03-31)
 
@@ -550,8 +551,8 @@ Track A checklist:
 - [ ] `src/agents/decision/router.rs` — Per-instrument strategy router (gold: combiner, equity: TSMOM, forex: indicator-heavy) ← Track B
 - [x] `src/db.rs` — SQLite schema (runs, orders, positions, signals) + WAL mode + query helpers
 - [x] `src/recording.rs` — Recorder: logs all trading activity to SQLite (standalone struct, not trait decorator)
-- [ ] `src/risk/agent.rs` — RiskAgent: daily loss limit, drawdown cap, veto authority ← PR 6
-- [ ] `src/risk/drawdown.rs` — High-water mark tracker (persisted in SQLite) ← PR 6
+- [x] `src/agents/risk/mod.rs` — RiskAgent: drawdown cap, leverage cap, per-position concentration, veto authority
+- [x] `src/execution/mtm.rs` — Mark-to-market NAV from live positions + bar prices
 
 ### Track B — Fin-R1 Indicator Agent (Weeks 3-5) — UNCONDITIONAL (Gate Passed)
 

@@ -81,10 +81,11 @@ impl YahooClient {
     }
 
     /// Create a client with a custom base URL (for testing with mockito).
+    /// Uses `.no_proxy()` to prevent HTTP proxy from intercepting localhost requests.
     #[cfg(test)]
     pub fn new_with_base_url(base_url: &str) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder().no_proxy().build().unwrap(),
             base_url: base_url.to_string(),
             last_request: None,
             rate_limit_ms: 0, // no rate limiting in tests
