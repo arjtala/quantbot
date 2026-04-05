@@ -67,6 +67,16 @@ impl TSMOMAgent {
         // Average sign across lookbacks → strength in [-1, 1]
         let avg_sign: f64 = signs.iter().sum::<f64>() / signs.len() as f64;
 
+        // EWMA volatility — compute early so flat signals still carry vol_scalar
+        let ann_vol = ewma_volatility(&returns, self.ewma_com, 20);
+        let current_vol = *ann_vol.last().unwrap_or(&0.0);
+
+        if current_vol > 1e-8 {
+            let vol_scalar = self.vol_target / current_vol;
+            metadata.insert("ann_vol".into(), current_vol);
+            metadata.insert("vol_scalar".into(), vol_scalar);
+        }
+
         if avg_sign == 0.0 {
             return self.flat_signal(instrument, "conflicting_signals", metadata);
         }
@@ -76,24 +86,16 @@ impl TSMOMAgent {
         let agreement =
             signs.iter().filter(|&&s| s == majority).count() as f64 / signs.len() as f64;
 
-        // EWMA volatility
-        let ann_vol = ewma_volatility(&returns, self.ewma_com, 20);
-        let current_vol = *ann_vol.last().unwrap_or(&0.0);
-
         if current_vol < 1e-8 {
             return self.flat_signal(instrument, "zero_volatility", metadata);
         }
 
-        let vol_scalar = self.vol_target / current_vol;
         let direction = if avg_sign > 0.0 {
             SignalDirection::Long
         } else {
             SignalDirection::Short
         };
         let strength = avg_sign.clamp(-1.0, 1.0);
-
-        metadata.insert("ann_vol".into(), current_vol);
-        metadata.insert("vol_scalar".into(), vol_scalar);
 
         let mut sig = Signal::new(
             instrument.into(),
