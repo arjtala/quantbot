@@ -467,6 +467,21 @@ Every LLM indicator call (success or error) is now cached to SQLite with a deter
 
 **All tests pass with and without `track-b`, clean clippy. +480 lines.**
 
+**PR B5b — LLM Client Fix for Ollama Thinking Models (2026-04-05):**
+
+Fixed LLM client to work with Ollama thinking models (qwen3, Fin-R1) that use a separate `reasoning` field instead of `<think>` blocks. Diagnosed via raw body logging — content was empty because: (1) `content: null` crashed serde, (2) thinking tokens consumed the entire 512-token budget, (3) 30s timeout too short for local inference.
+
+| Component | Location | Notes |
+|---|---|---|
+| Response types | `src/agents/indicator/llm_client.rs` | `content: Option<String>`, `reasoning: Option<String>` on `ChatMessage`. `stream: false` in request. Diagnostic body snippet (300 chars) on empty/parse failures |
+| Token budget | `src/agents/indicator/llm_client.rs` | Default `max_tokens` 512→4096 (thinking models need CoT + answer) |
+| Config | `config.example.toml` | `max_tokens = 4096`, `timeout_secs = 120` |
+| System prompt | `prompts/indicator_system.md` | Moved from `src/agents/indicator/prompt.txt` as single source of truth. `include_str!` path updated in `prompt_loader.rs` |
+
+**Verified end-to-end on both qwen3:14b and Fin-R1:Q5.** Fin-R1 notably more opinionated (strong short on gold) vs qwen3's conservative flat calls. Both produce valid parsed JSON with `llm_ok=1, parse_ok=1` for all 6 instruments.
+
+**+70 lines net, 2 new tests (null content, reasoning-without-content).**
+
 ---
 
 ## References

@@ -399,7 +399,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B5a)** | 270+ tests, clean clippy
+> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B5b)** | 270+ tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -608,7 +608,7 @@ Replaced DummyIndicatorAgent's inline RSI with a full TA suite and LLM-based ind
 - [x] `src/agents/indicator/ta.rs` — Extracted `compute_rsi`, added SMA, EMA, MACD (12/26/9), Bollinger Bands (20,2), ATR (Wilder's smoothing). `TaSnapshot::compute()` + `format_for_prompt()`. 15 tests
 - [x] `src/agents/indicator/llm_client.rs` — OpenAI-compatible `/v1/chat/completions` client (Ollama/SGLang). `LlmConfig` with serde defaults (temp=0.3, max_tokens=512, timeout=30s, retries=2). Rate limiting (200ms), retry on 5xx with exponential backoff (1s/2s/4s), no retry on timeout/4xx. 5 mockito tests
 - [x] `src/agents/indicator/parser.rs` — `parse_llm_response()` pipeline: strip `<think>` blocks (OnceLock regex) → strip markdown fences → try direct JSON → regex fallback for embedded JSON. Clamps confidence/strength, direction aliases (long/buy/short/sell/flat/neutral/hold). 11 tests
-- [x] `src/agents/indicator/prompt.txt` — System prompt: trading analyst role, JSON output schema `{direction, confidence, strength, horizon_days, reasoning}`, indicator analysis guidelines. Loaded via `include_str!`
+- [x] `prompts/indicator_system.md` — System prompt: trading analyst role, JSON output schema `{direction, confidence, strength, horizon_days, reasoning}`, indicator analysis guidelines. Loaded via `include_str!`
 - [x] `src/agents/indicator/llm_agent.rs` — `LlmIndicatorAgent` with `tokio::sync::Mutex<LlmClient>`. `generate_signal_async()`: TaSnapshot → format prompt → LLM call → parse → Signal. `SignalAgent` impl via `block_in_place` + `Handle::current().block_on()`. Graceful degradation: any error → Flat + `llm_success=0.0` in metadata. 3 mockito tests
 - [x] `src/config.rs` — Feature-gated `llm: Option<LlmConfig>` on `AppConfig`. 1 test
 - [x] `src/main.rs` — `Box<dyn SignalAgent>` dynamic dispatch: `config.llm.is_some()` → `LlmIndicatorAgent`, else `DummyIndicatorAgent`. Agent column in display, RSI display conditional ("-" when absent). `sig.agent_name` for recording
@@ -665,7 +665,16 @@ Every LLM indicator call cached to SQLite for deterministic replay. Cache key = 
 - [x] **PR B3** — Signal combiner: blend TSMOM + indicator signals with configurable per-asset-class weights
 - [x] **PR B4** — `src/agents/indicator/prompt_loader.rs` — Runtime `.md` prompt loading with SHA-256 hash provenance
 - [x] **PR B5a** — LLM cache write-through to SQLite (deterministic cache key, INSERT OR IGNORE, error caching)
-- [ ] **PR B5b** — Deterministic replay harness: `CachedIndicatorAgent` + `eval replay` subcommand
+- [x] **PR B5b** — LLM client fix for Ollama thinking models (qwen3, Fin-R1). Verified end-to-end
+
+#### PR B5b — LLM Client Fix for Ollama Thinking Models (2026-04-05)
+
+Fixed LLM client compatibility with Ollama thinking models (qwen3:14b, Fin-R1:Q5). Thinking models return CoT in `message.reasoning` with empty `content`, and need larger token budgets + timeouts.
+
+- [x] `src/agents/indicator/llm_client.rs` — `content: Option<String>` + `reasoning: Option<String>` on `ChatMessage`, `stream: false`, raw body snippet in `EmptyResponse` error, default `max_tokens` 512→4096. 2 new tests (null content, reasoning-without-content)
+- [x] `prompts/indicator_system.md` — Moved from `src/agents/indicator/prompt.txt`. `include_str!` path updated in `prompt_loader.rs`
+- [x] `config.example.toml` — `max_tokens = 4096`, `timeout_secs = 120`
+- [x] Verified end-to-end: qwen3:14b + Fin-R1:Q5, all 6 instruments `llm_ok=1, parse_ok=1`
 - [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
 
 ### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED
