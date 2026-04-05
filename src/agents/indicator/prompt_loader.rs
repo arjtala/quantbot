@@ -1,7 +1,7 @@
 use sha2::{Digest, Sha256};
 
 /// Embedded fallback prompt (compiled into the binary).
-const EMBEDDED_PROMPT: &str = include_str!("prompt.txt");
+const EMBEDDED_PROMPT: &str = include_str!("../../../prompts/indicator_system.md");
 
 /// Where the system prompt was loaded from.
 #[derive(Debug, Clone, PartialEq, Eq)]
