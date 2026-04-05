@@ -495,6 +495,15 @@ impl Db {
         Ok(result)
     }
 
+    /// Delete a cached LLM entry by cache key. No-op if the key does not exist.
+    pub fn delete_llm_cache(&self, cache_key: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM llm_cache WHERE cache_key = ?1",
+            params![cache_key],
+        )?;
+        Ok(())
+    }
+
     /// Look up a cached LLM response by cache key.
     pub fn get_llm_cache(&self, cache_key: &str) -> SqlResult<Option<LlmCacheEntry>> {
         let result = self.conn.query_row(
@@ -1096,5 +1105,35 @@ mod tests {
         // Different model returns empty
         let cov2 = db.llm_cache_coverage("other_model", "ph1").unwrap();
         assert!(cov2.is_empty());
+    }
+
+    #[test]
+    fn delete_llm_cache_existing() {
+        let db = Db::open_memory().unwrap();
+        let entry = LlmCacheEntry {
+            cache_key: "del_key".into(),
+            llm_model: "llama3".into(),
+            prompt_hash: "abc".into(),
+            instrument: "SPY".into(),
+            eval_date: "2025-03-31".into(),
+            ta_hash: "ta1".into(),
+            response_text: "resp".into(),
+            llm_ok: false,
+            parse_ok: false,
+            latency_ms: Some(100),
+            created_at: "2025-03-31T12:00:00Z".into(),
+        };
+        db.insert_llm_cache(&entry).unwrap();
+        assert!(db.get_llm_cache("del_key").unwrap().is_some());
+
+        db.delete_llm_cache("del_key").unwrap();
+        assert!(db.get_llm_cache("del_key").unwrap().is_none());
+    }
+
+    #[test]
+    fn delete_llm_cache_nonexistent() {
+        let db = Db::open_memory().unwrap();
+        // Should not error on missing key
+        db.delete_llm_cache("no_such_key").unwrap();
     }
 }

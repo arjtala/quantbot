@@ -65,6 +65,9 @@ enum Command {
     /// Evaluate strategies offline
     #[cfg(feature = "track-b")]
     Eval(EvalArgs),
+    /// Batch-fill LLM cache for eval replay
+    #[cfg(feature = "track-b")]
+    Cache(CacheArgs),
 }
 
 #[derive(Parser)]
@@ -188,6 +191,64 @@ struct EvalReplayArgs {
     /// Output results as JSON
     #[arg(long)]
     json: bool,
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Parser)]
+struct CacheArgs {
+    #[command(subcommand)]
+    command: CacheCommand,
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Subcommand)]
+enum CacheCommand {
+    /// Batch-fill LLM cache for all (instrument, date) pairs in a range
+    Fill(CacheFillArgs),
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Parser)]
+struct CacheFillArgs {
+    /// Path to TOML configuration file (must have [llm] section)
+    #[arg(long)]
+    config: PathBuf,
+
+    /// Start date (YYYY-MM-DD)
+    #[arg(long)]
+    start: NaiveDate,
+
+    /// End date (YYYY-MM-DD)
+    #[arg(long)]
+    end: NaiveDate,
+
+    /// Comma-separated instrument symbols
+    #[arg(long, value_delimiter = ',')]
+    instruments: Option<Vec<String>>,
+
+    /// Use only the 6 tradeable instruments
+    #[arg(long)]
+    tradeable_only: bool,
+
+    /// Abort after this many consecutive LLM failures (default: 10)
+    #[arg(long, default_value_t = 10)]
+    max_failures: usize,
+
+    /// Abort on the first LLM failure
+    #[arg(long)]
+    require_success: bool,
+
+    /// Print per-call progress lines
+    #[arg(long)]
+    progress: bool,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
+
+    /// Minimum bars of history before a date is eligible (default: 60)
+    #[arg(long, default_value_t = 60)]
+    min_history: usize,
 }
 
 #[derive(Parser)]
@@ -398,6 +459,10 @@ async fn main() {
         #[cfg(feature = "track-b")]
         Command::Eval(args) => match args.command {
             EvalCommand::Replay(replay_args) => run_eval_replay(replay_args),
+        },
+        #[cfg(feature = "track-b")]
+        Command::Cache(args) => match args.command {
+            CacheCommand::Fill(fill_args) => run_cache_fill(fill_args).await,
         },
     };
 
@@ -645,6 +710,259 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         println!();
         println!("═══ CACHE COVERAGE ═══");
         print!("{cov_report}");
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "track-b")]
+async fn run_cache_fill(args: CacheFillArgs) -> Result<()> {
+    use quantbot::agents::indicator::llm_client::LlmClient;
+    use quantbot::agents::indicator::parser::parse_llm_response;
+    use quantbot::agents::indicator::prompt_loader::{self, sha256_short};
+    use quantbot::agents::indicator::ta::TaSnapshot;
+    use quantbot::core::bar::BarSeries;
+    use quantbot::db::LlmCacheEntry;
+
+    // Phase 1: Setup
+    let app_config = AppConfig::load(&args.config)
+        .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+
+    let llm_config = app_config
+        .llm
+        .context("config must have an [llm] section for cache fill")?;
+
+    let loaded_prompt = prompt_loader::load(llm_config.prompt_path.as_deref());
+    let model = llm_config.model.clone();
+    let mut client = LlmClient::new(llm_config).context("failed to create LLM client")?;
+
+    // Resolve instruments
+    let symbols: Vec<String> = if let Some(syms) = args.instruments {
+        syms
+    } else if args.tradeable_only {
+        TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect()
+    } else {
+        TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect()
+    };
+
+    if !args.data_dir.is_dir() {
+        bail!("Data directory does not exist: {}", args.data_dir.display());
+    }
+
+    let db_path = args.data_dir.join("quantbot.db");
+    let db = Db::open(&db_path)
+        .with_context(|| format!("failed to open database at {}", db_path.display()))?;
+
+    eprintln!("  Cache fill setup:");
+    eprintln!("    Model:       {model}");
+    eprintln!("    Prompt hash: {}", loaded_prompt.hash);
+    eprintln!("    Date range:  {} to {}", args.start, args.end);
+    eprintln!("    Instruments: {}", symbols.join(", "));
+    eprintln!("    Min history: {}", args.min_history);
+
+    // Phase 2: Build work list
+    struct WorkItem {
+        instrument: String,
+        eval_date: String,
+        user_prompt: String,
+        cache_key: String,
+        ta_hash: String,
+    }
+
+    let loader = CsvLoader::new(&args.data_dir);
+    let mut work_items: Vec<WorkItem> = Vec::new();
+    let mut already_cached = 0usize;
+    let mut eligible_per_instrument: HashMap<String, usize> = HashMap::new();
+
+    for sym in &symbols {
+        // Load all bars (no date filter — need full history for TA)
+        let all_bars = match loader.load_bars(sym, None, None) {
+            Ok(series) => series,
+            Err(e) => {
+                eprintln!("  Warning: failed to load {sym}: {e}");
+                continue;
+            }
+        };
+
+        let bars_slice = all_bars.bars();
+        let mut instrument_eligible = 0usize;
+
+        for (i, bar) in bars_slice.iter().enumerate() {
+            if bar.date < args.start || bar.date > args.end {
+                continue;
+            }
+            // Need at least min_history bars (index i means i+1 bars in [0..=i])
+            if i + 1 < args.min_history {
+                continue;
+            }
+
+            instrument_eligible += 1;
+
+            // Build sub-series for TA computation
+            let sub_bars = BarSeries::new(bars_slice[0..=i].to_vec())
+                .expect("sub-series from valid bars");
+            let snapshot = TaSnapshot::compute(&sub_bars);
+            let user_prompt = format!(
+                "Instrument: {}\n\n{}",
+                sym,
+                snapshot.format_for_prompt()
+            );
+
+            let eval_date = bar.date.to_string();
+            let ta_hash = sha256_short(&user_prompt);
+            let cache_key = format!(
+                "{}|{}|{}|{}|{}",
+                model, loaded_prompt.hash, sym, eval_date, ta_hash
+            );
+
+            // Check existing cache
+            match db.get_llm_cache(&cache_key)? {
+                Some(entry) if entry.llm_ok && entry.parse_ok => {
+                    already_cached += 1;
+                    continue;
+                }
+                Some(_) => {
+                    // Failed entry — delete to allow retry
+                    db.delete_llm_cache(&cache_key)?;
+                }
+                None => {}
+            }
+
+            work_items.push(WorkItem {
+                instrument: sym.clone(),
+                eval_date,
+                user_prompt,
+                cache_key,
+                ta_hash,
+            });
+        }
+
+        eligible_per_instrument.insert(sym.clone(), instrument_eligible);
+        eprintln!(
+            "  Loaded {} bars for {} ({} eligible dates)",
+            bars_slice.len(),
+            sym,
+            instrument_eligible
+        );
+    }
+
+    let total_pairs: usize = eligible_per_instrument.values().sum();
+    eprintln!();
+    eprintln!(
+        "  Work list: {} new calls, {} already cached, {} total eligible",
+        work_items.len(),
+        already_cached,
+        total_pairs
+    );
+
+    if work_items.is_empty() {
+        eprintln!("  Nothing to do — all pairs already cached.");
+        return Ok(());
+    }
+
+    // Phase 3: Execute LLM calls
+    let total_work = work_items.len();
+    let mut successes = 0usize;
+    let mut failures = 0usize;
+    let mut consecutive_failures = 0usize;
+    let start_time = std::time::Instant::now();
+
+    for (idx, item) in work_items.iter().enumerate() {
+        let call_start = std::time::Instant::now();
+        let result = client.chat(&loaded_prompt.text, &item.user_prompt).await;
+        let latency_ms = call_start.elapsed().as_millis() as u64;
+
+        let (response_text, llm_ok, parse_ok) = match result {
+            Ok(raw) => {
+                let p_ok = parse_llm_response(&raw).is_ok();
+                (raw, true, p_ok)
+            }
+            Err(e) => (e.to_string(), false, false),
+        };
+
+        let entry = LlmCacheEntry {
+            cache_key: item.cache_key.clone(),
+            llm_model: model.clone(),
+            prompt_hash: loaded_prompt.hash.clone(),
+            instrument: item.instrument.clone(),
+            eval_date: item.eval_date.clone(),
+            ta_hash: item.ta_hash.clone(),
+            response_text,
+            llm_ok,
+            parse_ok,
+            latency_ms: Some(latency_ms),
+            created_at: chrono::Utc::now()
+                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+        };
+        db.insert_llm_cache(&entry)?;
+
+        let ok = llm_ok && parse_ok;
+        if ok {
+            successes += 1;
+            consecutive_failures = 0;
+        } else {
+            failures += 1;
+            consecutive_failures += 1;
+        }
+
+        if args.progress {
+            let pct = (idx + 1) as f64 / total_work as f64 * 100.0;
+            let status = if ok { "OK" } else { "FAIL" };
+            eprintln!(
+                "  [{}/{}] ({:.0}%) {} {} {} latency={}ms",
+                idx + 1,
+                total_work,
+                pct,
+                item.instrument,
+                item.eval_date,
+                status,
+                latency_ms,
+            );
+        }
+
+        if args.require_success && !ok {
+            bail!(
+                "Cache fill aborted: --require-success and call failed for {} {}",
+                item.instrument,
+                item.eval_date
+            );
+        }
+
+        if consecutive_failures >= args.max_failures {
+            bail!(
+                "Cache fill aborted: {} consecutive failures (max_failures={})",
+                consecutive_failures,
+                args.max_failures
+            );
+        }
+    }
+
+    let duration = start_time.elapsed();
+
+    // Phase 4: Summary
+    let coverage = db
+        .llm_cache_coverage(&model, &loaded_prompt.hash)
+        .context("failed to query coverage")?;
+
+    println!();
+    println!("Cache fill complete:");
+    println!("  Total pairs:    {}", total_pairs);
+    println!("  Already cached: {} (skipped)", already_cached);
+    println!("  New calls:      {}", total_work);
+    println!("  Successes:      {}", successes);
+    println!("  Failures:       {}", failures);
+    println!("  Duration:       {:.1}s", duration.as_secs_f64());
+    println!();
+    println!("Coverage by instrument:");
+    for sym in &symbols {
+        let cached = coverage.get(sym).copied().unwrap_or(0);
+        let eligible = eligible_per_instrument.get(sym).copied().unwrap_or(0);
+        let pct = if eligible > 0 {
+            cached as f64 / eligible as f64 * 100.0
+        } else {
+            0.0
+        };
+        println!("  {sym:<14} {cached}/{eligible} ({pct:.0}%)");
     }
 
     Ok(())
