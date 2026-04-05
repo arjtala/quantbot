@@ -3,6 +3,12 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::NaiveDate;
 
 use crate::agents::tsmom::TSMOMAgent;
+#[cfg(feature = "track-b")]
+use crate::agents::SignalAgent;
+#[cfg(feature = "track-b")]
+use crate::agents::combiner;
+#[cfg(feature = "track-b")]
+use crate::config::BlendConfig;
 use crate::core::bar::{Bar, BarSeries};
 use crate::core::portfolio::{Fill, Order, OrderSide, PortfolioState, Position};
 use crate::core::signal::{Signal, SignalDirection};
@@ -347,6 +353,172 @@ impl BacktestEngine {
                         .collect(),
                     position_notionals,
                     signals,
+                    fills,
+                });
+            }
+        }
+
+        snapshots
+    }
+
+    /// Run blended backtest: TSMOM + indicator agent combined via blend config.
+    ///
+    /// Structurally identical to `run()` but at each day:
+    /// 1. Generate TSMOM signals (existing logic)
+    /// 2. Generate indicator signals via `indicator.generate_signal()`
+    /// 3. Blend via `combiner::combine_signals()` + `build_combined_signal()`
+    /// 4. Use combined weights for risk limits + sizing
+    ///
+    /// Separate method to avoid touching the battle-tested `run()` path.
+    #[cfg(feature = "track-b")]
+    pub fn run_blended(
+        &self,
+        agent: &TSMOMAgent,
+        indicator: &dyn SignalAgent,
+        bars_by_instrument: &HashMap<String, BarSeries>,
+        blend_config: &BlendConfig,
+        min_history: usize,
+        eval_start: Option<NaiveDate>,
+    ) -> Vec<Snapshot> {
+        let all_dates = self.get_all_dates(bars_by_instrument);
+
+        if all_dates.len() <= min_history {
+            return Vec::new();
+        }
+
+        let bar_indexes: HashMap<&str, HashMap<NaiveDate, usize>> = bars_by_instrument
+            .iter()
+            .map(|(sym, series)| {
+                let idx: HashMap<NaiveDate, usize> = series
+                    .bars()
+                    .iter()
+                    .enumerate()
+                    .map(|(i, b)| (b.date, i))
+                    .collect();
+                (sym.as_str(), idx)
+            })
+            .collect();
+
+        let dates: Vec<NaiveDate> = all_dates.into_iter().collect();
+        let mut portfolio = PortfolioState::new(self.config.initial_cash);
+        let mut snapshots = Vec::new();
+        let mut pending_targets: HashMap<String, f64> = HashMap::new();
+        let mut spread_tracker = SpreadCostTracker::new();
+
+        for &today in &dates[min_history..] {
+            let mut close_prices: HashMap<String, f64> = HashMap::new();
+            let mut open_prices: HashMap<String, f64> = HashMap::new();
+
+            for (sym, series) in bars_by_instrument {
+                if let Some(&idx) = bar_indexes[sym.as_str()].get(&today) {
+                    let bar = &series.bars()[idx];
+                    close_prices.insert(sym.clone(), bar.close);
+                    open_prices.insert(sym.clone(), bar.open);
+                }
+            }
+
+            // Step 1: Execute pending orders at today's open
+            let fills = if pending_targets.is_empty() {
+                Vec::new()
+            } else {
+                self.rebalance(
+                    &mut portfolio,
+                    &mut pending_targets,
+                    &open_prices,
+                    &mut spread_tracker,
+                )
+            };
+
+            // Step 2: Mark positions to today's close
+            Self::mark_to_market(&mut portfolio, &close_prices);
+
+            // Step 3: Generate TSMOM signals
+            let mut tsmom_signals: HashMap<String, Signal> = HashMap::new();
+            for (sym, series) in bars_by_instrument {
+                if let Some(&today_idx) = bar_indexes[sym.as_str()].get(&today) {
+                    let history_len = today_idx + 1;
+                    if history_len < min_history {
+                        continue;
+                    }
+                    let history_bars: Vec<Bar> = series.bars()[..=today_idx].to_vec();
+                    if let Ok(history) = BarSeries::new(history_bars) {
+                        let sig = agent.generate_signal(&history, sym);
+                        tsmom_signals.insert(sym.clone(), sig);
+                    }
+                }
+            }
+
+            // Step 4: Generate indicator signals
+            let mut indicator_signals: HashMap<String, Signal> = HashMap::new();
+            for (sym, series) in bars_by_instrument {
+                if let Some(&today_idx) = bar_indexes[sym.as_str()].get(&today) {
+                    let history_len = today_idx + 1;
+                    if history_len < min_history {
+                        continue;
+                    }
+                    let history_bars: Vec<Bar> = series.bars()[..=today_idx].to_vec();
+                    if let Ok(history) = BarSeries::new(history_bars) {
+                        let sig = indicator.generate_signal(&history, sym);
+                        indicator_signals.insert(sym.clone(), sig);
+                    }
+                }
+            }
+
+            // Step 5: Combine and blend
+            let combined_results =
+                combiner::combine_signals(&tsmom_signals, &indicator_signals, blend_config);
+
+            let mut target_weights: HashMap<String, f64> = HashMap::new();
+            let mut combined_signals: HashMap<String, Signal> = HashMap::new();
+            for r in &combined_results {
+                target_weights.insert(r.instrument.clone(), r.combined_weight);
+                let combined_sig = combiner::build_combined_signal(
+                    r,
+                    &tsmom_signals[&r.instrument],
+                    indicator_signals.get(&r.instrument),
+                );
+                combined_signals.insert(r.instrument.clone(), combined_sig);
+            }
+
+            // Apply risk limits
+            self.apply_risk_limits(&mut target_weights);
+
+            // Convert weights to target quantities
+            let nav = portfolio.nav();
+            pending_targets.clear();
+            for (sym, weight) in &target_weights {
+                if let Some(&px) = close_prices.get(sym) {
+                    if px > 0.0 {
+                        let qty = self.router.size_from_weight(sym, *weight, nav, px);
+                        pending_targets.insert(sym.clone(), qty);
+                    }
+                }
+            }
+
+            // Step 6: Record snapshot (only during eval period)
+            let in_eval = eval_start.is_none_or(|es| today >= es);
+            if in_eval {
+                let position_notionals: HashMap<String, f64> = portfolio
+                    .positions
+                    .iter()
+                    .map(|(s, p)| {
+                        let px = close_prices.get(s).copied().unwrap_or(p.avg_entry_price);
+                        (s.clone(), p.quantity * px * p.point_value)
+                    })
+                    .collect();
+                snapshots.push(Snapshot {
+                    date: today,
+                    nav: portfolio.nav(),
+                    cash: portfolio.cash,
+                    gross_exposure: portfolio.gross_exposure(Some(&close_prices)),
+                    net_exposure: portfolio.net_exposure(Some(&close_prices)),
+                    positions: portfolio
+                        .positions
+                        .iter()
+                        .map(|(s, p)| (s.clone(), p.quantity))
+                        .collect(),
+                    position_notionals,
+                    signals: combined_signals,
                     fills,
                 });
             }

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use chrono::{SecondsFormat, Utc};
@@ -467,6 +468,31 @@ impl Db {
             ],
         )?;
         Ok(())
+    }
+
+    /// Count cached entries per instrument for a given model+prompt_hash.
+    /// Used for pre-flight coverage checks before replay.
+    pub fn llm_cache_coverage(
+        &self,
+        model: &str,
+        prompt_hash: &str,
+    ) -> SqlResult<HashMap<String, usize>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT instrument, COUNT(*) FROM llm_cache
+             WHERE llm_model = ?1 AND prompt_hash = ?2 AND llm_ok = 1 AND parse_ok = 1
+             GROUP BY instrument",
+        )?;
+        let rows = stmt.query_map(params![model, prompt_hash], |row| {
+            let instrument: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((instrument, count as usize))
+        })?;
+        let mut result = HashMap::new();
+        for row in rows {
+            let (instrument, count) = row?;
+            result.insert(instrument, count);
+        }
+        Ok(result)
     }
 
     /// Look up a cached LLM response by cache key.
@@ -1035,5 +1061,40 @@ mod tests {
 
         let count: i32 = conn.query_row("SELECT COUNT(*) FROM llm_cache", [], |r| r.get(0)).unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn llm_cache_coverage_counts() {
+        let db = Db::open_memory().unwrap();
+        // Insert 2 OK entries for SPY, 1 OK for GLD, 1 non-OK for GLD
+        for (key, inst, ok) in [
+            ("k1", "SPY", true),
+            ("k2", "SPY", true),
+            ("k3", "GLD", true),
+            ("k4", "GLD", false),
+        ] {
+            let entry = LlmCacheEntry {
+                cache_key: key.into(),
+                llm_model: "llama3".into(),
+                prompt_hash: "ph1".into(),
+                instrument: inst.into(),
+                eval_date: "2025-03-31".into(),
+                ta_hash: "ta".into(),
+                response_text: "resp".into(),
+                llm_ok: ok,
+                parse_ok: ok,
+                latency_ms: Some(100),
+                created_at: "now".into(),
+            };
+            db.insert_llm_cache(&entry).unwrap();
+        }
+
+        let cov = db.llm_cache_coverage("llama3", "ph1").unwrap();
+        assert_eq!(cov.get("SPY"), Some(&2));
+        assert_eq!(cov.get("GLD"), Some(&1)); // only OK entries counted
+
+        // Different model returns empty
+        let cov2 = db.llm_cache_coverage("other_model", "ph1").unwrap();
+        assert!(cov2.is_empty());
     }
 }

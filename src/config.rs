@@ -450,7 +450,7 @@ model = "llama3"
         assert_eq!(llm.base_url, "http://localhost:11434");
         assert_eq!(llm.model, "llama3");
         assert_eq!(llm.temperature, 0.3);
-        assert_eq!(llm.max_tokens, 512);
+        assert_eq!(llm.max_tokens, 4096);
     }
 
     #[test]

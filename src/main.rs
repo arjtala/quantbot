@@ -13,6 +13,8 @@ use quantbot::agents::indicator::DummyIndicatorAgent;
 #[cfg(feature = "track-b")]
 use quantbot::agents::indicator::llm_agent::LlmIndicatorAgent;
 #[cfg(feature = "track-b")]
+use quantbot::agents::indicator::cached_agent::CachedIndicatorAgent;
+#[cfg(feature = "track-b")]
 use quantbot::agents::SignalAgent;
 use quantbot::agents::risk::{RiskAgent, RiskDecision};
 use quantbot::agents::tsmom::TSMOMAgent;
@@ -60,6 +62,9 @@ enum Command {
     History(HistoryArgs),
     /// Update CSV data from Yahoo Finance
     Data(DataArgs),
+    /// Evaluate strategies offline
+    #[cfg(feature = "track-b")]
+    Eval(EvalArgs),
 }
 
 #[derive(Parser)]
@@ -119,6 +124,68 @@ struct DataArgs {
     data_dir: PathBuf,
 
     /// Output as JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Parser)]
+struct EvalArgs {
+    #[command(subcommand)]
+    command: EvalCommand,
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Subcommand)]
+enum EvalCommand {
+    /// Replay cached LLM responses through the backtest engine
+    Replay(EvalReplayArgs),
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Parser)]
+struct EvalReplayArgs {
+    /// Path to TOML configuration file (must have [blending] section)
+    #[arg(long)]
+    config: PathBuf,
+
+    /// LLM model name (must match cached entries)
+    #[arg(long)]
+    model: String,
+
+    /// Prompt hash (first 16 hex chars of SHA-256)
+    #[arg(long)]
+    prompt_hash: String,
+
+    /// Start date (YYYY-MM-DD) — bars loaded from this date
+    #[arg(long)]
+    start: Option<NaiveDate>,
+
+    /// End date (YYYY-MM-DD) — bars loaded up to this date
+    #[arg(long)]
+    end: Option<NaiveDate>,
+
+    /// Evaluation start date — warmup period before this excluded from metrics
+    #[arg(long)]
+    eval_start: Option<NaiveDate>,
+
+    /// Comma-separated instrument symbols (default: tradeable universe)
+    #[arg(long, value_delimiter = ',')]
+    instruments: Option<Vec<String>>,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
+
+    /// Initial portfolio cash
+    #[arg(long, default_value_t = 1_000_000.0)]
+    initial_cash: f64,
+
+    /// Minimum bars of history required before trading
+    #[arg(long, default_value_t = 252)]
+    min_history: usize,
+
+    /// Output results as JSON
     #[arg(long)]
     json: bool,
 }
@@ -328,6 +395,10 @@ async fn main() {
         Command::Positions(args) => run_positions(args).await,
         Command::History(args) => run_history(args),
         Command::Data(args) => run_data(args).await,
+        #[cfg(feature = "track-b")]
+        Command::Eval(args) => match args.command {
+            EvalCommand::Replay(replay_args) => run_eval_replay(replay_args),
+        },
     };
 
     if let Err(e) = result {
@@ -411,6 +482,169 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
         eprintln!("  Results written to {}", path.display());
     } else {
         println!("{output_text}");
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "track-b")]
+fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
+    use std::sync::{Arc, Mutex};
+
+    // Load config and validate blending is enabled
+    let app_config = AppConfig::load(&args.config)
+        .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+
+    let blend_config = app_config
+        .blending
+        .as_ref()
+        .filter(|b| b.enabled)
+        .context("blending must be enabled in config for eval replay")?;
+
+    // Resolve instruments
+    let symbols: Vec<String> = match args.instruments {
+        Some(syms) => syms,
+        None => TRADEABLE_UNIVERSE
+            .iter()
+            .map(|i| i.symbol.clone())
+            .collect(),
+    };
+
+    if !args.data_dir.is_dir() {
+        bail!("Data directory does not exist: {}", args.data_dir.display());
+    }
+
+    // Open DB and check coverage
+    let db_path = args.data_dir.join("quantbot.db");
+    let db = Db::open(&db_path)
+        .with_context(|| format!("failed to open database at {}", db_path.display()))?;
+
+    let coverage = db
+        .llm_cache_coverage(&args.model, &args.prompt_hash)
+        .context("failed to query LLM cache coverage")?;
+
+    eprintln!("  Cache coverage for model={} prompt_hash={}:", args.model, args.prompt_hash);
+    let mut total_cached = 0usize;
+    for sym in &symbols {
+        let count = coverage.get(sym).copied().unwrap_or(0);
+        total_cached += count;
+        let status = if count == 0 { " (NONE)" } else { "" };
+        eprintln!("    {sym:<14} {count} cached entries{status}");
+    }
+
+    if total_cached == 0 {
+        eprintln!("  WARNING: zero cached entries found — replay will produce TSMOM-only results");
+    }
+
+    // Build CachedIndicatorAgent
+    let db = Arc::new(Mutex::new(db));
+    let indicator = CachedIndicatorAgent::new(
+        Arc::clone(&db),
+        args.model.clone(),
+        args.prompt_hash.clone(),
+    );
+
+    // Load bars
+    let loader = CsvLoader::new(&args.data_dir);
+    let mut bars: HashMap<String, _> = HashMap::new();
+
+    for sym in &symbols {
+        match loader.load_bars(sym, args.start, args.end) {
+            Ok(series) => {
+                eprintln!("  Loaded {} bars for {}", series.bars().len(), sym);
+                bars.insert(sym.clone(), series);
+            }
+            Err(e) => {
+                eprintln!("  Warning: failed to load {sym}: {e}");
+            }
+        }
+    }
+
+    if bars.is_empty() {
+        bail!("Failed to load data for any instrument");
+    }
+
+    // Build engine and run blended backtest
+    let config = BacktestConfig {
+        initial_cash: args.initial_cash,
+        ..BacktestConfig::default()
+    };
+
+    let engine = BacktestEngine::new(config);
+    let tsmom = TSMOMAgent::new();
+
+    eprintln!("  Running blended replay...");
+    let snapshots = engine.run_blended(
+        &tsmom,
+        &indicator,
+        &bars,
+        blend_config,
+        args.min_history,
+        args.eval_start,
+    );
+
+    let result = BacktestResult::from_snapshots(&snapshots)
+        .context("Not enough snapshots to compute metrics")?;
+
+    // Also run TSMOM-only for comparison
+    eprintln!("  Running TSMOM-only baseline...");
+    let tsmom_snapshots = engine.run(&tsmom, &bars, args.min_history, args.eval_start);
+    let tsmom_result = BacktestResult::from_snapshots(&tsmom_snapshots);
+
+    // Coverage report
+    let cov_report = indicator.coverage_report();
+
+    if args.json {
+        let mut output = serde_json::Map::new();
+        output.insert(
+            "blended".into(),
+            serde_json::to_value(&result).unwrap(),
+        );
+        if let Some(ref tr) = tsmom_result {
+            output.insert(
+                "tsmom_only".into(),
+                serde_json::to_value(tr).unwrap(),
+            );
+        }
+        output.insert("cache_hit_rate".into(), serde_json::Value::from(cov_report.hit_rate()));
+        output.insert("cache_hits".into(), serde_json::Value::from(cov_report.total_hits as u64));
+        output.insert("cache_misses".into(), serde_json::Value::from(cov_report.total_misses as u64));
+        let json = serde_json::to_string_pretty(&output).context("failed to serialize")?;
+        println!("{json}");
+    } else {
+        println!("═══ BLENDED REPLAY ═══");
+        println!("{}", result.summary());
+
+        if let Some(ref tr) = tsmom_result {
+            println!("═══ TSMOM-ONLY BASELINE ═══");
+            println!("{}", tr.summary());
+
+            println!("═══ COMPARISON ═══");
+            println!(
+                "  Sharpe:  blended {:.3} vs TSMOM {:.3} (delta {:+.3})",
+                result.sharpe_ratio,
+                tr.sharpe_ratio,
+                result.sharpe_ratio - tr.sharpe_ratio,
+            );
+            println!(
+                "  Return:  blended {:.1}% vs TSMOM {:.1}%",
+                result.annualized_return * 100.0,
+                tr.annualized_return * 100.0,
+            );
+            println!(
+                "  Max DD:  blended {:.1}% vs TSMOM {:.1}%",
+                result.max_drawdown * 100.0,
+                tr.max_drawdown * 100.0,
+            );
+            println!(
+                "  Trades:  blended {} vs TSMOM {}",
+                result.total_trades, tr.total_trades,
+            );
+        }
+
+        println!();
+        println!("═══ CACHE COVERAGE ═══");
+        print!("{cov_report}");
     }
 
     Ok(())

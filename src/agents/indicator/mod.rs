@@ -1,5 +1,6 @@
 pub mod ta;
 
+pub mod cached_agent;
 pub mod llm_client;
 pub mod parser;
 pub mod llm_agent;
