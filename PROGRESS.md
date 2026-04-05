@@ -399,7 +399,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B5b)** | 270+ tests, clean clippy
+> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B5c)** | 284 tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -666,6 +666,7 @@ Every LLM indicator call cached to SQLite for deterministic replay. Cache key = 
 - [x] **PR B4** — `src/agents/indicator/prompt_loader.rs` — Runtime `.md` prompt loading with SHA-256 hash provenance
 - [x] **PR B5a** — LLM cache write-through to SQLite (deterministic cache key, INSERT OR IGNORE, error caching)
 - [x] **PR B5b** — LLM client fix for Ollama thinking models (qwen3, Fin-R1). Verified end-to-end
+- [x] **PR B5c** — Replay harness: CachedIndicatorAgent + `eval replay` subcommand for offline blended backtest
 
 #### PR B5b — LLM Client Fix for Ollama Thinking Models (2026-04-05)
 
@@ -675,6 +676,19 @@ Fixed LLM client compatibility with Ollama thinking models (qwen3:14b, Fin-R1:Q5
 - [x] `prompts/indicator_system.md` — Moved from `src/agents/indicator/prompt.txt`. `include_str!` path updated in `prompt_loader.rs`
 - [x] `config.example.toml` — `max_tokens = 4096`, `timeout_secs = 120`
 - [x] Verified end-to-end: qwen3:14b + Fin-R1:Q5, all 6 instruments `llm_ok=1, parse_ok=1`
+
+#### PR B5c — Replay Harness: CachedIndicatorAgent + eval replay (2026-04-05)
+
+Offline deterministic replay of cached LLM responses through the backtest engine. Compares blended (TSMOM + LLM indicator) vs TSMOM-only Sharpe without network calls.
+
+- [x] `src/agents/indicator/cached_agent.rs` (NEW) — `CachedIndicatorAgent` implements `SignalAgent`. Reconstructs cache keys identically to `LlmIndicatorAgent` (`model|prompt_hash|instrument|eval_date|ta_hash`). Looks up responses via `db.get_llm_cache()`. Cache miss → Flat with `llm_success=0.0`. Tracks hits/misses per instrument in `CoverageReport`. 8 tests
+- [x] `src/agents/indicator/mod.rs` — `pub mod cached_agent;`
+- [x] `src/db.rs` — `llm_cache_coverage(model, prompt_hash) -> HashMap<String, usize>` for pre-flight cache count per instrument. Uses existing `idx_llm_cache_model_prompt` index. 1 test
+- [x] `src/backtest/engine.rs` — `run_blended()` (feature-gated `track-b`): daily loop with TSMOM signals → indicator signals → `combine_signals()` + `build_combined_signal()` → risk limits → sizing. Separate method from battle-tested `run()`
+- [x] `src/main.rs` — `quantbot eval replay` subcommand with `--config`, `--model`, `--prompt-hash`, `--start`, `--end`, `--eval-start`, `--instruments`, `--json`. Runs blended replay + TSMOM-only baseline, prints side-by-side comparison (Sharpe, return, DD, trades) + coverage report
+- [x] `src/agents/tsmom/mod.rs` — Fixed `vol_scalar` missing on flat TSMOM signals: moved EWMA vol computation before `avg_sign==0` early return so `conflicting_signals` and `zero_volatility` flat signals still carry `vol_scalar`/`ann_vol` metadata for correct indicator weight scaling in combiner
+- [x] `src/config.rs` — Fixed pre-existing test: `parse_llm_config` expected `max_tokens=512` but default was changed to 4096
+- [x] All tests pass (284) with and without `track-b` feature, clean clippy
 - [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
 
 ### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED

@@ -484,6 +484,24 @@ Fixed LLM client to work with Ollama thinking models (qwen3, Fin-R1) that use a 
 
 ---
 
+**PR B5c — Replay Harness: CachedIndicatorAgent + eval replay (2026-04-05):**
+
+Offline deterministic replay of cached LLM indicator responses through the backtest engine. Enables Sharpe comparison of blended (TSMOM + LLM) vs TSMOM-only strategies without network calls or GPU time.
+
+| Component | Location | Notes |
+|---|---|---|
+| CachedIndicatorAgent | `src/agents/indicator/cached_agent.rs` (NEW) | `SignalAgent` impl. Reconstructs cache keys identically to `LlmIndicatorAgent`. Cache miss → Flat + `llm_success=0.0`. `CoverageReport` with hit/miss per instrument. 8 tests |
+| Coverage query | `src/db.rs` | `llm_cache_coverage(model, prompt_hash)` — pre-flight count of OK cache entries per instrument. 1 test |
+| Blended backtest | `src/backtest/engine.rs` | `run_blended()` — daily TSMOM → indicator → combiner → risk limits → sizing. Feature-gated `track-b`. Separate from `run()` |
+| CLI | `src/main.rs` | `quantbot eval replay --config --model --prompt-hash [--start --end --eval-start --instruments --json]`. Runs blended + TSMOM-only baseline, prints side-by-side comparison + coverage report |
+| vol_scalar fix | `src/agents/tsmom/mod.rs` | Moved EWMA vol computation before `avg_sign==0` early return. Flat TSMOM signals now carry `vol_scalar`/`ann_vol` metadata for correct indicator weight scaling |
+
+First end-to-end test showed 1.5% cache coverage (1 entry per instrument) → identical blended/TSMOM results (expected). Full comparison requires batch cache population across the eval window.
+
+**+905 lines (new file + modifications), 14 new tests, 284 total passing.**
+
+---
+
 ## References
 
 ### Foundational (2012–2023)
