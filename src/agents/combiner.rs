@@ -59,10 +59,7 @@ pub fn combine_signals(
 
     for (sym, tsmom_sig) in tsmom_signals {
         let tsmom_w = TSMOMAgent::compute_target_weight(tsmom_sig);
-        let vol_scalar = tsmom_sig.metadata.get("vol_scalar").copied().unwrap_or_else(|| {
-            eprintln!("  WARN: vol_scalar missing for {sym}, using 1.0");
-            1.0
-        });
+        let vol_scalar = tsmom_sig.metadata.get("vol_scalar").copied().unwrap_or(1.0);
 
         let cat = blend_category(sym);
         let blend_w = blend_config.weights_for(cat);
