@@ -68,17 +68,17 @@ prompt_path = "prompts/indicator_system.md"  # External prompt file (optional, f
 # Signal blending (track-b feature).
 # Combines TSMOM + indicator signals per asset class.
 # Omit [blending] or set enabled = false for TSMOM-only mode.
-# [blending]
-# enabled = false
-#
-# [blending.weights.gold]
-# tsmom = 0.50
-# indicator = 0.50
-#
-# [blending.weights.equity]
-# tsmom = 1.00
-# indicator = 0.00
-#
-# [blending.weights.forex]
-# tsmom = 0.10
-# indicator = 0.90
+[blending]
+enabled = true 
+
+[blending.weights.gold]
+tsmom = 0.50
+indicator = 0.50
+
+[blending.weights.equity]
+tsmom = 1.00
+indicator = 0.00
+
+[blending.weights.forex]
+tsmom = 0.10
+indicator = 0.90
