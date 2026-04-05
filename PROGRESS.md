@@ -699,6 +699,36 @@ Populates the `llm_cache` SQLite table for all (instrument, date) pairs in an ev
 - [x] `src/db.rs` — `Db::delete_llm_cache(cache_key)` for retrying failed entries (INSERT OR IGNORE prevents re-insert without delete). 2 tests
 - [x] `src/main.rs` — `quantbot cache fill` subcommand (feature-gated `track-b`). `CacheArgs`/`CacheCommand::Fill`/`CacheFillArgs` structs. CLI flags: `--config`, `--start`, `--end`, `--instruments`, `--tradeable-only`, `--max-failures`, `--require-success`, `--progress`, `--data-dir`, `--min-history`
 - [x] `run_cache_fill()` async fn: 4-phase pipeline (setup → build work list → execute LLM calls → summary). Loads full bar history per instrument, slices `[0..=i]` per date for identical TA/cache_key as `LlmIndicatorAgent`. Skips successful entries, deletes+retries failed ones. Consecutive-failure abort. Per-instrument coverage report
+- [x] Verified: 3/3 SPY calls OK (2024-12-18 to 2024-12-20), latency 3-9s, idempotent skip on re-run
+
+**Next steps — cache fill → eval replay validation:**
+
+1. **Fill cache for replay window** (2024-12-18 → 2025-03-31, all 6 tradeable instruments):
+   ```bash
+   cargo run --features track-b -- cache fill \
+     --config config.example.toml \
+     --start 2024-12-18 --end 2025-03-31 \
+     --tradeable-only --progress
+   ```
+   Incremental month-by-month recommended for runtime estimation:
+   - Dec 2024: `--start 2024-12-18 --end 2024-12-31`
+   - Jan 2025: `--start 2025-01-01 --end 2025-01-31`
+   - Feb 2025: `--start 2025-02-01 --end 2025-02-28`
+   - Mar 2025: `--start 2025-03-01 --end 2025-03-31`
+
+2. **Re-run eval replay** with near-100% cache coverage — expect blended ≠ TSMOM baseline:
+   ```bash
+   cargo run --features track-b -- eval replay \
+     --config config.example.toml \
+     --model "mychen76/Fin-R1:Q5" \
+     --prompt-hash "8430ffc768a841ee" \
+     --start 2024-12-18 --end 2025-03-31 \
+     --eval-start 2024-12-18
+   ```
+
+3. **Model/prompt A/B testing** — once replay shows non-trivial deltas:
+   - Fin-R1 prompt A vs prompt B (holding model constant)
+   - Fin-R1 vs qwen3 (holding prompt constant)
 
 ### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED
 
