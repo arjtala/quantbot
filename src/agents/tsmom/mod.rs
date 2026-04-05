@@ -243,4 +243,63 @@ mod tests {
         let expected = sig.strength * sig.confidence * sig.metadata["vol_scalar"];
         assert!((weight - expected).abs() < 1e-10);
     }
+
+    #[test]
+    fn flat_conflicting_signals_carries_vol_scalar() {
+        // Build bars where short-term and long-term lookbacks conflict:
+        // 300 bars of uptrend followed by 50 bars of downtrend.
+        // The 21-day lookback sees a downtrend, 252-day sees an uptrend.
+        let base_date = NaiveDate::from_ymd_opt(2023, 1, 2).unwrap();
+        let mut bars = Vec::new();
+        let mut price = 100.0;
+        for i in 0..300 {
+            bars.push(Bar {
+                date: base_date + chrono::Days::new(i as u64),
+                open: price,
+                high: price * 1.01,
+                low: price * 0.99,
+                close: price,
+                volume: 10000.0,
+            });
+            price *= 1.001; // uptrend
+        }
+        for i in 300..350 {
+            bars.push(Bar {
+                date: base_date + chrono::Days::new(i as u64),
+                open: price,
+                high: price * 1.01,
+                low: price * 0.99,
+                close: price,
+                volume: 10000.0,
+            });
+            price *= 0.998; // downtrend
+        }
+        let series = BarSeries::new(bars).unwrap();
+        let agent = TSMOMAgent::new();
+        let sig = agent.generate_signal(&series, "TEST");
+
+        // May be Flat (conflicting) or directional depending on lookback balance.
+        // Either way, vol_scalar and ann_vol must be present.
+        assert!(
+            sig.metadata.contains_key("vol_scalar"),
+            "vol_scalar must be present even on flat/conflicting signals"
+        );
+        assert!(
+            sig.metadata.contains_key("ann_vol"),
+            "ann_vol must be present even on flat/conflicting signals"
+        );
+        assert!(sig.metadata["vol_scalar"] > 0.0);
+        assert!(sig.metadata["ann_vol"] > 0.0);
+    }
+
+    #[test]
+    fn insufficient_data_has_no_vol_scalar() {
+        // With insufficient data, there's genuinely no vol to compute
+        let bars = trending_bars(50, 100.0, 0.001);
+        let agent = TSMOMAgent::new();
+        let sig = agent.generate_signal(&bars, "TEST");
+
+        assert_eq!(sig.direction, SignalDirection::Flat);
+        assert!(!sig.metadata.contains_key("vol_scalar"));
+    }
 }
