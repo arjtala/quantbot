@@ -399,7 +399,7 @@ Replayed 252-day Fin-R1 results with revised instrument-type weights and focused
 ---
 
 ## Phase 3: Rust Rewrite + IG Trading Execution
-> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B5c)** | 284 tests, clean clippy
+> **Status: In progress — Track A complete (8 PRs), Track B in progress (PRs B1-B5d)** | 286 tests, clean clippy
 
 ### Strategy: Parallel Tracks (Updated After Round 4 — Combiner Simulation)
 
@@ -667,6 +667,7 @@ Every LLM indicator call cached to SQLite for deterministic replay. Cache key = 
 - [x] **PR B5a** — LLM cache write-through to SQLite (deterministic cache key, INSERT OR IGNORE, error caching)
 - [x] **PR B5b** — LLM client fix for Ollama thinking models (qwen3, Fin-R1). Verified end-to-end
 - [x] **PR B5c** — Replay harness: CachedIndicatorAgent + `eval replay` subcommand for offline blended backtest
+- [x] **PR B5d** — Batch cache-fill subcommand (`quantbot cache fill`) for populating LLM cache across date ranges
 
 #### PR B5b — LLM Client Fix for Ollama Thinking Models (2026-04-05)
 
@@ -690,6 +691,14 @@ Offline deterministic replay of cached LLM responses through the backtest engine
 - [x] `src/config.rs` — Fixed pre-existing test: `parse_llm_config` expected `max_tokens=512` but default was changed to 4096
 - [x] All tests pass (284) with and without `track-b` feature, clean clippy
 - [ ] `src/graph/runner.rs` — `tokio::join!` fan-out/fan-in (TSMOM + indicator)
+
+#### PR B5d — Batch Cache-Fill Subcommand (2026-04-05)
+
+Populates the `llm_cache` SQLite table for all (instrument, date) pairs in an eval window so that `eval replay` produces meaningful blended vs TSMOM-only results. Idempotent — safe to interrupt and resume.
+
+- [x] `src/db.rs` — `Db::delete_llm_cache(cache_key)` for retrying failed entries (INSERT OR IGNORE prevents re-insert without delete). 2 tests
+- [x] `src/main.rs` — `quantbot cache fill` subcommand (feature-gated `track-b`). `CacheArgs`/`CacheCommand::Fill`/`CacheFillArgs` structs. CLI flags: `--config`, `--start`, `--end`, `--instruments`, `--tradeable-only`, `--max-failures`, `--require-success`, `--progress`, `--data-dir`, `--min-history`
+- [x] `run_cache_fill()` async fn: 4-phase pipeline (setup → build work list → execute LLM calls → summary). Loads full bar history per instrument, slices `[0..=i]` per date for identical TA/cache_key as `LlmIndicatorAgent`. Skips successful entries, deletes+retries failed ones. Consecutive-failure abort. Per-instrument coverage report
 
 ### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED
 
