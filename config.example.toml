@@ -5,7 +5,7 @@ engine = "ig"
 # Omit [risk] section to disable risk checks entirely.
 [risk]
 max_gross_leverage = 2.5     # sum(|notional|) / NAV
-max_position_pct = 0.25      # max single-instrument |notional| / NAV
+max_position_pct = 0.40      # max single-instrument |notional| / NAV
 max_drawdown_pct = 0.15      # max drawdown from peak NAV (15%)
 
 [execution.ig]
@@ -58,7 +58,7 @@ ig_point_value = 100.0
 # Omit [llm] section to use the default RSI-only indicator.
 [llm]
 base_url = "http://localhost:11434"   # Ollama/SGLang endpoint
-model = "qwen3:14b"                   # Model name
+model = "mychen76/Fin-R1:Q5"                   # Model name
 temperature = 0.3                      # Sampling temperature
 max_tokens = 4096                      # Max response tokens (thinking models need headroom for CoT)
 timeout_secs = 120                     # Request timeout (thinking models are slow)
