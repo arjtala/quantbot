@@ -137,6 +137,9 @@ pub fn build_combined_signal(
     if let Some(vs) = tsmom_sig.metadata.get("vol_scalar") {
         metadata.insert("vol_scalar".into(), *vs);
     }
+    if let Some(av) = tsmom_sig.metadata.get("ann_vol") {
+        metadata.insert("ann_vol".into(), *av);
+    }
     if let Some(lat) = result.latency_ms {
         metadata.insert("latency_ms".into(), lat);
     }
