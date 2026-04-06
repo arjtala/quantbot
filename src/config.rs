@@ -57,6 +57,7 @@ fn default_min_confidence() -> f64 {
 pub struct BlendConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
     pub weights: HashMap<BlendCategory, BlendWeights>,
     #[serde(default)]
     pub gating: Option<GatingConfig>,
