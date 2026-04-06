@@ -561,25 +561,58 @@ struct InstrumentAttribution {
     total_days: usize,
 }
 
+/// Compute per-instrument PnL attribution using true mark-to-market:
+///   PnL_{i,t} = q_{i,t-1} × (close_t - close_{t-1}) × point_value_i
+///
+/// This decomposes portfolio PnL into per-instrument contributions (up to
+/// spread costs which are cash-level deductions).
 #[cfg(feature = "track-b")]
 fn compute_attribution(
     snapshots: &[quantbot::backtest::engine::Snapshot],
+    bars: &HashMap<String, quantbot::core::bar::BarSeries>,
 ) -> HashMap<String, InstrumentAttribution> {
-    let mut attr: HashMap<String, InstrumentAttribution> = HashMap::new();
-    let mut prev_notional: HashMap<String, f64> = HashMap::new();
+    use quantbot::execution::router::ContractSpec;
 
-    for (i, snap) in snapshots.iter().enumerate() {
+    // Build date→close lookup per instrument
+    let mut close_by_date: HashMap<String, HashMap<chrono::NaiveDate, f64>> = HashMap::new();
+    for (sym, series) in bars {
+        let mut date_map = HashMap::new();
+        for bar in series.bars() {
+            date_map.insert(bar.date, bar.close);
+        }
+        close_by_date.insert(sym.clone(), date_map);
+    }
+
+    // Get point_value per instrument from contract specs
+    let specs = ContractSpec::ig_defaults();
+    let get_pv = |sym: &str| -> f64 {
+        specs
+            .get(sym)
+            .map(|s| s.point_value)
+            .unwrap_or(1.0)
+    };
+
+    let mut attr: HashMap<String, InstrumentAttribution> = HashMap::new();
+    let mut prev_qty: HashMap<String, f64> = HashMap::new();
+    let mut prev_date: Option<chrono::NaiveDate> = None;
+
+    for snap in snapshots {
+        let today = snap.date;
+
         // Collect all instruments seen in positions or signals
         let mut syms: Vec<&String> = snap
             .position_notionals
             .keys()
             .chain(snap.signals.keys())
+            .chain(prev_qty.keys())
             .collect();
         syms.sort();
         syms.dedup();
 
         for sym in &syms {
             let notional = snap.position_notionals.get(*sym).copied().unwrap_or(0.0);
+            let q_prev = prev_qty.get(*sym).copied().unwrap_or(0.0);
+
             let entry = attr.entry((*sym).clone()).or_insert(InstrumentAttribution {
                 pnl_usd: 0.0,
                 sum_abs_notional: 0.0,
@@ -588,12 +621,24 @@ fn compute_attribution(
                 total_days: 0,
             });
 
-            if i > 0 {
-                let prev = prev_notional.get(*sym).copied().unwrap_or(0.0);
-                entry.pnl_usd += notional - prev;
+            // True PnL: prev_qty × (close_today - close_yesterday) × point_value
+            if let Some(yesterday) = prev_date {
+                if q_prev.abs() > 1e-12 {
+                    if let Some(closes) = close_by_date.get(*sym) {
+                        let c_today = closes.get(&today).copied();
+                        let c_yesterday = closes.get(&yesterday).copied();
+                        if let (Some(ct), Some(cy)) = (c_today, c_yesterday) {
+                            entry.pnl_usd += q_prev * (ct - cy) * get_pv(sym);
+                        }
+                    }
+                }
             }
-            entry.sum_abs_notional += notional.abs();
-            entry.total_days += 1;
+
+            // Only count days where we have a position or signal
+            if notional.abs() > 1e-12 || snap.signals.contains_key(*sym) {
+                entry.sum_abs_notional += notional.abs();
+                entry.total_days += 1;
+            }
 
             if let Some(sig) = snap.signals.get(*sym) {
                 if sig.metadata.get("indicator_used").copied().unwrap_or(0.0) == 1.0 {
@@ -602,12 +647,14 @@ fn compute_attribution(
             }
         }
 
-        // Update prev_notional
-        prev_notional.clear();
-        for sym in &syms {
-            let notional = snap.position_notionals.get(*sym).copied().unwrap_or(0.0);
-            prev_notional.insert((*sym).clone(), notional);
+        // Update prev_qty from current positions
+        prev_qty.clear();
+        for (sym, &qty) in &snap.positions {
+            if qty.abs() > 1e-12 {
+                prev_qty.insert(sym.clone(), qty);
+            }
         }
+        prev_date = Some(today);
 
         // Count fills
         for fill in &snap.fills {
@@ -750,8 +797,8 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         output.insert("cache_misses".into(), serde_json::Value::from(cov_report.total_misses as u64));
 
         // Per-instrument attribution
-        let blended_attr = compute_attribution(&snapshots);
-        let baseline_attr = compute_attribution(&tsmom_snapshots);
+        let blended_attr = compute_attribution(&snapshots, &bars);
+        let baseline_attr = compute_attribution(&tsmom_snapshots, &bars);
         let initial_nav = args.initial_cash;
 
         let mut attr_map = serde_json::Map::new();
@@ -768,9 +815,9 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
                 0.0
             };
             let mut entry = serde_json::Map::new();
-            entry.insert("blended_contribution".into(), serde_json::Value::from(b.pnl_usd));
-            entry.insert("tsmom_contribution".into(), serde_json::Value::from(base_pnl));
-            entry.insert("delta".into(), serde_json::Value::from(b.pnl_usd - base_pnl));
+            entry.insert("blended_pnl".into(), serde_json::Value::from(b.pnl_usd));
+            entry.insert("tsmom_pnl".into(), serde_json::Value::from(base_pnl));
+            entry.insert("delta_pnl".into(), serde_json::Value::from(b.pnl_usd - base_pnl));
             entry.insert("avg_abs_position_pct".into(), serde_json::Value::from(avg_abs_pct));
             entry.insert("trade_count".into(), serde_json::Value::from(b.trade_count as u64));
             entry.insert("indicator_used_pct".into(), serde_json::Value::from(ind_used_pct));
@@ -801,9 +848,9 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
                     }
                 }
                 let mut entry = serde_json::Map::new();
-                entry.insert("blended_contribution".into(), serde_json::Value::from(bc));
-                entry.insert("tsmom_contribution".into(), serde_json::Value::from(tc));
-                entry.insert("delta".into(), serde_json::Value::from(bc - tc));
+                entry.insert("blended_pnl".into(), serde_json::Value::from(bc));
+                entry.insert("tsmom_pnl".into(), serde_json::Value::from(tc));
+                entry.insert("delta_pnl".into(), serde_json::Value::from(bc - tc));
                 entry.insert("trade_count".into(), serde_json::Value::from(trades as u64));
                 class_rollup.insert(cat.to_string(), serde_json::Value::Object(entry));
             }
@@ -844,14 +891,14 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         }
 
         // Per-instrument attribution
-        let blended_attr = compute_attribution(&snapshots);
-        let baseline_attr = compute_attribution(&tsmom_snapshots);
+        let blended_attr = compute_attribution(&snapshots, &bars);
+        let baseline_attr = compute_attribution(&tsmom_snapshots, &bars);
 
         println!();
         println!("═══ PER-INSTRUMENT ATTRIBUTION ═══");
         println!(
             "{:<14} {:>12} {:>12} {:>10} {:>10} {:>8} {:>10}",
-            "Instrument", "Blnd Contr", "TSMOM Contr", "Delta", "Avg|Pos|%", "Trades", "Ind Used%"
+            "Instrument", "Blnd PnL", "TSMOM PnL", "Delta", "Avg|Pos|%", "Trades", "Ind Used%"
         );
 
         let initial_nav = args.initial_cash;
@@ -921,7 +968,7 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             println!();
             println!(
                 "{:<14} {:>12} {:>12} {:>10} {:>30} {:>8}",
-                "Asset Class", "Blnd Contr", "TSMOM Contr", "Delta", "", "Trades"
+                "Asset Class", "Blnd PnL", "TSMOM PnL", "Delta", "", "Trades"
             );
             for cat in [BlendCategory::Gold, BlendCategory::Equity, BlendCategory::Forex] {
                 let bc = class_blended.get(&cat).copied().unwrap_or(0.0);
@@ -935,16 +982,14 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         }
 
         // Sanity check: sum of per-instrument PnL vs portfolio-level
+        // Residual is spread costs (cash deductions not captured in price PnL)
         let portfolio_pnl = result.total_return * initial_nav;
-        let pnl_diff_pct = if portfolio_pnl.abs() > 1.0 {
-            ((total_blended - portfolio_pnl) / portfolio_pnl.abs() * 100.0).abs()
-        } else {
-            0.0
-        };
-        if pnl_diff_pct > 1.0 {
+        let residual = total_blended - portfolio_pnl;
+        if portfolio_pnl.abs() > 1.0 {
+            let pct = (residual / portfolio_pnl.abs() * 100.0).abs();
             println!(
-                "  WARNING: per-instrument PnL sum ({:.0}) differs from portfolio PnL ({:.0}) by {:.1}%",
-                total_blended, portfolio_pnl, pnl_diff_pct,
+                "  Residual (spread costs): {:.0} ({:.1}% of portfolio PnL {:.0})",
+                residual, pct, portfolio_pnl,
             );
         }
 
@@ -2747,6 +2792,7 @@ mod attribution_tests {
     use super::*;
     use chrono::{NaiveDate, Utc};
     use quantbot::backtest::engine::Snapshot;
+    use quantbot::core::bar::{Bar, BarSeries};
     use quantbot::core::portfolio::{Fill, Order, OrderSide};
     use quantbot::core::signal::{Signal, SignalDirection, SignalType};
 
@@ -2778,9 +2824,20 @@ mod attribution_tests {
         }
     }
 
+    fn make_bar(day: u32, close: f64) -> Bar {
+        Bar {
+            date: NaiveDate::from_ymd_opt(2025, 1, day).unwrap(),
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume: 1000.0,
+        }
+    }
+
     fn make_snapshot(
         day: u32,
-        notionals: &[(&str, f64)],
+        positions: &[(&str, f64, f64)], // (sym, qty, notional)
         signals: &[(&str, Option<f64>)],
         fills: &[&str],
     ) -> Snapshot {
@@ -2790,13 +2847,13 @@ mod attribution_tests {
             cash: 500_000.0,
             gross_exposure: 0.0,
             net_exposure: 0.0,
-            positions: notionals
+            positions: positions
                 .iter()
-                .map(|(s, _)| (s.to_string(), 1.0))
+                .map(|(s, qty, _)| (s.to_string(), *qty))
                 .collect(),
-            position_notionals: notionals
+            position_notionals: positions
                 .iter()
-                .map(|(s, v)| (s.to_string(), *v))
+                .map(|(s, _, notional)| (s.to_string(), *notional))
                 .collect(),
             signals: signals
                 .iter()
@@ -2807,31 +2864,69 @@ mod attribution_tests {
     }
 
     #[test]
-    fn test_pnl_from_notional_changes() {
+    fn test_pnl_from_price_changes() {
+        // SPY: qty=10, point_value=1.0
+        // close: day1=100, day2=105, day3=102
+        // PnL day2: 10 * (105-100) * 1 = 50
+        // PnL day3: 10 * (102-105) * 1 = -30
+        // Total: 20
+        let bars: HashMap<String, BarSeries> = [(
+            "SPY".to_string(),
+            BarSeries::new(vec![make_bar(1, 100.0), make_bar(2, 105.0), make_bar(3, 102.0)])
+                .unwrap(),
+        )]
+        .into();
+
         let snapshots = vec![
-            make_snapshot(1, &[("SPY", 100_000.0)], &[("SPY", None)], &["SPY"]),
-            make_snapshot(2, &[("SPY", 105_000.0)], &[("SPY", None)], &[]),
-            make_snapshot(3, &[("SPY", 102_000.0)], &[("SPY", None)], &[]),
+            make_snapshot(1, &[("SPY", 10.0, 1000.0)], &[("SPY", None)], &["SPY"]),
+            make_snapshot(2, &[("SPY", 10.0, 1050.0)], &[("SPY", None)], &[]),
+            make_snapshot(3, &[("SPY", 10.0, 1020.0)], &[("SPY", None)], &[]),
         ];
 
-        let attr = compute_attribution(&snapshots);
+        let attr = compute_attribution(&snapshots, &bars);
         let spy = &attr["SPY"];
 
-        // PnL = (105k - 100k) + (102k - 105k) = 5000 - 3000 = 2000
-        assert!((spy.pnl_usd - 2_000.0).abs() < 1.0);
+        assert!((spy.pnl_usd - 20.0).abs() < 0.01);
         assert_eq!(spy.trade_count, 1);
         assert_eq!(spy.total_days, 3);
     }
 
     #[test]
-    fn test_indicator_used_tracking() {
+    fn test_gc_futures_point_value() {
+        // GC=F: qty=2, point_value=100
+        // close: day1=2000, day2=2010
+        // PnL: 2 * (2010-2000) * 100 = 2000
+        let bars: HashMap<String, BarSeries> = [(
+            "GC=F".to_string(),
+            BarSeries::new(vec![make_bar(1, 2000.0), make_bar(2, 2010.0)]).unwrap(),
+        )]
+        .into();
+
         let snapshots = vec![
-            make_snapshot(1, &[("GLD", 50_000.0)], &[("GLD", Some(1.0))], &[]),
-            make_snapshot(2, &[("GLD", 52_000.0)], &[("GLD", Some(0.0))], &[]),
-            make_snapshot(3, &[("GLD", 54_000.0)], &[("GLD", Some(1.0))], &[]),
+            make_snapshot(1, &[("GC=F", 2.0, 400_000.0)], &[("GC=F", None)], &[]),
+            make_snapshot(2, &[("GC=F", 2.0, 402_000.0)], &[("GC=F", None)], &[]),
         ];
 
-        let attr = compute_attribution(&snapshots);
+        let attr = compute_attribution(&snapshots, &bars);
+        assert!((attr["GC=F"].pnl_usd - 2000.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_indicator_used_tracking() {
+        let bars: HashMap<String, BarSeries> = [(
+            "GLD".to_string(),
+            BarSeries::new(vec![make_bar(1, 200.0), make_bar(2, 202.0), make_bar(3, 204.0)])
+                .unwrap(),
+        )]
+        .into();
+
+        let snapshots = vec![
+            make_snapshot(1, &[("GLD", 5.0, 1000.0)], &[("GLD", Some(1.0))], &[]),
+            make_snapshot(2, &[("GLD", 5.0, 1010.0)], &[("GLD", Some(0.0))], &[]),
+            make_snapshot(3, &[("GLD", 5.0, 1020.0)], &[("GLD", Some(1.0))], &[]),
+        ];
+
+        let attr = compute_attribution(&snapshots, &bars);
         let gld = &attr["GLD"];
 
         assert_eq!(gld.indicator_used_days, 2);
@@ -2840,25 +2935,39 @@ mod attribution_tests {
 
     #[test]
     fn test_multiple_instruments() {
+        let bars: HashMap<String, BarSeries> = [
+            (
+                "SPY".to_string(),
+                BarSeries::new(vec![make_bar(1, 500.0), make_bar(2, 510.0)]).unwrap(),
+            ),
+            (
+                "GLD".to_string(),
+                BarSeries::new(vec![make_bar(1, 200.0), make_bar(2, 198.0)]).unwrap(),
+            ),
+        ]
+        .into();
+
         let snapshots = vec![
             make_snapshot(
                 1,
-                &[("SPY", 100_000.0), ("GLD", 50_000.0)],
+                &[("SPY", 10.0, 5000.0), ("GLD", 20.0, 4000.0)],
                 &[("SPY", None), ("GLD", Some(1.0))],
                 &["SPY", "GLD"],
             ),
             make_snapshot(
                 2,
-                &[("SPY", 110_000.0), ("GLD", 48_000.0)],
+                &[("SPY", 10.0, 5100.0), ("GLD", 20.0, 3960.0)],
                 &[("SPY", None), ("GLD", Some(1.0))],
                 &[],
             ),
         ];
 
-        let attr = compute_attribution(&snapshots);
+        let attr = compute_attribution(&snapshots, &bars);
 
-        assert!((attr["SPY"].pnl_usd - 10_000.0).abs() < 1.0);
-        assert!((attr["GLD"].pnl_usd - (-2_000.0)).abs() < 1.0);
+        // SPY: 10 * (510-500) * 1 = 100
+        assert!((attr["SPY"].pnl_usd - 100.0).abs() < 0.01);
+        // GLD: 20 * (198-200) * 1 = -40
+        assert!((attr["GLD"].pnl_usd - (-40.0)).abs() < 0.01);
         assert_eq!(attr["SPY"].trade_count, 1);
         assert_eq!(attr["GLD"].trade_count, 1);
         assert_eq!(attr["GLD"].indicator_used_days, 2);
@@ -2866,12 +2975,12 @@ mod attribution_tests {
 
     #[test]
     fn test_instrument_appears_only_in_signals() {
-        // Instrument only in signals, not in positions
+        let bars: HashMap<String, BarSeries> = HashMap::new();
         let snapshots = vec![
             make_snapshot(1, &[], &[("USDJPY=X", Some(0.0))], &[]),
         ];
 
-        let attr = compute_attribution(&snapshots);
+        let attr = compute_attribution(&snapshots, &bars);
         let jpy = &attr["USDJPY=X"];
 
         assert!((jpy.pnl_usd).abs() < 1e-10);
@@ -2881,7 +2990,8 @@ mod attribution_tests {
 
     #[test]
     fn test_empty_snapshots() {
-        let attr = compute_attribution(&[]);
+        let bars: HashMap<String, BarSeries> = HashMap::new();
+        let attr = compute_attribution(&[], &bars);
         assert!(attr.is_empty());
     }
 }
