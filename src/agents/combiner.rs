@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::agents::tsmom::TSMOMAgent;
-use crate::config::{BlendCategory, BlendConfig};
+use crate::config::{BlendCategory, BlendConfig, GatingConfig};
 use crate::core::signal::{Signal, SignalDirection, SignalType};
 
 /// Per-instrument combination result with full provenance.
@@ -33,7 +33,7 @@ pub fn blend_category(symbol: &str) -> BlendCategory {
 }
 
 /// Returns true if the indicator signal should be used for blending.
-fn should_use_indicator(sig: &Signal) -> bool {
+fn should_use_indicator(sig: &Signal, gating: Option<&GatingConfig>) -> bool {
     if sig.direction == SignalDirection::Flat {
         return false;
     }
@@ -42,6 +42,14 @@ fn should_use_indicator(sig: &Signal) -> bool {
     }
     if sig.metadata.get("llm_success").copied() == Some(0.0) {
         return false;
+    }
+    if let Some(g) = gating {
+        if sig.confidence < g.min_confidence {
+            return false;
+        }
+        if sig.strength.abs() < g.min_abs_strength {
+            return false;
+        }
     }
     true
 }
@@ -55,6 +63,7 @@ pub fn combine_signals(
     indicator_signals: &HashMap<String, Signal>,
     blend_config: &BlendConfig,
 ) -> Vec<CombinedResult> {
+    let gating = blend_config.gating.as_ref();
     let mut results = Vec::new();
 
     for (sym, tsmom_sig) in tsmom_signals {
@@ -66,7 +75,7 @@ pub fn combine_signals(
 
         let (combined_weight, indicator_w, indicator_used, latency_ms) =
             match indicator_signals.get(sym) {
-                Some(ind_sig) if should_use_indicator(ind_sig) => {
+                Some(ind_sig) if should_use_indicator(ind_sig, gating) => {
                     let ind_w = ind_sig.strength * ind_sig.confidence * vol_scalar;
                     let combined = blend_w.tsmom * tsmom_w + blend_w.indicator * ind_w;
                     let latency = ind_sig.metadata.get("latency_ms").copied();
@@ -224,6 +233,7 @@ mod tests {
         BlendConfig {
             enabled: true,
             weights,
+            gating: None,
         }
     }
 
@@ -363,6 +373,7 @@ mod tests {
         let config = BlendConfig {
             enabled: true,
             weights,
+            gating: None,
         };
 
         let mut tsmom = HashMap::new();
@@ -425,5 +436,65 @@ mod tests {
         assert_eq!(sig.signal_type, SignalType::Combined);
         assert!(sig.metadata.contains_key("tsmom_weight"));
         assert!(sig.metadata.contains_key("blend_tsmom"));
+    }
+
+    #[test]
+    fn gating_rejects_low_confidence() {
+        let mut config = gold_50_50_config();
+        config.gating = Some(GatingConfig {
+            min_confidence: 0.7,
+            min_abs_strength: 0.0,
+        });
+
+        let mut tsmom = HashMap::new();
+        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        let mut indicator = HashMap::new();
+        // confidence 0.5 < min_confidence 0.7 → gated out
+        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.5));
+
+        let results = combine_signals(&tsmom, &indicator, &config);
+        assert!(!results[0].indicator_used);
+        // Falls back to TSMOM-only: 0.8 * 1.0 * 2.0 = 1.6
+        assert!((results[0].combined_weight - 1.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn gating_rejects_low_strength() {
+        let mut config = gold_50_50_config();
+        config.gating = Some(GatingConfig {
+            min_confidence: 0.0,
+            min_abs_strength: 0.3,
+        });
+
+        let mut tsmom = HashMap::new();
+        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        let mut indicator = HashMap::new();
+        // |strength| = 0.1 < min_abs_strength 0.3 → gated out
+        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.1, 0.8));
+
+        let results = combine_signals(&tsmom, &indicator, &config);
+        assert!(!results[0].indicator_used);
+        assert!((results[0].combined_weight - 1.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn gating_allows_high_conviction() {
+        let mut config = gold_50_50_config();
+        config.gating = Some(GatingConfig {
+            min_confidence: 0.7,
+            min_abs_strength: 0.3,
+        });
+
+        let mut tsmom = HashMap::new();
+        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        let mut indicator = HashMap::new();
+        // confidence 0.8 >= 0.7, |strength| 0.5 >= 0.3 → passes gating
+        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.5, 0.8));
+
+        let results = combine_signals(&tsmom, &indicator, &config);
+        assert!(results[0].indicator_used);
+        // indicator_w = 0.5 * 0.8 * 2.0 = 0.8
+        // combined = 0.5 * 1.6 + 0.5 * 0.8 = 1.2
+        assert!((results[0].combined_weight - 1.2).abs() < 1e-10);
     }
 }

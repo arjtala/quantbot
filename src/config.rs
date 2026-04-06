@@ -40,10 +40,26 @@ pub struct BlendWeights {
 
 #[cfg(feature = "track-b")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GatingConfig {
+    #[serde(default = "default_min_confidence")]
+    pub min_confidence: f64,
+    #[serde(default)]
+    pub min_abs_strength: f64,
+}
+
+#[cfg(feature = "track-b")]
+fn default_min_confidence() -> f64 {
+    0.0
+}
+
+#[cfg(feature = "track-b")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlendConfig {
     #[serde(default)]
     pub enabled: bool,
     pub weights: HashMap<BlendCategory, BlendWeights>,
+    #[serde(default)]
+    pub gating: Option<GatingConfig>,
 }
 
 #[cfg(feature = "track-b")]
@@ -521,9 +537,36 @@ indicator = 0.50
         let blend = BlendConfig {
             enabled: true,
             weights: HashMap::new(),
+            gating: None,
         };
         let w = blend.weights_for(BlendCategory::Gold);
         assert_eq!(w.tsmom, 1.0);
         assert_eq!(w.indicator, 0.0);
+    }
+
+    #[test]
+    #[cfg(feature = "track-b")]
+    fn parse_gating_config() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[blending]
+enabled = true
+
+[blending.weights.gold]
+tsmom = 0.50
+indicator = 0.50
+
+[blending.gating]
+min_confidence = 0.70
+min_abs_strength = 0.30
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let blend = config.blending.unwrap();
+        assert!(blend.enabled);
+        let gating = blend.gating.unwrap();
+        assert_eq!(gating.min_confidence, 0.70);
+        assert_eq!(gating.min_abs_strength, 0.30);
     }
 }
