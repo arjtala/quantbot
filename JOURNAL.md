@@ -502,6 +502,22 @@ First end-to-end test showed 1.5% cache coverage (1 entry per instrument) → id
 
 ---
 
+**PR B6 — Confidence Gating for Indicator Signals (2026-04-06):**
+
+15-month eval replay showed the LLM indicator is PnL-neutral but adds 41 extra trades, creating spread cost drag that reduces Sharpe from 1.394 to 1.278. Confidence gating filters weak signals before blending.
+
+| Component | Location | Tests | Notes |
+|---|---|---|---|
+| GatingConfig | `src/config.rs` | 1 | `min_confidence` + `min_abs_strength`, serde defaults 0.0 (no gating). Optional on `BlendConfig` |
+| Gating logic | `src/agents/combiner.rs` | 3 | `should_use_indicator()` rejects below thresholds, `combine_signals()` threads from `blend_config.gating` |
+| Example config | `config.example.toml` | — | Commented `[blending.gating]` section (0.70/0.30 suggested) |
+
+Design: gating lives inside `BlendConfig` so `combine_signals()` signature is unchanged — zero call-site modifications needed. No hysteresis in v1 (stateless); simple thresholds address the diagnosed problem (low-conviction churn). Hysteresis can be added later if edge-of-boundary oscillation appears.
+
+**+123 lines, 4 new tests.**
+
+---
+
 ## References
 
 ### Foundational (2012–2023)

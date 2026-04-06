@@ -701,6 +701,15 @@ Populates the `llm_cache` SQLite table for all (instrument, date) pairs in an ev
 - [x] `run_cache_fill()` async fn: 4-phase pipeline (setup → build work list → execute LLM calls → summary). Loads full bar history per instrument, slices `[0..=i]` per date for identical TA/cache_key as `LlmIndicatorAgent`. Skips successful entries, deletes+retries failed ones. Consecutive-failure abort. Per-instrument coverage report
 - [x] Verified: 3/3 SPY calls OK (2024-12-18 to 2024-12-20), latency 3-9s, idempotent skip on re-run
 
+#### PR B6 — Confidence Gating for Indicator Signals (2026-04-06)
+
+15-month eval replay showed LLM indicator is PnL-neutral but adds 41 extra trades, creating spread cost drag (Sharpe 1.278 vs 1.394 TSMOM-only). Confidence gating filters out low-conviction indicator signals before blending, reducing turnover while preserving any high-conviction edge.
+
+- [x] `src/config.rs` — `GatingConfig` struct (`min_confidence`, `min_abs_strength`) with serde defaults (0.0 = no gating). Optional `gating: Option<GatingConfig>` field on `BlendConfig`. 1 parse test
+- [x] `src/agents/combiner.rs` — `should_use_indicator()` accepts `gating: Option<&GatingConfig>`, rejects signals below thresholds. `combine_signals()` threads gating from `blend_config.gating`. 3 tests (reject low confidence, reject low strength, allow high conviction)
+- [x] `config.example.toml` — Commented `[blending.gating]` section with suggested defaults (min_confidence=0.70, min_abs_strength=0.30)
+- [x] No call-site changes needed — gating carried inside `BlendConfig`, `combine_signals()` signature unchanged
+
 **Next steps — cache fill → eval replay validation:**
 
 1. **Fill cache for replay window** (2024-12-18 → 2025-03-31, all 6 tradeable instruments):

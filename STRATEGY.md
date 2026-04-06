@@ -115,6 +115,7 @@ Port the LLM indicator agent — calls Ollama locally, parses JSON signals. Star
 - Runs on Mac M4 via Ollama at ~45 tok/s
 - Clean JSON signals, good financial reasoning
 - Commit 68e4825 verified on local Ollama
+- **Confidence gating** (PR B6): 15-month replay showed indicator adds 41 extra trades with PnL-neutral signals → spread cost drag. `GatingConfig` (min_confidence, min_abs_strength) on `BlendConfig` filters out low-conviction signals before blending. No hysteresis in v1 — stateless thresholds address the diagnosed problem (low-conviction churn)
 
 ---
 
