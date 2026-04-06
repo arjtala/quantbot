@@ -518,6 +518,39 @@ Design: gating lives inside `BlendConfig` so `combine_signals()` signature is un
 
 ---
 
+**Ablation Study — Fin-R1 + Baseline Prompt, No Evidence of Alpha (2026-04-06):**
+
+Systematic ablation of LLM indicator blending over 15-month eval window (2024-01-01 → 2025-03-31, 98.7% cache coverage). Goal: determine whether Fin-R1 indicator adds net value after realistic IG spread costs.
+
+| Config | Sharpe | Δ vs TSMOM | Extra Trades | Spread Residual |
+|---|---|---|---|---|
+| TSMOM-only (baseline) | 1.394 | — | — | — |
+| Ungated (all indicator) | 1.278 | -0.116 | +41 | — |
+| Gated 0.70/0.30 | 1.314 | -0.080 | +34 | 36,013 (19.3%) |
+| Forex off, gold 50/50 | 1.365 | -0.029 | +23 | 14,657 (7.5%) |
+
+Per-instrument attribution (forex-off ablation):
+
+| Instrument | Blnd PnL | TSMOM PnL | Delta | Ind Used% |
+|---|---|---|---|---|
+| GC=F | 126,930 | 130,690 | -3,760 | 13% |
+| GLD | 99,565 | 99,823 | -258 | 13% |
+| SPY | 77,449 | 76,669 | +780 | 9% |
+| GBPUSD=X | -32,908 | -31,547 | -1,361 | 5% |
+| USDCHF=X | -43,257 | -42,942 | -315 | 6% |
+| USDJPY=X | -17,447 | -18,312 | +866 | 8% |
+
+Key findings:
+- Ablation ladder is monotonic: removing indicator exposure strictly improves Sharpe
+- FX indicator (90% weight) was the primary drag source — USDJPY consistently destructive even at low usage
+- Gold indicator (50/50) is PnL-neutral at best, GC=F slightly harmful due to low trade count amplifying wrong calls
+- Indicator fires on 5-13% of days with signals that are directionally coin-flip quality
+- Confidence gating (0.70/0.30) reduced but could not eliminate the drag
+
+Conclusion: Fin-R1 + baseline prompt `8430ffc768a841ee` does not add alpha under realistic costs. Production default set to TSMOM-only (`blending.enabled = false`). Research pipeline preserved for prompt/model A/B testing.
+
+---
+
 ## References
 
 ### Foundational (2012–2023)

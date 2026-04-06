@@ -710,34 +710,33 @@ Populates the `llm_cache` SQLite table for all (instrument, date) pairs in an ev
 - [x] `config.example.toml` — Commented `[blending.gating]` section with suggested defaults (min_confidence=0.70, min_abs_strength=0.30)
 - [x] No call-site changes needed — gating carried inside `BlendConfig`, `combine_signals()` signature unchanged
 
-**Next steps — cache fill → eval replay validation:**
+#### Ablation Results — Fin-R1 + Baseline Prompt (2026-04-06)
 
-1. **Fill cache for replay window** (2024-12-18 → 2025-03-31, all 6 tradeable instruments):
-   ```bash
-   cargo run --features track-b -- cache fill \
-     --config config.example.toml \
-     --start 2024-12-18 --end 2025-03-31 \
-     --tradeable-only --progress
-   ```
-   Incremental month-by-month recommended for runtime estimation:
-   - Dec 2024: `--start 2024-12-18 --end 2024-12-31`
-   - Jan 2025: `--start 2025-01-01 --end 2025-01-31`
-   - Feb 2025: `--start 2025-02-01 --end 2025-02-28`
-   - Mar 2025: `--start 2025-03-01 --end 2025-03-31`
+15-month eval replay (2024-01-01 → 2025-03-31, 98.7% cache coverage) with systematic ablation of blending configurations. Conclusion: **no evidence of alpha** from Fin-R1 indicator under realistic IG spread costs.
 
-2. **Re-run eval replay** with near-100% cache coverage — expect blended ≠ TSMOM baseline:
-   ```bash
-   cargo run --features track-b -- eval replay \
-     --config config.example.toml \
-     --model "mychen76/Fin-R1:Q5" \
-     --prompt-hash "8430ffc768a841ee" \
-     --start 2024-12-18 --end 2025-03-31 \
-     --eval-start 2024-12-18
-   ```
+| Config | Sharpe | Δ vs TSMOM | Extra Trades | Spread Residual |
+|---|---|---|---|---|
+| TSMOM-only (baseline) | 1.394 | — | — | — |
+| Ungated (all indicator) | 1.278 | -0.116 | +41 | — |
+| Gated 0.70/0.30 | 1.314 | -0.080 | +34 | 36,013 (19.3%) |
+| Forex off, gold 50/50 | 1.365 | -0.029 | +23 | 14,657 (7.5%) |
 
-3. **Model/prompt A/B testing** — once replay shows non-trivial deltas:
-   - Fin-R1 prompt A vs prompt B (holding model constant)
-   - Fin-R1 vs qwen3 (holding prompt constant)
+Per-instrument attribution (forex-off run):
+- GC=F: -3,760 (gold indicator hurts on low-trade instrument)
+- GLD: -258 (neutral)
+- SPY: +780 (noise — equity indicator weight is 0%)
+- FX: -810 total (near-neutral with indicator disabled)
+
+**Production default: TSMOM-only** (`blending.enabled = false`). LLM indicator pipeline preserved as experimental feature behind config for prompt/model A/B testing.
+
+**Next steps — prompt/model A/B testing:**
+
+1. **Prompt A/B** (holding model constant):
+   - Baseline prompt `8430ffc768a841ee` vs directional prompt `634b…`
+   - Cache fill + replay for each prompt variant
+2. **Model A/B** (holding prompt constant):
+   - Fin-R1 vs qwen3 (qwen may be more conservative → fewer spurious signals)
+   - Gold-only first to minimize compute, expand if positive signal found
 
 ### Track C — Additional Agents & Signals (Weeks 5-8) — DEFERRED
 

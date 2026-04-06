@@ -68,23 +68,29 @@ prompt_path = "prompts/indicator_system.md"  # External prompt file (optional, f
 # Signal blending (track-b feature).
 # Combines TSMOM + indicator signals per asset class.
 # Omit [blending] or set enabled = false for TSMOM-only mode.
+#
+# Production default: TSMOM-only. Fin-R1 + baseline prompt showed no evidence
+# of alpha after IG spread costs over 2024-01-01 → 2025-03-31 (15-month eval).
+# See PROGRESS.md ablation ladder for details. Keep enabled = false until a
+# prompt/model A/B test demonstrates net-positive blended Sharpe.
 [blending]
-enabled = true 
+enabled = false
 
-[blending.weights.gold]
-tsmom = 0.50
-indicator = 0.50
-
-[blending.weights.equity]
-tsmom = 1.00
-indicator = 0.00
-
-[blending.weights.forex]
-tsmom = 0.10
-indicator = 0.90
+# Research weights — uncomment and set enabled = true to experiment.
+# [blending.weights.gold]
+# tsmom = 0.50
+# indicator = 0.50
+#
+# [blending.weights.equity]
+# tsmom = 1.00
+# indicator = 0.00
+#
+# [blending.weights.forex]
+# tsmom = 0.10
+# indicator = 0.90
 
 # Confidence gating — reject low-conviction indicator signals before blending.
 # Omit [blending.gating] to use all indicator signals (no gating).
-[blending.gating]
-min_confidence = 0.70       # Minimum indicator confidence (0.0 = no gate)
-min_abs_strength = 0.30     # Minimum |strength| (0.0 = no gate)
+# [blending.gating]
+# min_confidence = 0.70       # Minimum indicator confidence (0.0 = no gate)
+# min_abs_strength = 0.30     # Minimum |strength| (0.0 = no gate)
