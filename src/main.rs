@@ -553,6 +553,80 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
 }
 
 #[cfg(feature = "track-b")]
+struct InstrumentAttribution {
+    pnl_usd: f64,
+    sum_abs_notional: f64,
+    trade_count: usize,
+    indicator_used_days: usize,
+    total_days: usize,
+}
+
+#[cfg(feature = "track-b")]
+fn compute_attribution(
+    snapshots: &[quantbot::backtest::engine::Snapshot],
+) -> HashMap<String, InstrumentAttribution> {
+    let mut attr: HashMap<String, InstrumentAttribution> = HashMap::new();
+    let mut prev_notional: HashMap<String, f64> = HashMap::new();
+
+    for (i, snap) in snapshots.iter().enumerate() {
+        // Collect all instruments seen in positions or signals
+        let mut syms: Vec<&String> = snap
+            .position_notionals
+            .keys()
+            .chain(snap.signals.keys())
+            .collect();
+        syms.sort();
+        syms.dedup();
+
+        for sym in &syms {
+            let notional = snap.position_notionals.get(*sym).copied().unwrap_or(0.0);
+            let entry = attr.entry((*sym).clone()).or_insert(InstrumentAttribution {
+                pnl_usd: 0.0,
+                sum_abs_notional: 0.0,
+                trade_count: 0,
+                indicator_used_days: 0,
+                total_days: 0,
+            });
+
+            if i > 0 {
+                let prev = prev_notional.get(*sym).copied().unwrap_or(0.0);
+                entry.pnl_usd += notional - prev;
+            }
+            entry.sum_abs_notional += notional.abs();
+            entry.total_days += 1;
+
+            if let Some(sig) = snap.signals.get(*sym) {
+                if sig.metadata.get("indicator_used").copied().unwrap_or(0.0) == 1.0 {
+                    entry.indicator_used_days += 1;
+                }
+            }
+        }
+
+        // Update prev_notional
+        prev_notional.clear();
+        for sym in &syms {
+            let notional = snap.position_notionals.get(*sym).copied().unwrap_or(0.0);
+            prev_notional.insert((*sym).clone(), notional);
+        }
+
+        // Count fills
+        for fill in &snap.fills {
+            let entry =
+                attr.entry(fill.order.instrument.clone())
+                    .or_insert(InstrumentAttribution {
+                        pnl_usd: 0.0,
+                        sum_abs_notional: 0.0,
+                        trade_count: 0,
+                        indicator_used_days: 0,
+                        total_days: 0,
+                    });
+            entry.trade_count += 1;
+        }
+    }
+    attr
+}
+
+#[cfg(feature = "track-b")]
 fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
     use std::sync::{Arc, Mutex};
 
@@ -674,6 +748,68 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         output.insert("cache_hit_rate".into(), serde_json::Value::from(cov_report.hit_rate()));
         output.insert("cache_hits".into(), serde_json::Value::from(cov_report.total_hits as u64));
         output.insert("cache_misses".into(), serde_json::Value::from(cov_report.total_misses as u64));
+
+        // Per-instrument attribution
+        let blended_attr = compute_attribution(&snapshots);
+        let baseline_attr = compute_attribution(&tsmom_snapshots);
+        let initial_nav = args.initial_cash;
+
+        let mut attr_map = serde_json::Map::new();
+        for (sym, b) in &blended_attr {
+            let base_pnl = baseline_attr.get(sym).map_or(0.0, |x| x.pnl_usd);
+            let avg_abs_pct = if b.total_days > 0 {
+                (b.sum_abs_notional / b.total_days as f64) / initial_nav * 100.0
+            } else {
+                0.0
+            };
+            let ind_used_pct = if b.total_days > 0 {
+                100.0 * b.indicator_used_days as f64 / b.total_days as f64
+            } else {
+                0.0
+            };
+            let mut entry = serde_json::Map::new();
+            entry.insert("blended_contribution".into(), serde_json::Value::from(b.pnl_usd));
+            entry.insert("tsmom_contribution".into(), serde_json::Value::from(base_pnl));
+            entry.insert("delta".into(), serde_json::Value::from(b.pnl_usd - base_pnl));
+            entry.insert("avg_abs_position_pct".into(), serde_json::Value::from(avg_abs_pct));
+            entry.insert("trade_count".into(), serde_json::Value::from(b.trade_count as u64));
+            entry.insert("indicator_used_pct".into(), serde_json::Value::from(ind_used_pct));
+            entry.insert("total_days".into(), serde_json::Value::from(b.total_days as u64));
+            attr_map.insert(sym.clone(), serde_json::Value::Object(entry));
+        }
+        output.insert("attribution".into(), serde_json::Value::Object(attr_map));
+
+        // Asset-class rollup in JSON
+        {
+            use quantbot::agents::combiner::blend_category;
+            use quantbot::config::BlendCategory;
+
+            let mut class_rollup = serde_json::Map::new();
+            for cat in [BlendCategory::Gold, BlendCategory::Equity, BlendCategory::Forex] {
+                let mut bc = 0.0_f64;
+                let mut tc = 0.0_f64;
+                let mut trades = 0usize;
+                for (sym, b) in &blended_attr {
+                    if blend_category(sym) == cat {
+                        bc += b.pnl_usd;
+                        trades += b.trade_count;
+                    }
+                }
+                for (sym, b) in &baseline_attr {
+                    if blend_category(sym) == cat {
+                        tc += b.pnl_usd;
+                    }
+                }
+                let mut entry = serde_json::Map::new();
+                entry.insert("blended_contribution".into(), serde_json::Value::from(bc));
+                entry.insert("tsmom_contribution".into(), serde_json::Value::from(tc));
+                entry.insert("delta".into(), serde_json::Value::from(bc - tc));
+                entry.insert("trade_count".into(), serde_json::Value::from(trades as u64));
+                class_rollup.insert(cat.to_string(), serde_json::Value::Object(entry));
+            }
+            output.insert("attribution_by_class".into(), serde_json::Value::Object(class_rollup));
+        }
+
         let json = serde_json::to_string_pretty(&output).context("failed to serialize")?;
         println!("{json}");
     } else {
@@ -704,6 +840,111 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             println!(
                 "  Trades:  blended {} vs TSMOM {}",
                 result.total_trades, tr.total_trades,
+            );
+        }
+
+        // Per-instrument attribution
+        let blended_attr = compute_attribution(&snapshots);
+        let baseline_attr = compute_attribution(&tsmom_snapshots);
+
+        println!();
+        println!("═══ PER-INSTRUMENT ATTRIBUTION ═══");
+        println!(
+            "{:<14} {:>12} {:>12} {:>10} {:>10} {:>8} {:>10}",
+            "Instrument", "Blnd Contr", "TSMOM Contr", "Delta", "Avg|Pos|%", "Trades", "Ind Used%"
+        );
+
+        let initial_nav = args.initial_cash;
+        let mut sorted_syms: Vec<&String> = blended_attr.keys().collect();
+        sorted_syms.sort_by(|a, b| {
+            let da = blended_attr[*a].pnl_usd
+                - baseline_attr.get(*a).map_or(0.0, |x| x.pnl_usd);
+            let db = blended_attr[*b].pnl_usd
+                - baseline_attr.get(*b).map_or(0.0, |x| x.pnl_usd);
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let mut total_blended = 0.0;
+        let mut total_baseline = 0.0;
+        for sym in &sorted_syms {
+            let b = &blended_attr[*sym];
+            let base_pnl = baseline_attr.get(*sym).map_or(0.0, |x| x.pnl_usd);
+            let delta = b.pnl_usd - base_pnl;
+            let avg_abs_pct = if b.total_days > 0 {
+                (b.sum_abs_notional / b.total_days as f64) / initial_nav * 100.0
+            } else {
+                0.0
+            };
+            let ind_pct = if b.total_days > 0 {
+                format!(
+                    "{:.0}%",
+                    100.0 * b.indicator_used_days as f64 / b.total_days as f64
+                )
+            } else {
+                "-".to_string()
+            };
+            println!(
+                "{:<14} {:>12.0} {:>12.0} {:>+10.0} {:>9.1}% {:>8} {:>10}",
+                sym, b.pnl_usd, base_pnl, delta, avg_abs_pct, b.trade_count, ind_pct,
+            );
+            total_blended += b.pnl_usd;
+            total_baseline += base_pnl;
+        }
+
+        println!(
+            "{:<14} {:>12.0} {:>12.0} {:>+10.0}",
+            "TOTAL",
+            total_blended,
+            total_baseline,
+            total_blended - total_baseline,
+        );
+
+        // Asset-class rollup
+        {
+            use quantbot::agents::combiner::blend_category;
+            use quantbot::config::BlendCategory;
+
+            let mut class_blended: HashMap<BlendCategory, f64> = HashMap::new();
+            let mut class_baseline: HashMap<BlendCategory, f64> = HashMap::new();
+            let mut class_trades: HashMap<BlendCategory, usize> = HashMap::new();
+
+            for (sym, b) in &blended_attr {
+                let cat = blend_category(sym);
+                *class_blended.entry(cat).or_default() += b.pnl_usd;
+                *class_trades.entry(cat).or_default() += b.trade_count;
+            }
+            for (sym, b) in &baseline_attr {
+                let cat = blend_category(sym);
+                *class_baseline.entry(cat).or_default() += b.pnl_usd;
+            }
+
+            println!();
+            println!(
+                "{:<14} {:>12} {:>12} {:>10} {:>30} {:>8}",
+                "Asset Class", "Blnd Contr", "TSMOM Contr", "Delta", "", "Trades"
+            );
+            for cat in [BlendCategory::Gold, BlendCategory::Equity, BlendCategory::Forex] {
+                let bc = class_blended.get(&cat).copied().unwrap_or(0.0);
+                let tc = class_baseline.get(&cat).copied().unwrap_or(0.0);
+                let trades = class_trades.get(&cat).copied().unwrap_or(0);
+                println!(
+                    "{:<14} {:>12.0} {:>12.0} {:>+10.0} {:>30} {:>8}",
+                    format!("[{cat}]"), bc, tc, bc - tc, "", trades,
+                );
+            }
+        }
+
+        // Sanity check: sum of per-instrument PnL vs portfolio-level
+        let portfolio_pnl = result.total_return * initial_nav;
+        let pnl_diff_pct = if portfolio_pnl.abs() > 1.0 {
+            ((total_blended - portfolio_pnl) / portfolio_pnl.abs() * 100.0).abs()
+        } else {
+            0.0
+        };
+        if pnl_diff_pct > 1.0 {
+            println!(
+                "  WARNING: per-instrument PnL sum ({:.0}) differs from portfolio PnL ({:.0}) by {:.1}%",
+                total_blended, portfolio_pnl, pnl_diff_pct,
             );
         }
 
@@ -2499,4 +2740,148 @@ async fn run_data(args: DataArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(all(test, feature = "track-b"))]
+mod attribution_tests {
+    use super::*;
+    use chrono::{NaiveDate, Utc};
+    use quantbot::backtest::engine::Snapshot;
+    use quantbot::core::portfolio::{Fill, Order, OrderSide};
+    use quantbot::core::signal::{Signal, SignalDirection, SignalType};
+
+    fn make_signal(instrument: &str, indicator_used: Option<f64>) -> Signal {
+        let mut metadata = HashMap::new();
+        if let Some(v) = indicator_used {
+            metadata.insert("indicator_used".to_string(), v);
+        }
+        Signal {
+            instrument: instrument.to_string(),
+            direction: SignalDirection::Long,
+            strength: 0.5,
+            confidence: 0.8,
+            agent_name: "combined".to_string(),
+            signal_type: SignalType::Combined,
+            horizon_days: 21,
+            timestamp: Utc::now(),
+            metadata,
+        }
+    }
+
+    fn make_fill(instrument: &str) -> Fill {
+        Fill {
+            order: Order::new(instrument.to_string(), OrderSide::Buy, 1.0),
+            fill_price: 100.0,
+            fill_quantity: 1.0,
+            timestamp: Utc::now(),
+            slippage_bps: 0.0,
+        }
+    }
+
+    fn make_snapshot(
+        day: u32,
+        notionals: &[(&str, f64)],
+        signals: &[(&str, Option<f64>)],
+        fills: &[&str],
+    ) -> Snapshot {
+        Snapshot {
+            date: NaiveDate::from_ymd_opt(2025, 1, day).unwrap(),
+            nav: 1_000_000.0,
+            cash: 500_000.0,
+            gross_exposure: 0.0,
+            net_exposure: 0.0,
+            positions: notionals
+                .iter()
+                .map(|(s, _)| (s.to_string(), 1.0))
+                .collect(),
+            position_notionals: notionals
+                .iter()
+                .map(|(s, v)| (s.to_string(), *v))
+                .collect(),
+            signals: signals
+                .iter()
+                .map(|(s, ind)| (s.to_string(), make_signal(s, *ind)))
+                .collect(),
+            fills: fills.iter().map(|s| make_fill(s)).collect(),
+        }
+    }
+
+    #[test]
+    fn test_pnl_from_notional_changes() {
+        let snapshots = vec![
+            make_snapshot(1, &[("SPY", 100_000.0)], &[("SPY", None)], &["SPY"]),
+            make_snapshot(2, &[("SPY", 105_000.0)], &[("SPY", None)], &[]),
+            make_snapshot(3, &[("SPY", 102_000.0)], &[("SPY", None)], &[]),
+        ];
+
+        let attr = compute_attribution(&snapshots);
+        let spy = &attr["SPY"];
+
+        // PnL = (105k - 100k) + (102k - 105k) = 5000 - 3000 = 2000
+        assert!((spy.pnl_usd - 2_000.0).abs() < 1.0);
+        assert_eq!(spy.trade_count, 1);
+        assert_eq!(spy.total_days, 3);
+    }
+
+    #[test]
+    fn test_indicator_used_tracking() {
+        let snapshots = vec![
+            make_snapshot(1, &[("GLD", 50_000.0)], &[("GLD", Some(1.0))], &[]),
+            make_snapshot(2, &[("GLD", 52_000.0)], &[("GLD", Some(0.0))], &[]),
+            make_snapshot(3, &[("GLD", 54_000.0)], &[("GLD", Some(1.0))], &[]),
+        ];
+
+        let attr = compute_attribution(&snapshots);
+        let gld = &attr["GLD"];
+
+        assert_eq!(gld.indicator_used_days, 2);
+        assert_eq!(gld.total_days, 3);
+    }
+
+    #[test]
+    fn test_multiple_instruments() {
+        let snapshots = vec![
+            make_snapshot(
+                1,
+                &[("SPY", 100_000.0), ("GLD", 50_000.0)],
+                &[("SPY", None), ("GLD", Some(1.0))],
+                &["SPY", "GLD"],
+            ),
+            make_snapshot(
+                2,
+                &[("SPY", 110_000.0), ("GLD", 48_000.0)],
+                &[("SPY", None), ("GLD", Some(1.0))],
+                &[],
+            ),
+        ];
+
+        let attr = compute_attribution(&snapshots);
+
+        assert!((attr["SPY"].pnl_usd - 10_000.0).abs() < 1.0);
+        assert!((attr["GLD"].pnl_usd - (-2_000.0)).abs() < 1.0);
+        assert_eq!(attr["SPY"].trade_count, 1);
+        assert_eq!(attr["GLD"].trade_count, 1);
+        assert_eq!(attr["GLD"].indicator_used_days, 2);
+    }
+
+    #[test]
+    fn test_instrument_appears_only_in_signals() {
+        // Instrument only in signals, not in positions
+        let snapshots = vec![
+            make_snapshot(1, &[], &[("USDJPY=X", Some(0.0))], &[]),
+        ];
+
+        let attr = compute_attribution(&snapshots);
+        let jpy = &attr["USDJPY=X"];
+
+        assert!((jpy.pnl_usd).abs() < 1e-10);
+        assert_eq!(jpy.total_days, 1);
+        assert_eq!(jpy.indicator_used_days, 0);
+    }
+
+    #[test]
+    fn test_empty_snapshots() {
+        let attr = compute_attribution(&[]);
+        assert!(attr.is_empty());
+    }
 }
