@@ -85,6 +85,6 @@ indicator = 0.90
 
 # Confidence gating — reject low-conviction indicator signals before blending.
 # Omit [blending.gating] to use all indicator signals (no gating).
-# [blending.gating]
-# min_confidence = 0.70       # Minimum indicator confidence (0.0 = no gate)
-# min_abs_strength = 0.30     # Minimum |strength| (0.0 = no gate)
+[blending.gating]
+min_confidence = 0.70       # Minimum indicator confidence (0.0 = no gate)
+min_abs_strength = 0.30     # Minimum |strength| (0.0 = no gate)
