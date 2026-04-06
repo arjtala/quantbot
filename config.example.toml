@@ -63,7 +63,7 @@ temperature = 0.3                      # Sampling temperature
 max_tokens = 4096                      # Max response tokens (thinking models need headroom for CoT)
 timeout_secs = 120                     # Request timeout (thinking models are slow)
 max_retries = 2                        # Retries on 5xx errors
-prompt_path = "prompts/indicator_system.md"  # External prompt file (optional, falls back to embedded)
+prompt_path = "prompts/indicator_directional.md"  # External prompt file (optional, falls back to embedded)
 
 # Signal blending (track-b feature).
 # Combines TSMOM + indicator signals per asset class.
