@@ -1,0 +1,78 @@
+# Ablation: forex indicator OFF, gold indicator ON (50/50)
+# Tests whether FX indicator signals are responsible for the Sharpe drag.
+
+[execution]
+engine = "ig"
+
+[risk]
+max_gross_leverage = 2.5
+max_position_pct = 0.40
+max_drawdown_pct = 0.15
+
+[execution.ig]
+environment = "DEMO"
+account_id = "Z69YJL"
+
+[execution.ig.instruments."SPY"]
+epic = "IX.D.SPTRD.DAILY.IP"
+min_size = 0.1
+size_step = 0.1
+ig_point_value = 1.0
+
+[execution.ig.instruments."GC=F"]
+epic = "CC.D.GC.USS.IP"
+min_size = 1.0
+size_step = 1.0
+ig_point_value = 1.0
+
+[execution.ig.instruments."GLD"]
+epic = "UC.D.GLDUS.DAILY.IP"
+min_size = 1.0
+size_step = 1.0
+ig_point_value = 1.0
+
+[execution.ig.instruments."GBPUSD=X"]
+epic = "CS.D.GBPUSD.TODAY.IP"
+min_size = 0.5
+size_step = 0.1
+ig_point_value = 10000.0
+
+[execution.ig.instruments."USDCHF=X"]
+epic = "CS.D.USDCHF.TODAY.IP"
+min_size = 0.5
+size_step = 0.1
+ig_point_value = 10000.0
+
+[execution.ig.instruments."USDJPY=X"]
+epic = "CS.D.USDJPY.TODAY.IP"
+min_size = 0.5
+size_step = 0.1
+ig_point_value = 100.0
+
+[llm]
+base_url = "http://localhost:11434"
+model = "mychen76/Fin-R1:Q5"
+temperature = 0.3
+max_tokens = 4096
+timeout_secs = 120
+max_retries = 2
+prompt_path = "prompts/indicator_system.md"
+
+[blending]
+enabled = true
+
+[blending.weights.gold]
+tsmom = 0.50
+indicator = 0.50
+
+[blending.weights.equity]
+tsmom = 1.00
+indicator = 0.00
+
+[blending.weights.forex]
+tsmom = 1.00
+indicator = 0.00
+
+[blending.gating]
+min_confidence = 0.70
+min_abs_strength = 0.30
