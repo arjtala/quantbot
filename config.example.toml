@@ -80,6 +80,9 @@ enabled = false
 # [blending.weights.gold]
 # tsmom = 0.50
 # indicator = 0.50
+# mode = "blend"               # "blend" (default) or "protective_override"
+#                               # protective_override: indicator only intervenes on
+#                               # sign flips (true directional disagreements)
 #
 # [blending.weights.equity]
 # tsmom = 1.00

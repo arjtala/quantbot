@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::agents::tsmom::TSMOMAgent;
-use crate::config::{BlendCategory, BlendConfig, GatingConfig};
+use crate::config::{BlendCategory, BlendConfig, BlendMode, GatingConfig};
 use crate::core::signal::{Signal, SignalDirection, SignalType};
 
 /// Per-instrument combination result with full provenance.
@@ -77,9 +77,25 @@ pub fn combine_signals(
             match indicator_signals.get(sym) {
                 Some(ind_sig) if should_use_indicator(ind_sig, gating) => {
                     let ind_w = ind_sig.strength * ind_sig.confidence * vol_scalar;
-                    let combined = blend_w.tsmom * tsmom_w + blend_w.indicator * ind_w;
                     let latency = ind_sig.metadata.get("latency_ms").copied();
-                    (combined, ind_w, true, latency)
+
+                    match blend_w.mode {
+                        BlendMode::ProtectiveOverride => {
+                            // Only use indicator on true sign flips (opposite directions)
+                            let is_sign_flip =
+                                tsmom_w != 0.0 && ind_w != 0.0 && tsmom_w.signum() != ind_w.signum();
+                            if is_sign_flip {
+                                let combined = blend_w.tsmom * tsmom_w + blend_w.indicator * ind_w;
+                                (combined, ind_w, true, latency)
+                            } else {
+                                (tsmom_w, 0.0, false, latency)
+                            }
+                        }
+                        BlendMode::Blend => {
+                            let combined = blend_w.tsmom * tsmom_w + blend_w.indicator * ind_w;
+                            (combined, ind_w, true, latency)
+                        }
+                    }
                 }
                 _ => (tsmom_w, 0.0, false, None),
             };
@@ -214,6 +230,7 @@ mod tests {
             crate::config::BlendWeights {
                 tsmom: 0.5,
                 indicator: 0.5,
+                mode: crate::config::BlendMode::Blend,
             },
         );
         weights.insert(
@@ -221,6 +238,7 @@ mod tests {
             crate::config::BlendWeights {
                 tsmom: 1.0,
                 indicator: 0.0,
+                mode: crate::config::BlendMode::Blend,
             },
         );
         weights.insert(
@@ -228,6 +246,7 @@ mod tests {
             crate::config::BlendWeights {
                 tsmom: 0.1,
                 indicator: 0.9,
+                mode: crate::config::BlendMode::Blend,
             },
         );
         BlendConfig {
@@ -368,6 +387,7 @@ mod tests {
             crate::config::BlendWeights {
                 tsmom: 0.5,
                 indicator: 0.5,
+                mode: crate::config::BlendMode::Blend,
             },
         );
         let config = BlendConfig {
@@ -496,5 +516,79 @@ mod tests {
         // indicator_w = 0.5 * 0.8 * 2.0 = 0.8
         // combined = 0.5 * 1.6 + 0.5 * 0.8 = 1.2
         assert!((results[0].combined_weight - 1.2).abs() < 1e-10);
+    }
+
+    fn gold_protective_config() -> BlendConfig {
+        let mut weights = HashMap::new();
+        weights.insert(
+            BlendCategory::Gold,
+            crate::config::BlendWeights {
+                tsmom: 0.5,
+                indicator: 0.5,
+                mode: crate::config::BlendMode::ProtectiveOverride,
+            },
+        );
+        BlendConfig {
+            enabled: true,
+            weights,
+            gating: None,
+        }
+    }
+
+    #[test]
+    fn protective_override_blocks_dampening() {
+        // Same-sign indicator (dampener) should be ignored
+        let config = gold_protective_config();
+        let mut tsmom = HashMap::new();
+        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        let mut indicator = HashMap::new();
+        // Same direction as TSMOM → not a sign flip → ignored
+        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.4, 0.8));
+
+        let results = combine_signals(&tsmom, &indicator, &config);
+        let r = &results[0];
+        assert!(!r.indicator_used);
+        // Falls back to TSMOM-only: 0.8 * 1.0 * 2.0 = 1.6
+        assert!((r.combined_weight - 1.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn protective_override_allows_sign_flip() {
+        // Opposite-sign indicator (true disagreement) should pass through
+        let config = gold_protective_config();
+        let mut tsmom = HashMap::new();
+        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        let mut indicator = HashMap::new();
+        // Opposite direction → sign flip → used
+        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Short, -0.6, 0.8));
+
+        let results = combine_signals(&tsmom, &indicator, &config);
+        let r = &results[0];
+        assert!(r.indicator_used);
+        // tsmom_w = 0.8 * 1.0 * 2.0 = 1.6
+        // indicator_w = -0.6 * 0.8 * 2.0 = -0.96
+        // combined = 0.5 * 1.6 + 0.5 * (-0.96) = 0.32
+        assert!((r.combined_weight - 0.32).abs() < 1e-10);
+    }
+
+    #[test]
+    fn protective_override_respects_gating() {
+        // Sign flip should still be rejected if below gating thresholds
+        let mut config = gold_protective_config();
+        config.gating = Some(GatingConfig {
+            min_confidence: 0.7,
+            min_abs_strength: 0.3,
+        });
+
+        let mut tsmom = HashMap::new();
+        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        let mut indicator = HashMap::new();
+        // Opposite sign but confidence 0.5 < 0.7 → gated out before mode check
+        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Short, -0.6, 0.5));
+
+        let results = combine_signals(&tsmom, &indicator, &config);
+        let r = &results[0];
+        assert!(!r.indicator_used);
+        assert!((r.combined_weight - 1.6).abs() < 1e-10);
     }
 }

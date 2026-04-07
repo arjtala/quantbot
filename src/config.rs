@@ -32,10 +32,25 @@ impl std::fmt::Display for BlendCategory {
 }
 
 #[cfg(feature = "track-b")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BlendMode {
+    Blend,              // existing symmetric blend (default)
+    ProtectiveOverride, // only intervene on sign flips with high conviction
+}
+
+#[cfg(feature = "track-b")]
+fn default_blend_mode() -> BlendMode {
+    BlendMode::Blend
+}
+
+#[cfg(feature = "track-b")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlendWeights {
     pub tsmom: f64,
     pub indicator: f64,
+    #[serde(default = "default_blend_mode")]
+    pub mode: BlendMode,
 }
 
 #[cfg(feature = "track-b")]
@@ -70,6 +85,7 @@ impl BlendConfig {
         static TSMOM_ONLY: BlendWeights = BlendWeights {
             tsmom: 1.0,
             indicator: 0.0,
+            mode: BlendMode::Blend,
         };
         self.weights.get(&cat).unwrap_or(&TSMOM_ONLY)
     }
