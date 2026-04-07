@@ -688,7 +688,7 @@ struct DisagreementDay {
 
 #[cfg(feature = "track-b")]
 struct DisagreementReport {
-    total_gold_days: usize,
+    gold_indicator_days: usize,
     sign_flips: Vec<DisagreementDay>,
     dampened: Vec<DisagreementDay>, // same sign but |Δweight| > 0.1
 }
@@ -732,7 +732,7 @@ fn compute_disagreement(
         Some(closes[fwd_idx] / closes[*idx] - 1.0)
     };
 
-    let mut total_gold_days = 0usize;
+    let mut gold_indicator_days = 0usize;
     let mut sign_flips = Vec::new();
     let mut dampened = Vec::new();
 
@@ -749,7 +749,7 @@ fn compute_disagreement(
                 continue;
             }
 
-            total_gold_days += 1;
+            gold_indicator_days += 1;
 
             let tw = sig.metadata.get("tsmom_weight").copied().unwrap_or(0.0);
             let iw = sig.metadata.get("indicator_weight").copied().unwrap_or(0.0);
@@ -788,7 +788,7 @@ fn compute_disagreement(
     }
 
     DisagreementReport {
-        total_gold_days,
+        gold_indicator_days,
         sign_flips,
         dampened,
     }
@@ -982,7 +982,7 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         {
             let disagreement = compute_disagreement(&snapshots, &bars);
             let mut dis_map = serde_json::Map::new();
-            dis_map.insert("total_gold_days".into(), serde_json::Value::from(disagreement.total_gold_days as u64));
+            dis_map.insert("gold_indicator_days".into(), serde_json::Value::from(disagreement.gold_indicator_days as u64));
 
             for (key, days) in [("sign_flips", &disagreement.sign_flips), ("dampened", &disagreement.dampened)] {
                 let mut section = serde_json::Map::new();
@@ -1158,16 +1158,16 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
 
         // Gold disagreement analysis
         let disagreement = compute_disagreement(&snapshots, &bars);
-        if disagreement.total_gold_days > 0 {
+        if disagreement.gold_indicator_days > 0 {
             println!();
             println!("═══ GOLD DISAGREEMENT ANALYSIS ═══");
 
-            let total = disagreement.total_gold_days;
+            let total = disagreement.gold_indicator_days;
 
             println!();
             println!("  Sign Flips (indicator opposes TSMOM direction):");
             let n = disagreement.sign_flips.len();
-            println!("    Count:  {} / {} gold-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
+            println!("    Count:  {} / {} gold-indicator-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
             for (label, horizon) in [("1d", 0), ("5d", 1), ("21d", 2)] {
                 let with_ret: Vec<&DisagreementDay> = disagreement.sign_flips.iter()
                     .filter(|d| d.fwd_returns[horizon].is_some())
@@ -1191,7 +1191,7 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             println!();
             println!("  Dampening (same sign, |Δweight| > 0.1):");
             let n = disagreement.dampened.len();
-            println!("    Count:  {} / {} gold-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
+            println!("    Count:  {} / {} gold-indicator-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
             for (label, horizon) in [("1d", 0), ("5d", 1), ("21d", 2)] {
                 let with_ret: Vec<&DisagreementDay> = disagreement.dampened.iter()
                     .filter(|d| d.fwd_returns[horizon].is_some())
@@ -3277,7 +3277,7 @@ mod disagreement_tests {
         bars.insert("GLD".into(), series);
 
         let report = compute_disagreement(&[snap], &bars);
-        assert_eq!(report.total_gold_days, 1);
+        assert_eq!(report.gold_indicator_days, 1);
         assert_eq!(report.sign_flips.len(), 1);
         assert_eq!(report.dampened.len(), 0);
         assert!(report.sign_flips[0].is_sign_flip);
@@ -3299,7 +3299,7 @@ mod disagreement_tests {
         bars.insert("GLD".into(), series);
 
         let report = compute_disagreement(&[snap], &bars);
-        assert_eq!(report.total_gold_days, 1);
+        assert_eq!(report.gold_indicator_days, 1);
         assert_eq!(report.sign_flips.len(), 0);
         assert_eq!(report.dampened.len(), 1);
         assert!(!report.dampened[0].is_sign_flip);
@@ -3339,7 +3339,7 @@ mod disagreement_tests {
         bars.insert("GLD".into(), series);
 
         let report = compute_disagreement(&[snap], &bars);
-        assert_eq!(report.total_gold_days, 0);
+        assert_eq!(report.gold_indicator_days, 0);
         assert_eq!(report.sign_flips.len(), 0);
         assert_eq!(report.dampened.len(), 0);
     }
