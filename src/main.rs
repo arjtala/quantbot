@@ -674,6 +674,127 @@ fn compute_attribution(
 }
 
 #[cfg(feature = "track-b")]
+#[allow(dead_code)]
+struct DisagreementDay {
+    date: chrono::NaiveDate,
+    instrument: String,
+    tsmom_weight: f64,
+    indicator_weight: f64,
+    combined_weight: f64,
+    is_sign_flip: bool,
+    weight_delta: f64,
+    fwd_returns: [Option<f64>; 3], // 1d, 5d, 21d
+}
+
+#[cfg(feature = "track-b")]
+struct DisagreementReport {
+    total_gold_days: usize,
+    sign_flips: Vec<DisagreementDay>,
+    dampened: Vec<DisagreementDay>, // same sign but |Δweight| > 0.1
+}
+
+#[cfg(feature = "track-b")]
+fn compute_disagreement(
+    snapshots: &[quantbot::backtest::engine::Snapshot],
+    bars: &HashMap<String, quantbot::core::bar::BarSeries>,
+) -> DisagreementReport {
+    const GOLD_SYMS: &[&str] = &["GLD", "GC=F"];
+    const DAMPENING_THRESHOLD: f64 = 0.1;
+
+    // Build date→index map per gold instrument for forward return lookups
+    let mut date_idx: HashMap<String, HashMap<chrono::NaiveDate, usize>> = HashMap::new();
+    let mut close_vecs: HashMap<String, Vec<f64>> = HashMap::new();
+    let mut date_vecs: HashMap<String, Vec<chrono::NaiveDate>> = HashMap::new();
+
+    for sym in GOLD_SYMS {
+        if let Some(series) = bars.get(*sym) {
+            let mut di = HashMap::new();
+            let mut cv = Vec::new();
+            let mut dv = Vec::new();
+            for (i, bar) in series.bars().iter().enumerate() {
+                di.insert(bar.date, i);
+                cv.push(bar.close);
+                dv.push(bar.date);
+            }
+            date_idx.insert(sym.to_string(), di);
+            close_vecs.insert(sym.to_string(), cv);
+            date_vecs.insert(sym.to_string(), dv);
+        }
+    }
+
+    let fwd_return = |sym: &str, date: chrono::NaiveDate, horizon: usize| -> Option<f64> {
+        let idx = date_idx.get(sym)?.get(&date)?;
+        let closes = close_vecs.get(sym)?;
+        let fwd_idx = idx + horizon;
+        if fwd_idx >= closes.len() {
+            return None;
+        }
+        Some(closes[fwd_idx] / closes[*idx] - 1.0)
+    };
+
+    let mut total_gold_days = 0usize;
+    let mut sign_flips = Vec::new();
+    let mut dampened = Vec::new();
+
+    for snap in snapshots {
+        for sym_str in GOLD_SYMS {
+            let sym = sym_str.to_string();
+            let sig = match snap.signals.get(&sym) {
+                Some(s) => s,
+                None => continue,
+            };
+
+            let indicator_used = sig.metadata.get("indicator_used").copied().unwrap_or(0.0);
+            if indicator_used != 1.0 {
+                continue;
+            }
+
+            total_gold_days += 1;
+
+            let tw = sig.metadata.get("tsmom_weight").copied().unwrap_or(0.0);
+            let iw = sig.metadata.get("indicator_weight").copied().unwrap_or(0.0);
+            // combined_weight is the actual target weight applied
+            // It's the blend of tsmom and indicator weights
+            let blend_tsmom = sig.metadata.get("blend_tsmom").copied().unwrap_or(1.0);
+            let blend_indicator = sig.metadata.get("blend_indicator").copied().unwrap_or(0.0);
+            let cw = tw * blend_tsmom + iw * blend_indicator;
+
+            let is_sign_flip = tw.signum() != iw.signum() && tw.abs() > 1e-12 && iw.abs() > 1e-12;
+            let weight_delta = (cw - tw).abs();
+
+            let fwd_returns = [
+                fwd_return(&sym, snap.date, 1),
+                fwd_return(&sym, snap.date, 5),
+                fwd_return(&sym, snap.date, 21),
+            ];
+
+            let day = DisagreementDay {
+                date: snap.date,
+                instrument: sym.clone(),
+                tsmom_weight: tw,
+                indicator_weight: iw,
+                combined_weight: cw,
+                is_sign_flip,
+                weight_delta,
+                fwd_returns,
+            };
+
+            if is_sign_flip {
+                sign_flips.push(day);
+            } else if weight_delta > DAMPENING_THRESHOLD {
+                dampened.push(day);
+            }
+        }
+    }
+
+    DisagreementReport {
+        total_gold_days,
+        sign_flips,
+        dampened,
+    }
+}
+
+#[cfg(feature = "track-b")]
 fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
     use std::sync::{Arc, Mutex};
 
@@ -857,6 +978,44 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             output.insert("attribution_by_class".into(), serde_json::Value::Object(class_rollup));
         }
 
+        // Gold disagreement in JSON
+        {
+            let disagreement = compute_disagreement(&snapshots, &bars);
+            let mut dis_map = serde_json::Map::new();
+            dis_map.insert("total_gold_days".into(), serde_json::Value::from(disagreement.total_gold_days as u64));
+
+            for (key, days) in [("sign_flips", &disagreement.sign_flips), ("dampened", &disagreement.dampened)] {
+                let mut section = serde_json::Map::new();
+                section.insert("count".into(), serde_json::Value::from(days.len() as u64));
+
+                for (label, horizon) in [("1d", 0usize), ("5d", 1), ("21d", 2)] {
+                    let with_ret: Vec<&DisagreementDay> = days.iter()
+                        .filter(|d| d.fwd_returns[horizon].is_some())
+                        .collect();
+                    if !with_ret.is_empty() {
+                        let n = with_ret.len();
+                        let win = if key == "sign_flips" {
+                            with_ret.iter().filter(|d| {
+                                let ret = d.fwd_returns[horizon].unwrap();
+                                (ret > 0.0 && d.indicator_weight > 0.0) || (ret < 0.0 && d.indicator_weight < 0.0)
+                            }).count()
+                        } else {
+                            with_ret.iter().filter(|d| {
+                                let ret = d.fwd_returns[horizon].unwrap();
+                                ret * d.combined_weight > ret * d.tsmom_weight
+                            }).count()
+                        };
+                        let mut h = serde_json::Map::new();
+                        h.insert("win_rate".into(), serde_json::Value::from(win as f64 / n as f64));
+                        h.insert("n".into(), serde_json::Value::from(n as u64));
+                        section.insert(label.to_string(), serde_json::Value::Object(h));
+                    }
+                }
+                dis_map.insert(key.to_string(), serde_json::Value::Object(section));
+            }
+            output.insert("disagreement".into(), serde_json::Value::Object(dis_map));
+        }
+
         let json = serde_json::to_string_pretty(&output).context("failed to serialize")?;
         println!("{json}");
     } else {
@@ -996,6 +1155,66 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         println!();
         println!("═══ CACHE COVERAGE ═══");
         print!("{cov_report}");
+
+        // Gold disagreement analysis
+        let disagreement = compute_disagreement(&snapshots, &bars);
+        if disagreement.total_gold_days > 0 {
+            println!();
+            println!("═══ GOLD DISAGREEMENT ANALYSIS ═══");
+
+            let total = disagreement.total_gold_days;
+
+            println!();
+            println!("  Sign Flips (indicator opposes TSMOM direction):");
+            let n = disagreement.sign_flips.len();
+            println!("    Count:  {} / {} gold-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
+            for (label, horizon) in [("1d", 0), ("5d", 1), ("21d", 2)] {
+                let with_ret: Vec<&DisagreementDay> = disagreement.sign_flips.iter()
+                    .filter(|d| d.fwd_returns[horizon].is_some())
+                    .collect();
+                if with_ret.is_empty() {
+                    println!("    Indicator correct ({label}):  n/a");
+                } else {
+                    let correct = with_ret.iter().filter(|d| {
+                        let ret = d.fwd_returns[horizon].unwrap();
+                        (ret > 0.0 && d.indicator_weight > 0.0) || (ret < 0.0 && d.indicator_weight < 0.0)
+                    }).count();
+                    let avg_ret: f64 = with_ret.iter().map(|d| d.fwd_returns[horizon].unwrap()).sum::<f64>() / with_ret.len() as f64;
+                    println!("    Indicator correct ({label}):  {:.1}%  (avg fwd ret: {:+.2}%, n={})",
+                        100.0 * correct as f64 / with_ret.len() as f64,
+                        avg_ret * 100.0,
+                        with_ret.len(),
+                    );
+                }
+            }
+
+            println!();
+            println!("  Dampening (same sign, |Δweight| > 0.1):");
+            let n = disagreement.dampened.len();
+            println!("    Count:  {} / {} gold-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
+            for (label, horizon) in [("1d", 0), ("5d", 1), ("21d", 2)] {
+                let with_ret: Vec<&DisagreementDay> = disagreement.dampened.iter()
+                    .filter(|d| d.fwd_returns[horizon].is_some())
+                    .collect();
+                if with_ret.is_empty() {
+                    println!("    Blend outperforms ({label}):  n/a");
+                } else {
+                    let outperforms = with_ret.iter().filter(|d| {
+                        let ret = d.fwd_returns[horizon].unwrap();
+                        ret * d.combined_weight > ret * d.tsmom_weight
+                    }).count();
+                    let avg_edge: f64 = with_ret.iter().map(|d| {
+                        let ret = d.fwd_returns[horizon].unwrap();
+                        ret * d.combined_weight - ret * d.tsmom_weight
+                    }).sum::<f64>() / with_ret.len() as f64;
+                    println!("    Blend outperforms ({label}):  {:.1}%  (avg edge: {:+.4}%, n={})",
+                        100.0 * outperforms as f64 / with_ret.len() as f64,
+                        avg_edge * 100.0,
+                        with_ret.len(),
+                    );
+                }
+            }
+        }
     }
 
     Ok(())
@@ -2993,5 +3212,135 @@ mod attribution_tests {
         let bars: HashMap<String, BarSeries> = HashMap::new();
         let attr = compute_attribution(&[], &bars);
         assert!(attr.is_empty());
+    }
+}
+
+#[cfg(all(test, feature = "track-b"))]
+mod disagreement_tests {
+    use super::*;
+    use chrono::{NaiveDate, Utc};
+    use quantbot::backtest::engine::Snapshot;
+    use quantbot::core::bar::{Bar, BarSeries};
+    use quantbot::core::signal::{Signal, SignalDirection, SignalType};
+
+    fn make_bar(date: NaiveDate, close: f64) -> Bar {
+        Bar { date, open: close, high: close, low: close, close, volume: 1000.0 }
+    }
+
+    fn make_gold_signal(tsmom_w: f64, indicator_w: f64, blend_tsmom: f64, blend_indicator: f64) -> Signal {
+        let mut metadata = HashMap::new();
+        metadata.insert("tsmom_weight".into(), tsmom_w);
+        metadata.insert("indicator_weight".into(), indicator_w);
+        metadata.insert("blend_tsmom".into(), blend_tsmom);
+        metadata.insert("blend_indicator".into(), blend_indicator);
+        metadata.insert("indicator_used".into(), 1.0);
+        Signal {
+            instrument: "GLD".into(),
+            direction: if tsmom_w > 0.0 { SignalDirection::Long } else { SignalDirection::Short },
+            strength: 0.5,
+            confidence: 0.8,
+            agent_name: "combined".into(),
+            signal_type: SignalType::Combined,
+            horizon_days: 21,
+            timestamp: Utc::now(),
+            metadata,
+        }
+    }
+
+    fn make_snapshot_with_signal(day: u32, sig: Signal) -> Snapshot {
+        let mut signals = HashMap::new();
+        signals.insert("GLD".into(), sig);
+        Snapshot {
+            date: NaiveDate::from_ymd_opt(2025, 1, day).unwrap(),
+            nav: 1_000_000.0,
+            cash: 500_000.0,
+            gross_exposure: 0.0,
+            net_exposure: 0.0,
+            positions: HashMap::new(),
+            position_notionals: HashMap::new(),
+            signals,
+            fills: vec![],
+        }
+    }
+
+    #[test]
+    fn test_sign_flip_detection() {
+        // TSMOM long (+1.0), indicator short (-0.8), 50/50 blend
+        let snap = make_snapshot_with_signal(10, make_gold_signal(1.0, -0.8, 0.5, 0.5));
+        // Bars: day 10 close=100, day 11 close=98 (price went down → indicator was correct)
+        let bars_vec = (10..=15).map(|d| {
+            let close = if d == 10 { 100.0 } else { 98.0 };
+            make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), close)
+        }).collect::<Vec<_>>();
+        let series = BarSeries::new(bars_vec).unwrap();
+        let mut bars = HashMap::new();
+        bars.insert("GLD".into(), series);
+
+        let report = compute_disagreement(&[snap], &bars);
+        assert_eq!(report.total_gold_days, 1);
+        assert_eq!(report.sign_flips.len(), 1);
+        assert_eq!(report.dampened.len(), 0);
+        assert!(report.sign_flips[0].is_sign_flip);
+        // 1d fwd return: 98/100 - 1 = -0.02 (negative → indicator Short was correct)
+        let fwd_1d = report.sign_flips[0].fwd_returns[0].unwrap();
+        assert!((fwd_1d - (-0.02)).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_dampening_detection() {
+        // Both long, but indicator dampens: tsmom=1.5, indicator=0.3, 50/50 blend → combined=0.9
+        // |combined - tsmom| = |0.9 - 1.5| = 0.6 > 0.1 → dampened
+        let snap = make_snapshot_with_signal(10, make_gold_signal(1.5, 0.3, 0.5, 0.5));
+        let bars_vec = (10..=15).map(|d| {
+            make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), 100.0 + (d - 10) as f64)
+        }).collect::<Vec<_>>();
+        let series = BarSeries::new(bars_vec).unwrap();
+        let mut bars = HashMap::new();
+        bars.insert("GLD".into(), series);
+
+        let report = compute_disagreement(&[snap], &bars);
+        assert_eq!(report.total_gold_days, 1);
+        assert_eq!(report.sign_flips.len(), 0);
+        assert_eq!(report.dampened.len(), 1);
+        assert!(!report.dampened[0].is_sign_flip);
+        assert!((report.dampened[0].weight_delta - 0.6).abs() < 1e-10);
+    }
+
+    #[test]
+    fn test_fwd_return_insufficient_bars() {
+        // Only 2 bars → 5d and 21d forward returns should be None
+        let snap = make_snapshot_with_signal(10, make_gold_signal(1.0, -0.5, 0.5, 0.5));
+        let bars_vec = vec![
+            make_bar(NaiveDate::from_ymd_opt(2025, 1, 10).unwrap(), 100.0),
+            make_bar(NaiveDate::from_ymd_opt(2025, 1, 11).unwrap(), 101.0),
+        ];
+        let series = BarSeries::new(bars_vec).unwrap();
+        let mut bars = HashMap::new();
+        bars.insert("GLD".into(), series);
+
+        let report = compute_disagreement(&[snap], &bars);
+        assert_eq!(report.sign_flips.len(), 1);
+        assert!(report.sign_flips[0].fwd_returns[0].is_some()); // 1d ok
+        assert!(report.sign_flips[0].fwd_returns[1].is_none()); // 5d insufficient
+        assert!(report.sign_flips[0].fwd_returns[2].is_none()); // 21d insufficient
+    }
+
+    #[test]
+    fn test_skips_no_indicator() {
+        // indicator_used = 0 → should be skipped entirely
+        let mut sig = make_gold_signal(1.0, 0.0, 1.0, 0.0);
+        sig.metadata.insert("indicator_used".into(), 0.0);
+        let snap = make_snapshot_with_signal(10, sig);
+        let bars_vec = (10..=15).map(|d| {
+            make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), 100.0)
+        }).collect::<Vec<_>>();
+        let series = BarSeries::new(bars_vec).unwrap();
+        let mut bars = HashMap::new();
+        bars.insert("GLD".into(), series);
+
+        let report = compute_disagreement(&[snap], &bars);
+        assert_eq!(report.total_gold_days, 0);
+        assert_eq!(report.sign_flips.len(), 0);
+        assert_eq!(report.dampened.len(), 0);
     }
 }
