@@ -805,6 +805,39 @@ account_id = "Z69YJL"
 
 ---
 
+## Track D: Continuous Bot — Overlay Actions + Always-On
+> **Status: In progress** | See JOURNAL.md §8 for architecture
+
+### PR D1: Overlay Actions v1 (typed enum + expiry + SQLite) ✅ `9a0e9e6`
+- [x] `src/overlay/mod.rs` — `OverlayAction` enum (4 actions), `OverlayScope` enum (Global/AssetClass/Instrument), `AppliedOverlay`
+- [x] Actions: `FreezeEntries`, `ScaleExposure`, `Flatten`, `DisableInstrument` (TightenGating deferred to v2)
+- [x] `apply_overlays(weights, current_quantities, overlays, eval_date) -> Vec<AppliedOverlay>`
+- [x] Date-based expiry: actions with `until < eval_date` skipped; `Flatten` immediate (no expiry)
+- [x] SQLite schema v5→v6: `overlay_actions` table, `Db::insert_overlay_action()`, migration
+- [x] Audit JSONL: `overlay_applied` event with per-action weight changes
+- [x] Hook into `run_live` / `paper-trade` after signals, before `generate_targets`
+- [x] Config-driven v1: `[[overlays.actions]]` in TOML, `OverlayConfig` struct
+- [x] 8 unit tests: scale global/asset-class, freeze with/without position, flatten, disable, expiry, composition
+- [x] Un-gated `BlendCategory` from `track-b` feature (used by overlays + combiner)
+
+### PR D2: Volatility/Market-Condition Overlay (deterministic)
+- [ ] Triggers: realized vol spike, ATR% spike, large move (>1.5σ)
+- [ ] Emits `ScaleExposure` or `FreezeEntries` actions
+- [ ] Deterministic + backtestable
+
+### PR D3: News Overlay (bounded, not HFT)
+- [ ] Data ingestion (polling + caching)
+- [ ] Classifier (rule-based, then LLM-assisted)
+- [ ] Emits only bounded action types from D1
+
+### PR D4: Daemon + Scheduling
+- [ ] Long-running process with periodic timer + trigger queue
+- [ ] "One run at a time" lock
+- [ ] Health endpoint / heartbeat
+- [ ] Intraday bars (15m/60m) as separate `BarSeries`
+
+---
+
 ## Phase 4: Extensions
 > **Status: Not started**
 

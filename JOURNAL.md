@@ -580,3 +580,43 @@ Conclusion: Fin-R1 + baseline prompt `8430ffc768a841ee` does not add alpha under
 - Ji, Z. (2026). "CliffordNet: All You Need is Geometric Algebra." *arXiv preprint arXiv:2601.06793v2*.
 - NVIDIA. (2025). "Nemotron-Cascade-2-30B-A3B." [Hugging Face](https://huggingface.co/nvidia/Nemotron-Cascade-2-30B-A3B).
 - (2024). "Reinforcement Learning in Financial Decision Making: A Systematic Review." *arXiv preprint arXiv:2411.07585*.
+
+---
+
+## 8. Continuous Bot Architecture: Deterministic Core + Bounded Overlays
+
+### Design Principle
+Keep the trading loop deterministic and safe; let "adaptive/news intelligence" act as a controlled overlay — not an unbounded driver. Otherwise you get non-reproducible behavior and brittle performance.
+
+### Target Architecture
+
+**A. Always-on daemon ("operator")**
+Long-running process: schedules jobs (market open/close, daily rebalance, news polling), manages state/recovery, exposes health endpoints. Implementation: systemd/supervisord + cron-like scheduling inside the daemon.
+
+**B. Deterministic strategy engine ("decision core")**
+Given timestamp t, market data up to t, and config: compute signals → apply risk → produce target weights → produce orders. Must be replayable from recorded inputs.
+
+**C. Reactive news/risk overlay ("veto/modifier")**
+Separate component that can: veto trades, scale exposure down (risk-off), temporarily disable instruments, tighten thresholds/gating. Key constraint: overlay actions must be explainable, logged, and bounded (small number of allowed actions).
+
+**D. Execution + reconciliation + circuit breakers ("safety kernel")**
+Already built: reconciliation, circuit breaker, audit logs, SQLite recording. Non-negotiable in an always-on bot.
+
+### "Adjust strategies" without breaking reproducibility
+- **Safe:** configuration selection — maintain pre-defined strategy configs, select among them daily/weekly based on regime indicators. Mechanism: bandit/rules-based router with guardrails.
+- **Unsafe:** online learning / self-modifying rules — updating weights/prompts live based on short-term PnL is extremely prone to overfitting and "ghost behavior." Do this offline first (paper trading + replay), promote via versioned config.
+
+### Reacting to news and market conditions
+- **Market conditions (cheap, reliable, deterministic):** volatility regime (ATR%, realized vol), trend regime (SMA slope/breakout), correlation/concentration checks, liquidity/market-hours constraints. Reproducible and backtestable.
+- **News reaction (risk overlay, not primary alpha):** main strategy = quant (TSMOM/blended); news agent = "risk manager" that reduces risk when uncertainty spikes. Concrete actions: "no new positions today," "halve gross leverage for 48h," "disable instrument X for 24h," "tighten gating thresholds." Keep point-in-time alignment (no look-ahead).
+
+### Build Order
+1. **Typed overlay actions + persistence** (first — highest leverage)
+2. **Overlay sources:** volatility/market-condition overlay (deterministic), then news overlay (bounded)
+3. **Intraday bars** (separate from daily TSMOM pipeline)
+4. **Daemon + scheduling** (last — ops work once overlays are stable)
+
+### Intraday Cadence (not HFT)
+- Periodic: every 30 min during liquid hours (13:30–20:00 UTC), every 2–4 hours outside
+- Event triggers: volatility spike, large move (>1.5σ), news detection
+- Daily TSMOM determines core direction and max risk budget; intraday overlay adjusts timing/position scaling (small deltas, not full flips)

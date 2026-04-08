@@ -117,6 +117,18 @@ Port the LLM indicator agent — calls Ollama locally, parses JSON signals. Star
 - Commit 68e4825 verified on local Ollama
 - **Confidence gating** (PR B6): `GatingConfig` (min_confidence, min_abs_strength) on `BlendConfig` filters out low-conviction signals before blending
 - **Ablation result (2026-04-06):** 15-month eval (98.7% cache, 2024-01 → 2025-03) showed no evidence of alpha from Fin-R1 + baseline prompt under IG spread costs. Ablation ladder: ungated 1.278 → gated 1.314 → forex-off 1.365 → TSMOM-only 1.394. Monotonic improvement as indicator exposure removed. Production default: TSMOM-only. Next: prompt/model A/B testing
+- **Gold protective override (2026-04-08):** `BlendMode::ProtectiveOverride` — indicator only intervenes on sign flips (true directional disagreements). Gold dampening collapsed from 95% to 0%. Sharpe 1.427 vs TSMOM-only 1.394 (+0.033). Safe optionality preserved.
+
+---
+
+## Track D: Continuous Bot — Overlay Actions + Always-On
+
+Build order (see JOURNAL.md §8 for full architecture):
+
+1. **Overlay actions v1** ✅ — typed enum (`FreezeEntries`, `ScaleExposure`, `Flatten`, `DisableInstrument`) with scope (Global/AssetClass/Instrument), date-based expiry, SQLite persistence, audit logging. Config-driven (`[[overlays.actions]]` in TOML). TightenGating deferred to v2.
+2. **Volatility/market-condition overlay** — deterministic triggers (vol spike, ATR%, large move) emitting bounded actions
+3. **News overlay** — bounded risk overlay, not primary alpha. Polling + caching + classifier
+4. **Daemon + scheduling** — ops work once overlays are stable. Periodic (30min liquid hours) + event triggers
 
 ---
 
