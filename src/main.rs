@@ -379,8 +379,7 @@ struct PaperTradeArgs {
     #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
     data_dir: PathBuf,
 
-    /// Path to TOML configuration file (enables blending when [blending] section present)
-    #[cfg(feature = "track-b")]
+    /// Path to TOML configuration file (enables overlays and blending)
     #[arg(long)]
     config: Option<PathBuf>,
 
@@ -1536,16 +1535,30 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
         }
     };
 
+    // ── Load config (for overlays and optional blending) ──────────
+    let app_config = args
+        .config
+        .as_ref()
+        .map(|p| AppConfig::load(p))
+        .transpose()
+        .with_context(|| "failed to load config")?;
+
+    let overlay_actions = app_config
+        .as_ref()
+        .and_then(|c| c.overlays.as_ref())
+        .map(|o| o.actions.clone())
+        .unwrap_or_default();
+
+    // Compute eval_date from bar data
+    let eval_date = bars
+        .values()
+        .filter_map(|s| s.bars().last().map(|b| b.date))
+        .max()
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
     // ── Optional blending (track-b with --config) ─────────────────
     #[cfg(feature = "track-b")]
     let (snapshot, _combined_results): (TargetSnapshot, Option<Vec<combiner::CombinedResult>>) = {
-        let app_config = args
-            .config
-            .as_ref()
-            .map(|p| AppConfig::load(p))
-            .transpose()
-            .with_context(|| "failed to load config for blending")?;
-
         let blend_enabled = app_config
             .as_ref()
             .and_then(|c| c.blending.as_ref())
@@ -1633,6 +1646,16 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
                 combined_signals.insert(r.instrument.clone(), combined_sig);
             }
 
+            // Apply overlays
+            let applied_overlays = if !overlay_actions.is_empty() {
+                quantbot::overlay::apply_overlays(&mut combined_weights, &current_quantities, &overlay_actions, eval_date)
+            } else {
+                vec![]
+            };
+            if !applied_overlays.is_empty() {
+                print_overlay_summary(&applied_overlays);
+            }
+
             let snap = engine.generate_targets_with_overrides(
                 combined_signals,
                 combined_weights,
@@ -1665,6 +1688,37 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
             println!();
 
             (snap, Some(results))
+        } else if !overlay_actions.is_empty() {
+            // TSMOM-only with overlays: compute weights, apply overlays, use overrides path
+            let mut tsmom_signals = HashMap::new();
+            let mut tsmom_weights = HashMap::new();
+            for (sym, series) in &bars {
+                if series.bars().len() < args.min_history {
+                    continue;
+                }
+                let sig = agent.generate_signal(series, sym);
+                let weight = if sig.direction != SignalDirection::Flat {
+                    TSMOMAgent::compute_target_weight(&sig)
+                } else {
+                    0.0
+                };
+                tsmom_weights.insert(sym.clone(), weight);
+                tsmom_signals.insert(sym.clone(), sig);
+            }
+
+            let applied_overlays = quantbot::overlay::apply_overlays(&mut tsmom_weights, &current_quantities, &overlay_actions, eval_date);
+            if !applied_overlays.is_empty() {
+                print_overlay_summary(&applied_overlays);
+            }
+
+            let snap = engine.generate_targets_with_overrides(
+                tsmom_signals,
+                tsmom_weights,
+                &bars,
+                &current_quantities,
+                nav,
+            );
+            (snap, None)
         } else {
             let snap =
                 engine.generate_targets(&agent, &bars, &current_quantities, nav, args.min_history);
@@ -1673,8 +1727,39 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
     };
 
     #[cfg(not(feature = "track-b"))]
-    let snapshot =
-        engine.generate_targets(&agent, &bars, &current_quantities, nav, args.min_history);
+    let snapshot = if !overlay_actions.is_empty() {
+        // TSMOM-only with overlays
+        let mut tsmom_signals = HashMap::new();
+        let mut tsmom_weights = HashMap::new();
+        for (sym, series) in &bars {
+            if series.bars().len() < args.min_history {
+                continue;
+            }
+            let sig = agent.generate_signal(series, sym);
+            let weight = if sig.direction != SignalDirection::Flat {
+                TSMOMAgent::compute_target_weight(&sig)
+            } else {
+                0.0
+            };
+            tsmom_weights.insert(sym.clone(), weight);
+            tsmom_signals.insert(sym.clone(), sig);
+        }
+
+        let applied_overlays = quantbot::overlay::apply_overlays(&mut tsmom_weights, &current_quantities, &overlay_actions, eval_date);
+        if !applied_overlays.is_empty() {
+            print_overlay_summary(&applied_overlays);
+        }
+
+        engine.generate_targets_with_overrides(
+            tsmom_signals,
+            tsmom_weights,
+            &bars,
+            &current_quantities,
+            nav,
+        )
+    } else {
+        engine.generate_targets(&agent, &bars, &current_quantities, nav, args.min_history)
+    };
 
     // Save new state
     save_state(
@@ -1937,8 +2022,20 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     };
 
     // ── Generate targets (with optional blending) ─────────────────
+    let overlay_actions = app_config
+        .overlays
+        .as_ref()
+        .map(|o| o.actions.clone())
+        .unwrap_or_default();
+
+    let eval_date = bars
+        .values()
+        .filter_map(|s| s.bars().last().map(|b| b.date))
+        .max()
+        .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
     #[cfg(feature = "track-b")]
-    let (snapshot, combined_results): (TargetSnapshot, Option<Vec<combiner::CombinedResult>>) =
+    let (snapshot, combined_results, applied_overlays): (TargetSnapshot, Option<Vec<combiner::CombinedResult>>, Vec<quantbot::overlay::AppliedOverlay>) =
         if app_config
             .blending
             .as_ref()
@@ -1986,6 +2083,17 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                 combined_signals.insert(r.instrument.clone(), combined_sig);
             }
 
+            // Apply overlays
+            let applied_overlays = if !overlay_actions.is_empty() {
+                quantbot::overlay::apply_overlays(&mut combined_weights, &HashMap::new(), &overlay_actions, eval_date)
+            } else {
+                vec![]
+            };
+            if !applied_overlays.is_empty() {
+                print_overlay_summary(&applied_overlays);
+                audit.log_overlays_applied(&applied_overlays);
+            }
+
             let snap = bt_engine.generate_targets_with_overrides(
                 combined_signals,
                 combined_weights,
@@ -1993,17 +2101,80 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                 &HashMap::new(),
                 nav,
             );
-            (snap, Some(results))
+            (snap, Some(results), applied_overlays)
+        } else if !overlay_actions.is_empty() {
+            eprintln!("  Blending mode: disabled (TSMOM-only + overlays)");
+            let mut tsmom_signals = HashMap::new();
+            let mut tsmom_weights = HashMap::new();
+            for (sym, series) in &bars {
+                if series.bars().len() < args.min_history {
+                    continue;
+                }
+                let sig = agent.generate_signal(series, sym);
+                let weight = if sig.direction != SignalDirection::Flat {
+                    TSMOMAgent::compute_target_weight(&sig)
+                } else {
+                    0.0
+                };
+                tsmom_weights.insert(sym.clone(), weight);
+                tsmom_signals.insert(sym.clone(), sig);
+            }
+
+            let applied_overlays = quantbot::overlay::apply_overlays(&mut tsmom_weights, &HashMap::new(), &overlay_actions, eval_date);
+            if !applied_overlays.is_empty() {
+                print_overlay_summary(&applied_overlays);
+                audit.log_overlays_applied(&applied_overlays);
+            }
+
+            let snap = bt_engine.generate_targets_with_overrides(
+                tsmom_signals,
+                tsmom_weights,
+                &bars,
+                &HashMap::new(),
+                nav,
+            );
+            (snap, None, applied_overlays)
         } else {
             eprintln!("  Blending mode: disabled (TSMOM-only)");
             let snap =
                 bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
-            (snap, None)
+            (snap, None, vec![])
         };
 
     #[cfg(not(feature = "track-b"))]
-    let snapshot =
-        bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
+    let (snapshot, applied_overlays): (TargetSnapshot, Vec<quantbot::overlay::AppliedOverlay>) = if !overlay_actions.is_empty() {
+        let mut tsmom_signals = HashMap::new();
+        let mut tsmom_weights = HashMap::new();
+        for (sym, series) in &bars {
+            if series.bars().len() < args.min_history {
+                continue;
+            }
+            let sig = agent.generate_signal(series, sym);
+            let weight = if sig.direction != SignalDirection::Flat {
+                TSMOMAgent::compute_target_weight(&sig)
+            } else {
+                0.0
+            };
+            tsmom_weights.insert(sym.clone(), weight);
+            tsmom_signals.insert(sym.clone(), sig);
+        }
+
+        let applied = quantbot::overlay::apply_overlays(&mut tsmom_weights, &HashMap::new(), &overlay_actions, eval_date);
+        if !applied.is_empty() {
+            print_overlay_summary(&applied);
+            audit.log_overlays_applied(&applied);
+        }
+
+        (bt_engine.generate_targets_with_overrides(
+            tsmom_signals,
+            tsmom_weights,
+            &bars,
+            &HashMap::new(),
+            nav,
+        ), applied)
+    } else {
+        (bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history), vec![])
+    };
 
     // Log targets
     let target_entries: Vec<TargetEntry> = snapshot
@@ -2123,6 +2294,11 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             #[cfg(feature = "track-b")]
             if !llm_cache_entries.is_empty() {
                 rec.record_llm_cache_entries(&llm_cache_entries);
+            }
+
+            // Record overlay actions
+            if !applied_overlays.is_empty() {
+                rec.record_overlay_actions(&applied_overlays);
             }
 
             (Some(rec), peak)
@@ -2686,6 +2862,32 @@ fn print_live_report(snap: &TargetSnapshot, nav: f64, orders: &[OrderRequest]) {
     }
 
     println!("==================================================");
+}
+
+fn print_overlay_summary(applied: &[quantbot::overlay::AppliedOverlay]) {
+    println!();
+    println!("  OVERLAYS APPLIED");
+    for overlay in applied {
+        let action_desc = match &overlay.action {
+            quantbot::overlay::OverlayAction::FreezeEntries { scope, until } => {
+                format!("freeze_entries scope={scope:?} until={until}")
+            }
+            quantbot::overlay::OverlayAction::ScaleExposure { scope, factor, until } => {
+                format!("scale_exposure scope={scope:?} factor={factor} until={until}")
+            }
+            quantbot::overlay::OverlayAction::Flatten { scope, reason } => {
+                format!("flatten scope={scope:?} reason=\"{reason}\"")
+            }
+            quantbot::overlay::OverlayAction::DisableInstrument { instrument, until } => {
+                format!("disable_instrument instrument={instrument} until={until}")
+            }
+        };
+        println!("  Action: {action_desc}");
+        for (sym, before, after) in &overlay.weight_changes {
+            println!("    {sym:<14} {before:>+8.4} → {after:>+8.4}");
+        }
+    }
+    println!();
 }
 
 fn print_paper_trade_report(snap: &TargetSnapshot, nav: f64, prior: Option<&PaperTradeState>) {

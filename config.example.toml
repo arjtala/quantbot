@@ -8,6 +8,31 @@ max_gross_leverage = 2.5     # sum(|notional|) / NAV
 max_position_pct = 0.40      # max single-instrument |notional| / NAV
 max_drawdown_pct = 0.15      # max drawdown from peak NAV (15%)
 
+# Overlay actions — bounded interventions applied before target generation.
+# Actions modify weights after signal computation but before sizing/execution.
+# Date-bounded actions expire automatically; Flatten is immediate (no expiry).
+#
+# [[overlays.actions]]
+# action = "scale_exposure"
+# scope = { asset_class = "gold" }
+# factor = 0.5
+# until = "2026-04-15"
+#
+# [[overlays.actions]]
+# action = "freeze_entries"
+# scope = "global"
+# until = "2026-04-15"
+#
+# [[overlays.actions]]
+# action = "flatten"
+# scope = { instrument = "GBPUSD=X" }
+# reason = "weekend risk"
+#
+# [[overlays.actions]]
+# action = "disable_instrument"
+# instrument = "SPY"
+# until = "2026-04-15"
+
 [execution.ig]
 environment = "DEMO"
 account_id = "Z69YJL"

@@ -9,9 +9,11 @@ use crate::agents::indicator::llm_client::LlmConfig;
 use crate::agents::risk::RiskConfig;
 use crate::execution::router::{ContractSpec, ExecutionRouter};
 
-// ─── Blend Config (track-b) ─────────────────────────────────────
+use crate::overlay::OverlayAction;
 
-#[cfg(feature = "track-b")]
+// ─── Blend Category ─────────────────────────────────────────────
+// Always available — used by overlays and (when track-b) the combiner.
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BlendCategory {
@@ -20,7 +22,6 @@ pub enum BlendCategory {
     Forex,
 }
 
-#[cfg(feature = "track-b")]
 impl std::fmt::Display for BlendCategory {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -30,6 +31,16 @@ impl std::fmt::Display for BlendCategory {
         }
     }
 }
+
+// ─── Overlay Config ─────────────────────────────────────────────
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct OverlayConfig {
+    #[serde(default)]
+    pub actions: Vec<OverlayAction>,
+}
+
+// ─── Blend Config (track-b) ─────────────────────────────────────
 
 #[cfg(feature = "track-b")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -97,6 +108,7 @@ impl BlendConfig {
 pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub risk: Option<RiskConfig>,
+    pub overlays: Option<OverlayConfig>,
     #[cfg(feature = "track-b")]
     pub llm: Option<LlmConfig>,
     #[cfg(feature = "track-b")]

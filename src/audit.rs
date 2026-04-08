@@ -10,6 +10,7 @@ use crate::agents::risk::RiskCheckDetail;
 use crate::core::portfolio::OrderSide;
 use crate::execution::reconcile::{DustDelta, PositionMismatch};
 use crate::execution::traits::{DealStatus, OrderAck, OrderRequest};
+use crate::overlay::AppliedOverlay;
 
 // ─── Run ID ─────────────────────────────────────────────────────
 
@@ -271,6 +272,32 @@ impl AuditLogger {
                 "current_nav": detail.current_nav,
                 "decision": detail.decision,
                 "reason": detail.reason,
+            }),
+        );
+    }
+
+    pub fn log_overlays_applied(&mut self, applied: &[AppliedOverlay]) {
+        if applied.is_empty() {
+            return;
+        }
+        let actions: Vec<serde_json::Value> = applied
+            .iter()
+            .map(|a| {
+                serde_json::json!({
+                    "action": a.action,
+                    "instruments_affected": a.instruments_affected,
+                    "weight_changes": a.weight_changes.iter().map(|(sym, before, after)| {
+                        serde_json::json!({"instrument": sym, "before": before, "after": after})
+                    }).collect::<Vec<_>>(),
+                })
+            })
+            .collect();
+        self.log(
+            "overlay_applied",
+            "INFO",
+            serde_json::json!({
+                "count": applied.len(),
+                "actions": actions,
             }),
         );
     }

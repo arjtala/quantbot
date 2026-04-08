@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 /// Schema version stored in PRAGMA user_version. Bump when making breaking
 /// changes to the table layout.
-pub const DB_SCHEMA_VERSION: i32 = 5;
+pub const DB_SCHEMA_VERSION: i32 = 6;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS runs (
@@ -94,6 +94,22 @@ CREATE INDEX IF NOT EXISTS idx_llm_cache_instrument_date ON llm_cache(instrument
 CREATE INDEX IF NOT EXISTS idx_llm_cache_model_prompt ON llm_cache(llm_model, prompt_hash);
 ";
 
+/// SQL for the overlay_actions table added in schema v6.
+const OVERLAY_ACTIONS_SQL: &str = "
+CREATE TABLE IF NOT EXISTS overlay_actions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id        TEXT NOT NULL,
+    instrument    TEXT NOT NULL,
+    action_type   TEXT NOT NULL,
+    weight_before REAL,
+    weight_after  REAL,
+    action_json   TEXT NOT NULL,
+    ts            TEXT NOT NULL,
+    FOREIGN KEY (run_id) REFERENCES runs(run_id)
+);
+CREATE INDEX IF NOT EXISTS idx_overlay_actions_run ON overlay_actions(run_id);
+";
+
 // ─── Database ───────────────────────────────────────────────────
 
 /// SQLite database for recording trading activity across runs.
@@ -131,6 +147,7 @@ impl Db {
             // Fresh database — create all tables and stamp with current version
             conn.execute_batch(RISK_STATE_SQL)?;
             conn.execute_batch(LLM_CACHE_SQL)?;
+            conn.execute_batch(OVERLAY_ACTIONS_SQL)?;
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
         } else if current < DB_SCHEMA_VERSION {
             // Run migrations
@@ -149,6 +166,9 @@ impl Db {
             }
             if current < 5 {
                 conn.execute_batch(LLM_CACHE_SQL)?;
+            }
+            if current < 6 {
+                conn.execute_batch(OVERLAY_ACTIONS_SQL)?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
             eprintln!("  DB migrated from schema v{current} to v{DB_SCHEMA_VERSION}");
@@ -218,6 +238,24 @@ impl Db {
         self.conn.execute(
             "UPDATE runs SET prompt_hash = ?1, prompt_source = ?2, llm_model = ?3 WHERE run_id = ?4",
             params![prompt_hash, prompt_source, llm_model, run_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn insert_overlay_action(
+        &self,
+        run_id: &str,
+        instrument: &str,
+        action_type: &str,
+        weight_before: f64,
+        weight_after: f64,
+        action_json: &str,
+    ) -> SqlResult<()> {
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
+        self.conn.execute(
+            "INSERT INTO overlay_actions (run_id, instrument, action_type, weight_before, weight_after, action_json, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![run_id, instrument, action_type, weight_before, weight_after, action_json, now],
         )?;
         Ok(())
     }
@@ -683,7 +721,7 @@ mod tests {
     fn schema_version_set_on_fresh_db() {
         let db = Db::open_memory().unwrap();
         assert_eq!(db.schema_version().unwrap(), DB_SCHEMA_VERSION);
-        assert_eq!(DB_SCHEMA_VERSION, 5);
+        assert_eq!(DB_SCHEMA_VERSION, 6);
     }
 
     #[test]
@@ -763,9 +801,9 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_5() {
+    fn schema_version_is_6() {
         let db = Db::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 5);
+        assert_eq!(db.schema_version().unwrap(), 6);
     }
 
     #[test]
@@ -829,7 +867,7 @@ mod tests {
 
         // Verify version bumped
         let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
 
         // Verify existing row got default agent_name
         let agent: String = conn.query_row(
@@ -901,7 +939,7 @@ mod tests {
 
         // Verify version bumped to 5
         let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
 
         // Verify prompt columns exist and are nullable
         conn.execute(
@@ -1059,7 +1097,7 @@ mod tests {
 
         // Verify version bumped to 5
         let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
 
         // Verify llm_cache table exists
         conn.execute(

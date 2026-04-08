@@ -7,6 +7,7 @@ use crate::db::{Db, LlmCacheEntry};
 use crate::execution::traits::{
     DealStatus, OrderAck, OrderRequest,
 };
+use crate::overlay::AppliedOverlay;
 
 // ─── Signal Record ──────────────────────────────────────────────
 
@@ -303,6 +304,45 @@ impl Recorder {
         }
         if written > 0 {
             eprintln!("  Cached {written} LLM response(s) to SQLite");
+        }
+    }
+
+    /// Record overlay actions applied during this run.
+    pub fn record_overlay_actions(&self, applied: &[AppliedOverlay]) {
+        if applied.is_empty() {
+            return;
+        }
+        let db = match self.db.lock() {
+            Ok(db) => db,
+            Err(e) => {
+                eprintln!("  WARN: SQLite lock failed: {e}");
+                self.mark_failed();
+                return;
+            }
+        };
+        let result = db.with_transaction(|conn| {
+            let now = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+            for overlay in applied {
+                let action_type = match &overlay.action {
+                    crate::overlay::OverlayAction::FreezeEntries { .. } => "freeze_entries",
+                    crate::overlay::OverlayAction::ScaleExposure { .. } => "scale_exposure",
+                    crate::overlay::OverlayAction::Flatten { .. } => "flatten",
+                    crate::overlay::OverlayAction::DisableInstrument { .. } => "disable_instrument",
+                };
+                let action_json = serde_json::to_string(&overlay.action).unwrap_or_default();
+                for (sym, before, after) in &overlay.weight_changes {
+                    conn.execute(
+                        "INSERT INTO overlay_actions (run_id, instrument, action_type, weight_before, weight_after, action_json, ts)
+                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                        rusqlite::params![&self.run_id, sym, action_type, before, after, &action_json, &now],
+                    )?;
+                }
+            }
+            Ok(())
+        });
+        if let Err(e) = result {
+            eprintln!("  WARN: SQLite batch insert_overlay_action failed: {e}");
+            self.mark_failed();
         }
     }
 }

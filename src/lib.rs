@@ -6,4 +6,5 @@ pub mod core;
 pub mod data;
 pub mod db;
 pub mod execution;
+pub mod overlay;
 pub mod recording;
