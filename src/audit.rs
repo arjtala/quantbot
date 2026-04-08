@@ -302,6 +302,67 @@ impl AuditLogger {
         );
     }
 
+    pub fn log_volatility_triggers(
+        &mut self,
+        triggers: &[crate::overlay::volatility::TriggerResult],
+        actions_emitted: usize,
+    ) {
+        if triggers.is_empty() {
+            return;
+        }
+        let trigger_data: Vec<serde_json::Value> = triggers
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "instrument": t.instrument,
+                    "vol_ratio": t.vol_ratio,
+                    "atr_pct": t.atr_pct,
+                    "move_sigma": t.move_sigma,
+                })
+            })
+            .collect();
+        self.log(
+            "volatility_triggers",
+            if actions_emitted > 0 { "WARN" } else { "INFO" },
+            serde_json::json!({
+                "triggers": trigger_data,
+                "actions_emitted": actions_emitted,
+            }),
+        );
+    }
+
+    pub fn log_news_triggers(
+        &mut self,
+        triggers: &[crate::overlay::news::NewsTrigger],
+        actions_emitted: usize,
+    ) {
+        if triggers.is_empty() {
+            return;
+        }
+        let trigger_data: Vec<serde_json::Value> = triggers
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "date": t.date.to_string(),
+                    "scope": t.scope,
+                    "severity": t.severity,
+                    "action": t.action,
+                    "reason": t.reason,
+                    "until": t.until.to_string(),
+                })
+            })
+            .collect();
+        self.log(
+            "news_triggers",
+            if actions_emitted > 0 { "WARN" } else { "INFO" },
+            serde_json::json!({
+                "event_count": triggers.len(),
+                "actions_emitted": actions_emitted,
+                "events": trigger_data,
+            }),
+        );
+    }
+
     pub fn log_targets(
         &mut self,
         eval_date: &str,

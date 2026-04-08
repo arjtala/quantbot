@@ -33,6 +33,32 @@ max_drawdown_pct = 0.15      # max drawdown from peak NAV (15%)
 # instrument = "SPY"
 # until = "2026-04-15"
 
+# Volatility overlay — deterministic triggers that emit global actions.
+# Fires if any instrument hits a threshold. Severe → FreezeEntries, else → ScaleExposure.
+#
+# [overlays.volatility]
+# enabled = true
+# scale_factor = 0.5
+# until_days = 1
+# vol_short_days = 10
+# vol_long_days = 60
+# vol_ratio_threshold = 1.5
+# severe_vol_ratio_threshold = 2.0
+# atr_period = 14
+# atr_pct_threshold = 0.02
+# sigma_days = 60
+# move_k = 1.5
+# severe_move_k = 2.5
+
+# News overlay — deterministic actions from a local JSON feed file.
+# Events are matched by date (point-in-time). Each event maps to an overlay action.
+# No network ingestion; you manually populate the feed file.
+#
+# [overlays.news]
+# enabled = true
+# feed_path = "data/news_feed.json"
+# default_until_days = 1
+
 [execution.ig]
 environment = "DEMO"
 account_id = "Z69YJL"

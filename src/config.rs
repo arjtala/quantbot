@@ -38,6 +38,94 @@ impl std::fmt::Display for BlendCategory {
 pub struct OverlayConfig {
     #[serde(default)]
     pub actions: Vec<OverlayAction>,
+    pub volatility: Option<VolatilityOverlayConfig>,
+    pub news: Option<NewsOverlayConfig>,
+}
+
+// ─── Volatility Overlay Config ──────────────────────────────────
+
+fn default_scale_factor() -> f64 {
+    0.5
+}
+fn default_until_days() -> u32 {
+    1
+}
+fn default_vol_short_days() -> usize {
+    10
+}
+fn default_vol_long_days() -> usize {
+    60
+}
+fn default_vol_ratio_threshold() -> f64 {
+    1.5
+}
+fn default_severe_vol_ratio_threshold() -> f64 {
+    2.0
+}
+fn default_atr_period() -> usize {
+    14
+}
+fn default_atr_pct_threshold() -> f64 {
+    0.02
+}
+fn default_sigma_days() -> usize {
+    60
+}
+fn default_move_k() -> f64 {
+    1.5
+}
+fn default_severe_move_k() -> f64 {
+    2.5
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VolatilityOverlayConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_scale_factor")]
+    pub scale_factor: f64,
+    #[serde(default = "default_until_days")]
+    pub until_days: u32,
+
+    #[serde(default = "default_vol_short_days")]
+    pub vol_short_days: usize,
+    #[serde(default = "default_vol_long_days")]
+    pub vol_long_days: usize,
+    #[serde(default = "default_vol_ratio_threshold")]
+    pub vol_ratio_threshold: f64,
+    #[serde(default = "default_severe_vol_ratio_threshold")]
+    pub severe_vol_ratio_threshold: f64,
+
+    #[serde(default = "default_atr_period")]
+    pub atr_period: usize,
+    #[serde(default = "default_atr_pct_threshold")]
+    pub atr_pct_threshold: f64,
+
+    #[serde(default = "default_sigma_days")]
+    pub sigma_days: usize,
+    #[serde(default = "default_move_k")]
+    pub move_k: f64,
+    #[serde(default = "default_severe_move_k")]
+    pub severe_move_k: f64,
+}
+
+// ─── News Overlay Config ───────────────────────────────────────
+
+fn default_news_feed_path() -> String {
+    "data/news_feed.json".to_string()
+}
+fn default_news_until_days() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NewsOverlayConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_news_feed_path")]
+    pub feed_path: String,
+    #[serde(default = "default_news_until_days")]
+    pub default_until_days: u32,
 }
 
 // ─── Blend Config (track-b) ─────────────────────────────────────
@@ -597,5 +685,34 @@ min_abs_strength = 0.30
         let gating = blend.gating.unwrap();
         assert_eq!(gating.min_confidence, 0.70);
         assert_eq!(gating.min_abs_strength, 0.30);
+    }
+
+    #[test]
+    fn parse_volatility_overlay_config() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[overlays.volatility]
+enabled = true
+scale_factor = 0.3
+until_days = 2
+vol_ratio_threshold = 1.8
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let vol = config.overlays.unwrap().volatility.unwrap();
+        assert!(vol.enabled);
+        assert_eq!(vol.scale_factor, 0.3);
+        assert_eq!(vol.until_days, 2);
+        assert_eq!(vol.vol_ratio_threshold, 1.8);
+        // Defaults
+        assert_eq!(vol.vol_short_days, 10);
+        assert_eq!(vol.vol_long_days, 60);
+        assert_eq!(vol.severe_vol_ratio_threshold, 2.0);
+        assert_eq!(vol.atr_period, 14);
+        assert_eq!(vol.atr_pct_threshold, 0.02);
+        assert_eq!(vol.sigma_days, 60);
+        assert_eq!(vol.move_k, 1.5);
+        assert_eq!(vol.severe_move_k, 2.5);
     }
 }

@@ -1543,7 +1543,7 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
         .transpose()
         .with_context(|| "failed to load config")?;
 
-    let overlay_actions = app_config
+    let mut overlay_actions = app_config
         .as_ref()
         .and_then(|c| c.overlays.as_ref())
         .map(|o| o.actions.clone())
@@ -1555,6 +1555,48 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
         .filter_map(|s| s.bars().last().map(|b| b.date))
         .max()
         .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
+    // ── Volatility overlay (deterministic) ──────────────────────────
+    let vol_triggers = if let Some(vol_cfg) = app_config
+        .as_ref()
+        .and_then(|c| c.overlays.as_ref())
+        .and_then(|o| o.volatility.as_ref())
+    {
+        let (vol_actions, triggers) =
+            quantbot::overlay::volatility::compute_volatility_actions(&bars, eval_date, vol_cfg);
+        if !vol_actions.is_empty() {
+            print_volatility_triggers(&triggers, vol_cfg);
+        }
+        overlay_actions.extend(vol_actions);
+        triggers
+    } else {
+        vec![]
+    };
+    let _ = &vol_triggers; // suppress unused warning when not logging
+
+    // ── News overlay (deterministic, manual feed) ───────────────────
+    if let Some(news_cfg) = app_config
+        .as_ref()
+        .and_then(|c| c.overlays.as_ref())
+        .and_then(|o| o.news.as_ref())
+    {
+        if news_cfg.enabled {
+            let feed_path = std::path::Path::new(&news_cfg.feed_path);
+            match quantbot::overlay::news::load_feed(feed_path) {
+                Ok(feed) => {
+                    let (news_actions, triggers) =
+                        quantbot::overlay::news::compute_news_actions(&feed, eval_date, news_cfg);
+                    if !news_actions.is_empty() {
+                        print_news_triggers(&triggers);
+                    }
+                    overlay_actions.extend(news_actions);
+                }
+                Err(e) => {
+                    eprintln!("  WARN: news feed load failed: {e}");
+                }
+            }
+        }
+    }
 
     // ── Optional blending (track-b with --config) ─────────────────
     #[cfg(feature = "track-b")]
@@ -2022,7 +2064,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     };
 
     // ── Generate targets (with optional blending) ─────────────────
-    let overlay_actions = app_config
+    let mut overlay_actions = app_config
         .overlays
         .as_ref()
         .map(|o| o.actions.clone())
@@ -2033,6 +2075,67 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         .filter_map(|s| s.bars().last().map(|b| b.date))
         .max()
         .unwrap_or_else(|| chrono::Utc::now().date_naive());
+
+    // ── Volatility overlay (deterministic) ──────────────────────────
+    let vol_triggers = if let Some(vol_cfg) = app_config
+        .overlays
+        .as_ref()
+        .and_then(|o| o.volatility.as_ref())
+    {
+        let (vol_actions, triggers) =
+            quantbot::overlay::volatility::compute_volatility_actions(&bars, eval_date, vol_cfg);
+        if !vol_actions.is_empty() {
+            print_volatility_triggers(&triggers, vol_cfg);
+        }
+        overlay_actions.extend(vol_actions);
+        triggers
+    } else {
+        vec![]
+    };
+    if !vol_triggers.is_empty() {
+        let vol_action_count = overlay_actions.len()
+            - app_config
+                .overlays
+                .as_ref()
+                .map(|o| o.actions.len())
+                .unwrap_or(0);
+        audit.log_volatility_triggers(&vol_triggers, vol_action_count);
+    }
+
+    // ── News overlay (deterministic, manual feed) ───────────────────
+    let pre_news_count = overlay_actions.len();
+    let news_triggers = if let Some(news_cfg) = app_config
+        .overlays
+        .as_ref()
+        .and_then(|o| o.news.as_ref())
+    {
+        if news_cfg.enabled {
+            let feed_path = std::path::Path::new(&news_cfg.feed_path);
+            match quantbot::overlay::news::load_feed(feed_path) {
+                Ok(feed) => {
+                    let (news_actions, triggers) =
+                        quantbot::overlay::news::compute_news_actions(&feed, eval_date, news_cfg);
+                    if !news_actions.is_empty() {
+                        print_news_triggers(&triggers);
+                    }
+                    overlay_actions.extend(news_actions);
+                    triggers
+                }
+                Err(e) => {
+                    eprintln!("  WARN: news feed load failed: {e}");
+                    vec![]
+                }
+            }
+        } else {
+            vec![]
+        }
+    } else {
+        vec![]
+    };
+    if !news_triggers.is_empty() {
+        let news_action_count = overlay_actions.len() - pre_news_count;
+        audit.log_news_triggers(&news_triggers, news_action_count);
+    }
 
     #[cfg(feature = "track-b")]
     let (snapshot, combined_results, applied_overlays): (TargetSnapshot, Option<Vec<combiner::CombinedResult>>, Vec<quantbot::overlay::AppliedOverlay>) =
@@ -2886,6 +2989,65 @@ fn print_overlay_summary(applied: &[quantbot::overlay::AppliedOverlay]) {
         for (sym, before, after) in &overlay.weight_changes {
             println!("    {sym:<14} {before:>+8.4} → {after:>+8.4}");
         }
+    }
+    println!();
+}
+
+fn print_volatility_triggers(
+    triggers: &[quantbot::overlay::volatility::TriggerResult],
+    cfg: &quantbot::config::VolatilityOverlayConfig,
+) {
+    println!();
+    println!("  VOLATILITY TRIGGERS");
+    for t in triggers {
+        let mut fired = Vec::new();
+        if let Some(vr) = t.vol_ratio {
+            let marker = if vr >= cfg.severe_vol_ratio_threshold {
+                " [SEVERE]"
+            } else if vr >= cfg.vol_ratio_threshold {
+                " [FIRED]"
+            } else {
+                ""
+            };
+            fired.push(format!("vol_ratio={vr:.2}{marker}"));
+        }
+        if let Some(ap) = t.atr_pct {
+            let marker = if ap >= cfg.atr_pct_threshold {
+                " [FIRED]"
+            } else {
+                ""
+            };
+            fired.push(format!("atr_pct={ap:.4}{marker}"));
+        }
+        if let Some(ms) = t.move_sigma {
+            let marker = if ms >= cfg.severe_move_k {
+                " [SEVERE]"
+            } else if ms >= cfg.move_k {
+                " [FIRED]"
+            } else {
+                ""
+            };
+            fired.push(format!("move={ms:.2}σ{marker}"));
+        }
+        if !fired.is_empty() {
+            println!("    {:<14} {}", t.instrument, fired.join("  "));
+        }
+    }
+    println!();
+}
+
+fn print_news_triggers(triggers: &[quantbot::overlay::news::NewsTrigger]) {
+    println!();
+    println!("  NEWS OVERLAY");
+    for t in triggers {
+        println!(
+            "    [{:<8}] {:<28} scope={:<20} until={} reason={:?}",
+            t.severity.to_uppercase(),
+            t.action,
+            t.scope,
+            t.until,
+            t.reason,
+        );
     }
     println!();
 }

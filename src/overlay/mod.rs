@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::BlendCategory;
 
+pub mod news;
+pub mod volatility;
+
 // ─── Types ──────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
