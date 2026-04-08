@@ -3038,7 +3038,8 @@ fn print_volatility_triggers(
 
 fn print_news_triggers(triggers: &[quantbot::overlay::news::NewsTrigger]) {
     println!();
-    println!("  NEWS OVERLAY");
+    println!("  NEWS OVERLAY: matched {} events, emitted {} actions",
+        triggers.len(), triggers.len());
     for t in triggers {
         println!(
             "    [{:<8}] {:<28} scope={:<20} until={} reason={:?}",

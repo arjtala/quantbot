@@ -89,6 +89,21 @@ pub fn load_feed(path: &Path) -> Result<NewsFeed> {
         .with_context(|| format!("failed to read news feed: {}", path.display()))?;
     let feed: NewsFeed =
         serde_json::from_str(&contents).with_context(|| "failed to parse news feed JSON")?;
+
+    // Validate events: warn on suspect values
+    for (i, event) in feed.events.iter().enumerate() {
+        if let ActionSpec::ScaleExposure { factor } = &event.action {
+            if !(0.0..=1.0).contains(factor) {
+                eprintln!(
+                    "  WARN: news feed event[{i}]: scale_exposure factor {factor} outside [0,1], will be clamped"
+                );
+            }
+        }
+        if event.reason.is_empty() {
+            eprintln!("  WARN: news feed event[{i}]: missing reason");
+        }
+    }
+
     Ok(feed)
 }
 
@@ -114,9 +129,14 @@ fn scope_label(spec: &ScopeSpec) -> String {
 
 /// Compute news overlay actions from a feed file.
 ///
-/// Only applies events where `event.date == eval_date`.
-/// Converts each matched event into an `OverlayAction` with
-/// `until = eval_date + until_days` (or event-level override).
+/// News overlays are **daily**: events apply on that calendar date
+/// (`event.date == eval_date`). Intraday timestamps and timezone
+/// considerations are out of scope for v1 — a headline at 23:50
+/// applies on the same calendar date, not the next day.
+///
+/// Each matched event is converted into an `OverlayAction` with
+/// `until = eval_date + until_days` (falls back to config default
+/// when `until_days == 0`).
 pub fn compute_news_actions(
     feed: &NewsFeed,
     eval_date: NaiveDate,
@@ -146,7 +166,7 @@ pub fn compute_news_actions(
             ActionSpec::FreezeEntries => OverlayAction::FreezeEntries { scope, until },
             ActionSpec::ScaleExposure { factor } => OverlayAction::ScaleExposure {
                 scope,
-                factor: *factor,
+                factor: factor.clamp(0.0, 1.0),
                 until,
             },
             ActionSpec::Flatten => OverlayAction::Flatten {
@@ -510,6 +530,29 @@ mod tests {
                 assert_eq!(*until, eval + chrono::Duration::days(2));
             }
             other => panic!("expected DisableInstrument, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn scale_factor_clamped_to_unit_range() {
+        let feed = NewsFeed {
+            events: vec![NewsEvent {
+                date: NaiveDate::from_ymd_opt(2025, 3, 15).unwrap(),
+                scope: ScopeSpec::Global,
+                severity: Severity::Medium,
+                action: ActionSpec::ScaleExposure { factor: 1.5 },
+                until_days: 1,
+                reason: "out of range".to_string(),
+            }],
+        };
+        let cfg = default_cfg();
+        let eval = NaiveDate::from_ymd_opt(2025, 3, 15).unwrap();
+        let (actions, _) = compute_news_actions(&feed, eval, &cfg);
+        match &actions[0] {
+            OverlayAction::ScaleExposure { factor, .. } => {
+                assert!((factor - 1.0).abs() < 1e-10, "factor should be clamped to 1.0");
+            }
+            other => panic!("expected ScaleExposure, got {other:?}"),
         }
     }
 }
