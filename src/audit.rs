@@ -315,6 +315,7 @@ impl AuditLogger {
             .map(|t| {
                 serde_json::json!({
                     "instrument": t.instrument,
+                    "category": t.category.to_string(),
                     "vol_ratio": t.vol_ratio,
                     "atr_pct": t.atr_pct,
                     "move_sigma": t.move_sigma,

@@ -9,6 +9,7 @@ use crate::agents::indicator::llm_client::LlmConfig;
 use crate::agents::risk::RiskConfig;
 use crate::execution::router::{ContractSpec, ExecutionRouter};
 
+use crate::notify::NotifyConfig;
 use crate::overlay::OverlayAction;
 
 // ─── Blend Category ─────────────────────────────────────────────
@@ -107,6 +108,73 @@ pub struct VolatilityOverlayConfig {
     pub move_k: f64,
     #[serde(default = "default_severe_move_k")]
     pub severe_move_k: f64,
+
+    // Per-asset-class threshold overrides
+    #[serde(default)]
+    pub gold: Option<AssetClassVolOverrides>,
+    #[serde(default)]
+    pub equity: Option<AssetClassVolOverrides>,
+    #[serde(default)]
+    pub forex: Option<AssetClassVolOverrides>,
+}
+
+/// Per-asset-class overrides for volatility thresholds.
+/// Any `None` field falls back to the global default.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AssetClassVolOverrides {
+    pub vol_ratio_threshold: Option<f64>,
+    pub severe_vol_ratio_threshold: Option<f64>,
+    pub atr_pct_threshold: Option<f64>,
+    pub move_k: Option<f64>,
+    pub severe_move_k: Option<f64>,
+    pub scale_factor: Option<f64>,
+    pub until_days: Option<u32>,
+}
+
+/// Resolved (concrete) thresholds for a specific asset class — no `Option`s.
+#[derive(Debug, Clone)]
+pub struct ResolvedVolThresholds {
+    pub vol_ratio_threshold: f64,
+    pub severe_vol_ratio_threshold: f64,
+    pub atr_pct_threshold: f64,
+    pub move_k: f64,
+    pub severe_move_k: f64,
+    pub scale_factor: f64,
+    pub until_days: u32,
+}
+
+impl VolatilityOverlayConfig {
+    /// Resolve thresholds for a given asset class, merging per-class overrides with globals.
+    pub fn thresholds_for(&self, cat: BlendCategory) -> ResolvedVolThresholds {
+        let overrides = match cat {
+            BlendCategory::Gold => self.gold.as_ref(),
+            BlendCategory::Equity => self.equity.as_ref(),
+            BlendCategory::Forex => self.forex.as_ref(),
+        };
+
+        match overrides {
+            Some(o) => ResolvedVolThresholds {
+                vol_ratio_threshold: o.vol_ratio_threshold.unwrap_or(self.vol_ratio_threshold),
+                severe_vol_ratio_threshold: o
+                    .severe_vol_ratio_threshold
+                    .unwrap_or(self.severe_vol_ratio_threshold),
+                atr_pct_threshold: o.atr_pct_threshold.unwrap_or(self.atr_pct_threshold),
+                move_k: o.move_k.unwrap_or(self.move_k),
+                severe_move_k: o.severe_move_k.unwrap_or(self.severe_move_k),
+                scale_factor: o.scale_factor.unwrap_or(self.scale_factor),
+                until_days: o.until_days.unwrap_or(self.until_days),
+            },
+            None => ResolvedVolThresholds {
+                vol_ratio_threshold: self.vol_ratio_threshold,
+                severe_vol_ratio_threshold: self.severe_vol_ratio_threshold,
+                atr_pct_threshold: self.atr_pct_threshold,
+                move_k: self.move_k,
+                severe_move_k: self.severe_move_k,
+                scale_factor: self.scale_factor,
+                until_days: self.until_days,
+            },
+        }
+    }
 }
 
 // ─── News Overlay Config ───────────────────────────────────────
@@ -227,6 +295,7 @@ pub struct AppConfig {
     pub risk: Option<RiskConfig>,
     pub overlays: Option<OverlayConfig>,
     pub daemon: Option<DaemonConfig>,
+    pub notify: Option<NotifyConfig>,
     #[cfg(feature = "track-b")]
     pub llm: Option<LlmConfig>,
     #[cfg(feature = "track-b")]
@@ -744,6 +813,61 @@ vol_ratio_threshold = 1.8
         assert_eq!(vol.sigma_days, 60);
         assert_eq!(vol.move_k, 1.5);
         assert_eq!(vol.severe_move_k, 2.5);
+        // No per-class overrides
+        assert!(vol.gold.is_none());
+        assert!(vol.equity.is_none());
+        assert!(vol.forex.is_none());
+    }
+
+    #[test]
+    fn parse_volatility_per_class_overrides() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[overlays.volatility]
+enabled = true
+
+[overlays.volatility.gold]
+vol_ratio_threshold = 1.3
+scale_factor = 0.3
+until_days = 2
+
+[overlays.volatility.forex]
+atr_pct_threshold = 0.015
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let vol = config.overlays.unwrap().volatility.unwrap();
+        assert!(vol.enabled);
+
+        // Gold overrides
+        let gold = vol.gold.as_ref().unwrap();
+        assert_eq!(gold.vol_ratio_threshold, Some(1.3));
+        assert_eq!(gold.scale_factor, Some(0.3));
+        assert_eq!(gold.until_days, Some(2));
+        assert!(gold.severe_vol_ratio_threshold.is_none());
+
+        // Forex overrides
+        let forex = vol.forex.as_ref().unwrap();
+        assert_eq!(forex.atr_pct_threshold, Some(0.015));
+        assert!(forex.vol_ratio_threshold.is_none());
+
+        // No equity overrides
+        assert!(vol.equity.is_none());
+
+        // thresholds_for resolves correctly
+        let th_gold = vol.thresholds_for(BlendCategory::Gold);
+        assert_eq!(th_gold.vol_ratio_threshold, 1.3);
+        assert_eq!(th_gold.scale_factor, 0.3);
+        assert_eq!(th_gold.until_days, 2);
+        assert_eq!(th_gold.severe_vol_ratio_threshold, 2.0); // fallback
+
+        let th_equity = vol.thresholds_for(BlendCategory::Equity);
+        assert_eq!(th_equity.vol_ratio_threshold, 1.5); // global default
+
+        let th_forex = vol.thresholds_for(BlendCategory::Forex);
+        assert_eq!(th_forex.atr_pct_threshold, 0.015);
+        assert_eq!(th_forex.vol_ratio_threshold, 1.5); // fallback
     }
 
     #[test]

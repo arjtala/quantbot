@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -50,7 +50,7 @@ pub struct AppliedOverlay {
 // ─── Scope Matching ─────────────────────────────────────────────
 
 /// Map instrument symbol to blend category (same logic as combiner::blend_category).
-fn symbol_category(symbol: &str) -> BlendCategory {
+pub(crate) fn symbol_category(symbol: &str) -> BlendCategory {
     match symbol {
         "GLD" | "GC=F" => BlendCategory::Gold,
         "SPY" => BlendCategory::Equity,
@@ -188,6 +188,83 @@ pub fn apply_overlays(
     applied
 }
 
+// ─── Dedup ──────────────────────────────────────────────────────
+
+/// Canonical scope string for dedup keys.
+fn scope_canonical(scope: &OverlayScope) -> String {
+    match scope {
+        OverlayScope::Global => "global".to_string(),
+        OverlayScope::AssetClass(cat) => format!("asset_class:{cat}"),
+        OverlayScope::Instrument(sym) => format!("instrument:{}", sym.to_uppercase()),
+    }
+}
+
+/// Compute a canonical dedup key for an overlay action.
+pub fn dedup_key(action: &OverlayAction) -> String {
+    match action {
+        OverlayAction::FreezeEntries { scope, until } => {
+            format!("freeze|{}|{}", scope_canonical(scope), until)
+        }
+        OverlayAction::ScaleExposure {
+            scope,
+            factor,
+            until,
+        } => {
+            format!(
+                "scale|{}|{:.4}|{}",
+                scope_canonical(scope),
+                factor,
+                until
+            )
+        }
+        OverlayAction::Flatten { scope, reason } => {
+            format!("flatten|{}|{}", scope_canonical(scope), reason)
+        }
+        OverlayAction::DisableInstrument { instrument, until } => {
+            format!("disable|{}|{}", instrument.to_uppercase(), until)
+        }
+    }
+}
+
+/// Filter out proposed overlay actions whose dedup key is already active.
+///
+/// Returns `(new_actions, skipped_count)`.
+pub fn dedup_actions(
+    proposed: Vec<OverlayAction>,
+    active_keys: &HashSet<String>,
+    eval_date: NaiveDate,
+) -> (Vec<OverlayAction>, usize) {
+    let mut new = Vec::new();
+    let mut skipped = 0;
+
+    for action in proposed {
+        let key = dedup_key(&action);
+
+        // Only consider an active key as a dup if the action hasn't expired
+        let still_active = action_until(&action)
+            .map(|u| u >= eval_date)
+            .unwrap_or(true); // Flatten has no expiry
+
+        if active_keys.contains(&key) && still_active {
+            skipped += 1;
+        } else {
+            new.push(action);
+        }
+    }
+
+    (new, skipped)
+}
+
+/// Extract the `until` date from an action (None for Flatten).
+fn action_until(action: &OverlayAction) -> Option<NaiveDate> {
+    match action {
+        OverlayAction::FreezeEntries { until, .. } => Some(*until),
+        OverlayAction::ScaleExposure { until, .. } => Some(*until),
+        OverlayAction::DisableInstrument { until, .. } => Some(*until),
+        OverlayAction::Flatten { .. } => None,
+    }
+}
+
 // ─── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -200,6 +277,96 @@ mod tests {
         w.insert("SPY".into(), -0.2);
         w.insert("GBPUSD=X".into(), 0.3);
         w
+    }
+
+    // ─── Dedup Tests ────────────────────────────────────────────
+
+    #[test]
+    fn dedup_exact_dup_removed() {
+        let action = OverlayAction::ScaleExposure {
+            scope: OverlayScope::Global,
+            factor: 0.5,
+            until: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
+        };
+        let key = dedup_key(&action);
+        let mut active = HashSet::new();
+        active.insert(key);
+
+        let eval = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+        let (new, skipped) = dedup_actions(vec![action], &active, eval);
+        assert!(new.is_empty());
+        assert_eq!(skipped, 1);
+    }
+
+    #[test]
+    fn dedup_different_scope_kept() {
+        let action_global = OverlayAction::FreezeEntries {
+            scope: OverlayScope::Global,
+            until: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
+        };
+        let action_gold = OverlayAction::FreezeEntries {
+            scope: OverlayScope::AssetClass(BlendCategory::Gold),
+            until: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
+        };
+        let mut active = HashSet::new();
+        active.insert(dedup_key(&action_global));
+
+        let eval = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+        let (new, skipped) = dedup_actions(vec![action_gold], &active, eval);
+        assert_eq!(new.len(), 1);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn dedup_different_factor_kept() {
+        let action1 = OverlayAction::ScaleExposure {
+            scope: OverlayScope::Global,
+            factor: 0.5,
+            until: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
+        };
+        let action2 = OverlayAction::ScaleExposure {
+            scope: OverlayScope::Global,
+            factor: 0.3,
+            until: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
+        };
+        let mut active = HashSet::new();
+        active.insert(dedup_key(&action1));
+
+        let eval = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+        let (new, skipped) = dedup_actions(vec![action2], &active, eval);
+        assert_eq!(new.len(), 1);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn dedup_empty_active_keeps_all() {
+        let action = OverlayAction::FreezeEntries {
+            scope: OverlayScope::Global,
+            until: NaiveDate::from_ymd_opt(2026, 4, 10).unwrap(),
+        };
+        let active = HashSet::new();
+        let eval = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+        let (new, skipped) = dedup_actions(vec![action], &active, eval);
+        assert_eq!(new.len(), 1);
+        assert_eq!(skipped, 0);
+    }
+
+    #[test]
+    fn dedup_expired_dup_not_filtered() {
+        // Active key exists, but the proposed action's until is in the past
+        let action = OverlayAction::ScaleExposure {
+            scope: OverlayScope::Global,
+            factor: 0.5,
+            until: NaiveDate::from_ymd_opt(2026, 4, 5).unwrap(),
+        };
+        let key = dedup_key(&action);
+        let mut active = HashSet::new();
+        active.insert(key);
+
+        let eval = NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+        let (new, skipped) = dedup_actions(vec![action], &active, eval);
+        assert_eq!(new.len(), 1); // expired → not a dup
+        assert_eq!(skipped, 0);
     }
 
     #[test]

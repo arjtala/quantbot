@@ -55,6 +55,20 @@ max_drawdown_pct = 0.15      # max drawdown from peak NAV (15%)
 # sigma_days = 60
 # move_k = 1.5
 # severe_move_k = 2.5
+#
+# Per-asset-class threshold overrides (any field omitted → uses global default).
+# [overlays.volatility.gold]
+# vol_ratio_threshold = 1.3
+# scale_factor = 0.3
+# until_days = 2
+#
+# [overlays.volatility.equity]
+# vol_ratio_threshold = 1.8
+# severe_vol_ratio_threshold = 2.5
+#
+# [overlays.volatility.forex]
+# atr_pct_threshold = 0.015
+# move_k = 1.2
 
 # News overlay — deterministic actions from a local JSON feed file.
 # Events are matched by date (point-in-time). Each event maps to an overlay action.
@@ -165,3 +179,12 @@ enabled = false
 # max_cycle_secs = 300              # Per-cycle timeout (prevents hangs)
 # auto_update_data = false          # Auto-update CSVs from Yahoo once per day
 # update_timeout_secs = 300         # Timeout for data update
+
+# Notifications — fire-and-forget alerts on key events.
+# Events: daemon_start, daemon_stop, daemon_error, data_update_failed,
+#         severe_vol_trigger, overlay_applied, trade_executed
+#
+# [notify]
+# cmd = "/path/to/alert.sh"         # Shell command (receives QUANTBOT_EVENT, QUANTBOT_DETAIL, QUANTBOT_TIMESTAMP)
+# webhook_url = "https://hooks.slack.com/services/..."  # HTTP POST with JSON payload
+# timeout_secs = 5                  # Timeout for cmd / webhook
