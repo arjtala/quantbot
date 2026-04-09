@@ -1,0 +1,25 @@
+[Unit]
+Description=Quantbot Trading Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=QUANTBOT_BIN daemon --config QUANTBOT_DIR/config.toml --data-dir QUANTBOT_DIR/data
+WorkingDirectory=QUANTBOT_DIR
+EnvironmentFile=-%h/.config/quantbot/env
+Restart=on-failure
+RestartSec=60
+StartLimitBurst=3
+StartLimitIntervalSec=600
+
+# Logging goes to journalctl
+StandardOutput=journal
+StandardError=journal
+
+# Graceful shutdown
+KillSignal=SIGTERM
+TimeoutStopSec=360
+
+[Install]
+WantedBy=default.target
