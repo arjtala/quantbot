@@ -1,0 +1,31 @@
+# Paper-trade validation config for D2 + D3 overlay testing.
+# Uses paper engine (no IG connectivity needed).
+
+[execution]
+engine = "paper"
+
+[risk]
+max_gross_leverage = 2.5
+max_position_pct = 0.40
+max_drawdown_pct = 0.15
+
+# D2: Volatility overlay — deterministic triggers
+[overlays.volatility]
+enabled = true
+scale_factor = 0.5
+until_days = 1
+vol_short_days = 10
+vol_long_days = 60
+vol_ratio_threshold = 1.5
+severe_vol_ratio_threshold = 2.0
+atr_period = 14
+atr_pct_threshold = 0.02
+sigma_days = 60
+move_k = 1.5
+severe_move_k = 2.5
+
+# D3: News overlay — manual feed
+[overlays.news]
+enabled = true
+feed_path = "data/news_feed.json"
+default_until_days = 1
