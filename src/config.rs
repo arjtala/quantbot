@@ -190,6 +190,23 @@ impl BlendConfig {
     }
 }
 
+// ─── Daemon Config ──────────────────────────────────────────────
+
+fn default_interval_secs() -> u64 {
+    3600
+}
+fn default_max_consecutive_failures() -> u32 {
+    5
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DaemonConfig {
+    #[serde(default = "default_interval_secs")]
+    pub interval_secs: u64,
+    #[serde(default = "default_max_consecutive_failures")]
+    pub max_consecutive_failures: u32,
+}
+
 // ─── App Config ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,6 +214,7 @@ pub struct AppConfig {
     pub execution: ExecutionConfig,
     pub risk: Option<RiskConfig>,
     pub overlays: Option<OverlayConfig>,
+    pub daemon: Option<DaemonConfig>,
     #[cfg(feature = "track-b")]
     pub llm: Option<LlmConfig>,
     #[cfg(feature = "track-b")]
@@ -714,5 +732,35 @@ vol_ratio_threshold = 1.8
         assert_eq!(vol.sigma_days, 60);
         assert_eq!(vol.move_k, 1.5);
         assert_eq!(vol.severe_move_k, 2.5);
+    }
+
+    #[test]
+    fn daemon_config_defaults() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[daemon]
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let daemon = config.daemon.unwrap();
+        assert_eq!(daemon.interval_secs, 3600);
+        assert_eq!(daemon.max_consecutive_failures, 5);
+    }
+
+    #[test]
+    fn daemon_config_custom() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[daemon]
+interval_secs = 1800
+max_consecutive_failures = 3
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let daemon = config.daemon.unwrap();
+        assert_eq!(daemon.interval_secs, 1800);
+        assert_eq!(daemon.max_consecutive_failures, 3);
     }
 }

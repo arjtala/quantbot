@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -56,6 +57,8 @@ enum Command {
     PaperTrade(PaperTradeArgs),
     /// Live trade with IG execution
     Live(LiveArgs),
+    /// Run as a daemon — periodically execute live trading cycles
+    Daemon(DaemonArgs),
     /// Show current IG positions
     Positions(PositionsArgs),
     /// Query trading history from SQLite database
@@ -370,6 +373,77 @@ struct LiveArgs {
 }
 
 #[derive(Parser)]
+struct DaemonArgs {
+    /// Path to TOML configuration file
+    #[arg(long)]
+    config: PathBuf,
+
+    /// Dry run — compute targets and print orders without executing
+    #[arg(long)]
+    dry_run: bool,
+
+    /// Path to state file for position persistence
+    #[arg(long, default_value = "data/live-state.json")]
+    state_file: PathBuf,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
+
+    /// Initial portfolio cash (NAV)
+    #[arg(long, default_value_t = 1_000_000.0)]
+    initial_cash: f64,
+
+    /// Annualized volatility target
+    #[arg(long, default_value_t = 0.40)]
+    vol_target: f64,
+
+    /// Maximum gross leverage
+    #[arg(long, default_value_t = 2.0)]
+    max_gross_leverage: f64,
+
+    /// Maximum position size as fraction of NAV
+    #[arg(long, default_value_t = 0.20)]
+    max_position_pct: f64,
+
+    /// Minimum bars of history required before trading
+    #[arg(long, default_value_t = 252)]
+    min_history: usize,
+
+    /// Output results as JSON
+    #[arg(long)]
+    json: bool,
+
+    /// Filter to a single instrument (safety valve for testing)
+    #[arg(long)]
+    instrument: Option<String>,
+
+    /// Maximum number of orders to place in a single run
+    #[arg(long, default_value_t = 6)]
+    max_orders: usize,
+
+    /// Maximum size per order (prevents oversized trades)
+    #[arg(long)]
+    max_size: Option<f64>,
+
+    /// Allow stale data (skip freshness check)
+    #[arg(long)]
+    allow_stale: bool,
+
+    /// Maximum days of data staleness before refusing to trade (default: 3)
+    #[arg(long, default_value_t = 3)]
+    max_stale_days: u32,
+
+    /// Path to PID lock file
+    #[arg(long, default_value = "data/daemon.pid")]
+    pid_file: PathBuf,
+
+    /// Path to checkpoint file
+    #[arg(long, default_value = "data/daemon-checkpoint.json")]
+    checkpoint_file: PathBuf,
+}
+
+#[derive(Parser)]
 struct PaperTradeArgs {
     /// Comma-separated instrument symbols (default: tradeable universe)
     #[arg(long, value_delimiter = ',')]
@@ -452,6 +526,7 @@ async fn main() {
         Command::Backtest(args) => run_backtest(args),
         Command::PaperTrade(args) => run_paper_trade(args),
         Command::Live(args) => run_live(args).await,
+        Command::Daemon(args) => run_daemon(args).await,
         Command::Positions(args) => run_positions(args).await,
         Command::History(args) => run_history(args),
         Command::Data(args) => run_data(args).await,
@@ -1822,6 +1897,244 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
         print_paper_trade_report(&snapshot, nav, prior_state.as_ref());
     }
 
+    Ok(())
+}
+
+// ─── Daemon ──────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct DaemonCheckpoint {
+    last_run_id: String,
+    last_run_time: String,
+    outcome: String,
+    consecutive_failures: u32,
+    total_cycles: u64,
+    next_run_at: String,
+}
+
+impl DaemonArgs {
+    fn to_live_args(&self) -> LiveArgs {
+        LiveArgs {
+            config: self.config.clone(),
+            dry_run: self.dry_run,
+            state_file: self.state_file.clone(),
+            data_dir: self.data_dir.clone(),
+            initial_cash: self.initial_cash,
+            vol_target: self.vol_target,
+            max_gross_leverage: self.max_gross_leverage,
+            max_position_pct: self.max_position_pct,
+            min_history: self.min_history,
+            json: self.json,
+            instrument: self.instrument.clone(),
+            max_orders: self.max_orders,
+            max_size: self.max_size,
+            allow_stale: self.allow_stale,
+            max_stale_days: self.max_stale_days,
+            flatten: false,
+        }
+    }
+}
+
+fn load_checkpoint(path: &Path) -> Result<Option<DaemonCheckpoint>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let contents = std::fs::read_to_string(path)
+        .with_context(|| format!("failed to read checkpoint: {}", path.display()))?;
+    let cp: DaemonCheckpoint = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse checkpoint: {}", path.display()))?;
+    Ok(Some(cp))
+}
+
+fn save_checkpoint(path: &Path, cp: &DaemonCheckpoint) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create dir: {}", parent.display()))?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    let json = serde_json::to_string_pretty(cp).context("failed to serialize checkpoint")?;
+    std::fs::write(&tmp, &json)
+        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("failed to rename {} → {}", tmp.display(), path.display()))?;
+    Ok(())
+}
+
+fn acquire_pid_lock(path: &Path) -> Result<std::fs::File> {
+    use fs2::FileExt;
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create dir: {}", parent.display()))?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .read(true)
+        .open(path)
+        .with_context(|| format!("failed to open PID file: {}", path.display()))?;
+
+    file.try_lock_exclusive()
+        .with_context(|| format!(
+            "another daemon is already running (PID file locked: {})",
+            path.display()
+        ))?;
+
+    // Write current PID for diagnostics
+    let mut f = &file;
+    f.write_all(format!("{}\n", std::process::id()).as_bytes())
+        .with_context(|| "failed to write PID")?;
+
+    Ok(file)
+}
+
+async fn run_daemon(args: DaemonArgs) -> Result<()> {
+    use quantbot::config::DaemonConfig;
+
+    // Acquire PID lock (held for daemon lifetime — released on drop/exit/crash)
+    let _pid_lock = acquire_pid_lock(&args.pid_file)?;
+    eprintln!("Daemon started (PID {})", std::process::id());
+
+    // Load config for daemon settings
+    let app_config = AppConfig::load(&args.config)
+        .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+
+    let daemon_config = app_config.daemon.unwrap_or(DaemonConfig {
+        interval_secs: 3600,
+        max_consecutive_failures: 5,
+    });
+
+    let mut interval_secs = daemon_config.interval_secs;
+    let mut max_failures = daemon_config.max_consecutive_failures;
+
+    // Load checkpoint for resume
+    let mut consecutive_failures: u32 = 0;
+    let mut total_cycles: u64 = 0;
+
+    if let Some(cp) = load_checkpoint(&args.checkpoint_file)? {
+        consecutive_failures = cp.consecutive_failures;
+        total_cycles = cp.total_cycles;
+        eprintln!(
+            "  Resuming from checkpoint: {} cycles, {} consecutive failures, last outcome: {}",
+            cp.total_cycles, cp.consecutive_failures, cp.outcome
+        );
+    }
+
+    // Set up interval — first tick fires immediately
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // Set up signal handling
+    #[cfg(unix)]
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+
+    loop {
+        let should_run;
+
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                _ = interval.tick() => { should_run = true; }
+                _ = tokio::signal::ctrl_c() => {
+                    eprintln!("\nReceived SIGINT, shutting down gracefully...");
+                    should_run = false;
+                }
+                _ = sigterm.recv() => {
+                    eprintln!("\nReceived SIGTERM, shutting down gracefully...");
+                    should_run = false;
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            tokio::select! {
+                _ = interval.tick() => { should_run = true; }
+                _ = tokio::signal::ctrl_c() => {
+                    eprintln!("\nReceived SIGINT, shutting down gracefully...");
+                    should_run = false;
+                }
+            }
+        }
+
+        if !should_run {
+            break;
+        }
+
+        total_cycles += 1;
+        let cycle_start = chrono::Utc::now();
+        eprintln!("\n── Daemon cycle {} at {} ──", total_cycles, cycle_start.format("%Y-%m-%dT%H:%M:%SZ"));
+
+        let live_args = args.to_live_args();
+        let result = run_live(live_args).await;
+
+        let outcome = match &result {
+            Ok(()) => "SUCCESS".to_string(),
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if msg.contains("risk veto") {
+                    "RISK_VETO".to_string()
+                } else if msg.contains("stale") {
+                    "STALE_DATA".to_string()
+                } else {
+                    format!("ERROR: {msg}")
+                }
+            }
+        };
+
+        let is_failure = outcome.starts_with("ERROR");
+        if is_failure {
+            consecutive_failures += 1;
+            eprintln!("  Cycle {total_cycles} failed ({consecutive_failures} consecutive): {outcome}");
+        } else {
+            consecutive_failures = 0;
+            eprintln!("  Cycle {total_cycles} completed: {outcome}");
+        }
+
+        // Re-read config each cycle to pick up changes (including interval)
+        if let Ok(fresh_config) = AppConfig::load(&args.config) {
+            if let Some(dc) = fresh_config.daemon {
+                if dc.interval_secs != interval_secs {
+                    eprintln!("  Interval changed: {}s → {}s", interval_secs, dc.interval_secs);
+                    interval_secs = dc.interval_secs;
+                    interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+                    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                    // Consume the immediate first tick so we don't re-run right away
+                    interval.tick().await;
+                }
+                max_failures = dc.max_consecutive_failures;
+            }
+        }
+
+        // Compute next_run_at
+        let next_run_at = (chrono::Utc::now() + chrono::Duration::seconds(interval_secs as i64))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+
+        let checkpoint = DaemonCheckpoint {
+            last_run_id: cycle_start.format("%Y%m%d_%H%M%S").to_string(),
+            last_run_time: cycle_start.format("%Y-%m-%dT%H:%M:%SZ").to_string(),
+            outcome: outcome.clone(),
+            consecutive_failures,
+            total_cycles,
+            next_run_at,
+        };
+
+        if let Err(e) = save_checkpoint(&args.checkpoint_file, &checkpoint) {
+            eprintln!("  Warning: failed to save checkpoint: {e}");
+        }
+
+        if consecutive_failures >= max_failures {
+            bail!(
+                "daemon exiting: {} consecutive failures (max {})",
+                consecutive_failures,
+                max_failures
+            );
+        }
+    }
+
+    eprintln!("Daemon stopped after {} cycles", total_cycles);
     Ok(())
 }
 
@@ -3370,7 +3683,6 @@ async fn run_data(args: DataArgs) -> Result<()> {
 
     Ok(())
 }
-
 #[cfg(all(test, feature = "track-b"))]
 mod attribution_tests {
     use super::*;
@@ -3707,5 +4019,128 @@ mod disagreement_tests {
         assert_eq!(report.gold_indicator_days, 0);
         assert_eq!(report.sign_flips.len(), 0);
         assert_eq!(report.dampened.len(), 0);
+    }
+}
+
+#[cfg(test)]
+mod daemon_tests {
+    use super::*;
+
+    #[test]
+    fn checkpoint_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.json");
+
+        let cp = DaemonCheckpoint {
+            last_run_id: "daemon-20260409T120000Z".to_string(),
+            last_run_time: "2026-04-09T12:00:00Z".to_string(),
+            outcome: "SUCCESS".to_string(),
+            consecutive_failures: 0,
+            total_cycles: 5,
+            next_run_at: "2026-04-09T13:00:00Z".to_string(),
+        };
+
+        save_checkpoint(&path, &cp).unwrap();
+        let loaded = load_checkpoint(&path).unwrap().unwrap();
+
+        assert_eq!(loaded.last_run_id, "daemon-20260409T120000Z");
+        assert_eq!(loaded.outcome, "SUCCESS");
+        assert_eq!(loaded.consecutive_failures, 0);
+        assert_eq!(loaded.total_cycles, 5);
+        assert_eq!(loaded.next_run_at, "2026-04-09T13:00:00Z");
+    }
+
+    #[test]
+    fn missing_checkpoint_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.json");
+        let result = load_checkpoint(&path).unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn atomic_write_no_tmp_leftover() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.json");
+
+        let cp = DaemonCheckpoint {
+            last_run_id: "test".to_string(),
+            last_run_time: "2026-04-09T12:00:00Z".to_string(),
+            outcome: "SUCCESS".to_string(),
+            consecutive_failures: 0,
+            total_cycles: 1,
+            next_run_at: "2026-04-09T13:00:00Z".to_string(),
+        };
+
+        save_checkpoint(&path, &cp).unwrap();
+
+        // Final file exists
+        assert!(path.exists());
+        // Temp file cleaned up by rename
+        assert!(!path.with_extension("json.tmp").exists());
+    }
+
+    #[test]
+    fn to_live_args_forwards_fields_flatten_false() {
+        let daemon_args = DaemonArgs {
+            config: PathBuf::from("test.toml"),
+            dry_run: true,
+            state_file: PathBuf::from("data/live-state.json"),
+            data_dir: PathBuf::from("data"),
+            initial_cash: 500_000.0,
+            vol_target: 0.30,
+            max_gross_leverage: 1.5,
+            max_position_pct: 0.15,
+            min_history: 100,
+            json: true,
+            instrument: Some("SPY".to_string()),
+            max_orders: 3,
+            max_size: Some(10.0),
+            allow_stale: true,
+            max_stale_days: 5,
+            pid_file: PathBuf::from("data/daemon.pid"),
+            checkpoint_file: PathBuf::from("data/daemon-checkpoint.json"),
+        };
+
+        let live = daemon_args.to_live_args();
+
+        assert_eq!(live.config, PathBuf::from("test.toml"));
+        assert!(live.dry_run);
+        assert_eq!(live.initial_cash, 500_000.0);
+        assert_eq!(live.vol_target, 0.30);
+        assert_eq!(live.max_gross_leverage, 1.5);
+        assert_eq!(live.max_position_pct, 0.15);
+        assert_eq!(live.min_history, 100);
+        assert!(live.json);
+        assert_eq!(live.instrument, Some("SPY".to_string()));
+        assert_eq!(live.max_orders, 3);
+        assert_eq!(live.max_size, Some(10.0));
+        assert!(!live.flatten); // Always false in daemon mode
+        assert!(live.allow_stale);
+        assert_eq!(live.max_stale_days, 5);
+    }
+
+    #[test]
+    fn pid_lock_prevents_second_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.pid");
+
+        let _lock1 = acquire_pid_lock(&path).unwrap();
+        let result = acquire_pid_lock(&path);
+        assert!(result.is_err());
+        assert!(
+            format!("{:#}", result.unwrap_err()).contains("already running")
+        );
+    }
+
+    #[test]
+    fn pid_lock_writes_pid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("daemon.pid");
+
+        let _lock = acquire_pid_lock(&path).unwrap();
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let pid: u32 = contents.trim().parse().unwrap();
+        assert_eq!(pid, std::process::id());
     }
 }

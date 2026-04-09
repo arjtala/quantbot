@@ -1,6 +1,12 @@
 [execution]
 engine = "ig"
 
+# Daemon mode — run live trading cycles periodically.
+# Omit [daemon] section to use defaults (3600s interval, 5 max failures).
+# [daemon]
+# interval_secs = 3600              # seconds between trading cycles
+# max_consecutive_failures = 5      # exit after N consecutive errors
+
 # Risk limits — hard veto if any check fails (no orders placed).
 # Omit [risk] section to disable risk checks entirely.
 [risk]
@@ -148,3 +154,11 @@ enabled = false
 # [blending.gating]
 # min_confidence = 0.70       # Minimum indicator confidence (0.0 = no gate)
 # min_abs_strength = 0.30     # Minimum |strength| (0.0 = no gate)
+
+# Daemon mode — periodic trading cycles.
+# Configure interval and failure thresholds for `quantbot daemon`.
+# Omit [daemon] section to use defaults (3600s interval, 5 max failures).
+#
+# [daemon]
+# interval_secs = 3600              # Seconds between trading cycles
+# max_consecutive_failures = 5      # Exit after N consecutive errors
