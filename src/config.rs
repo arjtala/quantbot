@@ -198,6 +198,9 @@ fn default_interval_secs() -> u64 {
 fn default_max_consecutive_failures() -> u32 {
     5
 }
+fn default_max_cycle_secs() -> u64 {
+    300
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
@@ -205,6 +208,8 @@ pub struct DaemonConfig {
     pub interval_secs: u64,
     #[serde(default = "default_max_consecutive_failures")]
     pub max_consecutive_failures: u32,
+    #[serde(default = "default_max_cycle_secs")]
+    pub max_cycle_secs: u64,
 }
 
 // ─── App Config ──────────────────────────────────────────────────
@@ -746,6 +751,7 @@ engine = "paper"
         let daemon = config.daemon.unwrap();
         assert_eq!(daemon.interval_secs, 3600);
         assert_eq!(daemon.max_consecutive_failures, 5);
+        assert_eq!(daemon.max_cycle_secs, 300);
     }
 
     #[test]
@@ -757,10 +763,12 @@ engine = "paper"
 [daemon]
 interval_secs = 1800
 max_consecutive_failures = 3
+max_cycle_secs = 600
 "#;
         let config: AppConfig = toml::from_str(toml_str).unwrap();
         let daemon = config.daemon.unwrap();
         assert_eq!(daemon.interval_secs, 1800);
         assert_eq!(daemon.max_consecutive_failures, 3);
+        assert_eq!(daemon.max_cycle_secs, 600);
     }
 }

@@ -2003,10 +2003,12 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
     let daemon_config = app_config.daemon.unwrap_or(DaemonConfig {
         interval_secs: 3600,
         max_consecutive_failures: 5,
+        max_cycle_secs: 300,
     });
 
     let mut interval_secs = daemon_config.interval_secs;
     let mut max_failures = daemon_config.max_consecutive_failures;
+    let mut max_cycle_secs = daemon_config.max_cycle_secs;
 
     // Load checkpoint for resume
     let mut consecutive_failures: u32 = 0;
@@ -2067,7 +2069,15 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         eprintln!("\n── Daemon cycle {} at {} ──", total_cycles, cycle_start.format("%Y-%m-%dT%H:%M:%SZ"));
 
         let live_args = args.to_live_args();
-        let result = run_live(live_args).await;
+        let timeout = tokio::time::Duration::from_secs(max_cycle_secs);
+        let result = match tokio::time::timeout(timeout, run_live(live_args)).await {
+            Ok(r) => r,
+            Err(_) => Err(anyhow::anyhow!("cycle timed out after {max_cycle_secs}s")),
+        };
+
+        let elapsed = chrono::Utc::now()
+            .signed_duration_since(cycle_start)
+            .num_seconds();
 
         let outcome = match &result {
             Ok(()) => "SUCCESS".to_string(),
@@ -2086,10 +2096,8 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         let is_failure = outcome.starts_with("ERROR");
         if is_failure {
             consecutive_failures += 1;
-            eprintln!("  Cycle {total_cycles} failed ({consecutive_failures} consecutive): {outcome}");
         } else {
             consecutive_failures = 0;
-            eprintln!("  Cycle {total_cycles} completed: {outcome}");
         }
 
         // Re-read config each cycle to pick up changes (including interval)
@@ -2104,6 +2112,7 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
                     interval.tick().await;
                 }
                 max_failures = dc.max_consecutive_failures;
+                max_cycle_secs = dc.max_cycle_secs;
             }
         }
 
@@ -2111,6 +2120,11 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         let next_run_at = (chrono::Utc::now() + chrono::Duration::seconds(interval_secs as i64))
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
+
+        eprintln!(
+            "DAEMON cycle={} outcome={} duration={}s failures={} next={}",
+            total_cycles, outcome, elapsed, consecutive_failures, next_run_at
+        );
 
         let checkpoint = DaemonCheckpoint {
             last_run_id: cycle_start.format("%Y%m%d_%H%M%S").to_string(),

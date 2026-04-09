@@ -162,3 +162,4 @@ enabled = false
 # [daemon]
 # interval_secs = 3600              # Seconds between trading cycles
 # max_consecutive_failures = 5      # Exit after N consecutive errors
+# max_cycle_secs = 300              # Per-cycle timeout (prevents hangs)
