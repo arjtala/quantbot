@@ -163,3 +163,5 @@ enabled = false
 # interval_secs = 3600              # Seconds between trading cycles
 # max_consecutive_failures = 5      # Exit after N consecutive errors
 # max_cycle_secs = 300              # Per-cycle timeout (prevents hangs)
+# auto_update_data = false          # Auto-update CSVs from Yahoo once per day
+# update_timeout_secs = 300         # Timeout for data update

@@ -1910,6 +1910,8 @@ struct DaemonCheckpoint {
     consecutive_failures: u32,
     total_cycles: u64,
     next_run_at: String,
+    #[serde(default)]
+    last_update_date: Option<String>,
 }
 
 impl DaemonArgs {
@@ -2004,19 +2006,25 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         interval_secs: 3600,
         max_consecutive_failures: 5,
         max_cycle_secs: 300,
+        auto_update_data: false,
+        update_timeout_secs: 300,
     });
 
     let mut interval_secs = daemon_config.interval_secs;
     let mut max_failures = daemon_config.max_consecutive_failures;
     let mut max_cycle_secs = daemon_config.max_cycle_secs;
+    let mut auto_update_data = daemon_config.auto_update_data;
+    let mut update_timeout_secs = daemon_config.update_timeout_secs;
 
     // Load checkpoint for resume
     let mut consecutive_failures: u32 = 0;
     let mut total_cycles: u64 = 0;
+    let mut last_update_date: Option<String> = None;
 
     if let Some(cp) = load_checkpoint(&args.checkpoint_file)? {
         consecutive_failures = cp.consecutive_failures;
         total_cycles = cp.total_cycles;
+        last_update_date = cp.last_update_date.clone();
         eprintln!(
             "  Resuming from checkpoint: {} cycles, {} consecutive failures, last outcome: {}",
             cp.total_cycles, cp.consecutive_failures, cp.outcome
@@ -2068,6 +2076,78 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         let cycle_start = chrono::Utc::now();
         eprintln!("\n── Daemon cycle {} at {} ──", total_cycles, cycle_start.format("%Y-%m-%dT%H:%M:%SZ"));
 
+        // ── Auto-update data (once per eval_date) ─────────────────
+        if auto_update_data {
+            let today = chrono::Utc::now().date_naive().to_string();
+            let needs_update = last_update_date.as_deref() != Some(&today);
+
+            if needs_update {
+                eprintln!("  Updating market data for {today}...");
+                let symbols: Vec<String> = TRADEABLE_UNIVERSE
+                    .iter()
+                    .map(|i| i.symbol.clone())
+                    .collect();
+                let updater = DataUpdater::new(&args.data_dir);
+                let mut client = YahooClient::new();
+                let update_timeout = tokio::time::Duration::from_secs(update_timeout_secs);
+                let update_date = chrono::Utc::now().date_naive();
+
+                match tokio::time::timeout(
+                    update_timeout,
+                    updater.update_all(&mut client, &symbols, update_date),
+                )
+                .await
+                {
+                    Ok(results) => {
+                        let failed: Vec<_> = results
+                            .iter()
+                            .filter(|r| r.error.is_some())
+                            .collect();
+                        if failed.is_empty() {
+                            eprintln!("  Data update complete ({} symbols)", results.len());
+                            last_update_date = Some(today);
+                        } else if failed.len() < results.len() {
+                            eprintln!(
+                                "  Data update partial: {}/{} failed",
+                                failed.len(),
+                                results.len()
+                            );
+                            for r in &failed {
+                                eprintln!(
+                                    "    {}: {}",
+                                    r.symbol,
+                                    r.error.as_deref().unwrap_or("unknown")
+                                );
+                            }
+                            // Partial success — some instruments are fresh
+                            last_update_date = Some(today);
+                        } else {
+                            eprintln!(
+                                "  Data update failed: all {}/{} symbols failed",
+                                failed.len(),
+                                results.len()
+                            );
+                            for r in &failed {
+                                eprintln!(
+                                    "    {}: {}",
+                                    r.symbol,
+                                    r.error.as_deref().unwrap_or("unknown")
+                                );
+                            }
+                            // Total failure — will retry next cycle
+                        }
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "  Data update timed out after {update_timeout_secs}s, skipping trading"
+                        );
+                        // Don't count as daemon failure — will retry next cycle
+                        continue;
+                    }
+                }
+            }
+        }
+
         let live_args = args.to_live_args();
         let timeout = tokio::time::Duration::from_secs(max_cycle_secs);
         let result = match tokio::time::timeout(timeout, run_live(live_args)).await {
@@ -2113,6 +2193,8 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
                 }
                 max_failures = dc.max_consecutive_failures;
                 max_cycle_secs = dc.max_cycle_secs;
+                auto_update_data = dc.auto_update_data;
+                update_timeout_secs = dc.update_timeout_secs;
             }
         }
 
@@ -2133,6 +2215,7 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
             consecutive_failures,
             total_cycles,
             next_run_at,
+            last_update_date: last_update_date.clone(),
         };
 
         if let Err(e) = save_checkpoint(&args.checkpoint_file, &checkpoint) {
@@ -4052,6 +4135,7 @@ mod daemon_tests {
             consecutive_failures: 0,
             total_cycles: 5,
             next_run_at: "2026-04-09T13:00:00Z".to_string(),
+            last_update_date: Some("2026-04-09".to_string()),
         };
 
         save_checkpoint(&path, &cp).unwrap();
@@ -4062,6 +4146,7 @@ mod daemon_tests {
         assert_eq!(loaded.consecutive_failures, 0);
         assert_eq!(loaded.total_cycles, 5);
         assert_eq!(loaded.next_run_at, "2026-04-09T13:00:00Z");
+        assert_eq!(loaded.last_update_date.as_deref(), Some("2026-04-09"));
     }
 
     #[test]
@@ -4084,6 +4169,7 @@ mod daemon_tests {
             consecutive_failures: 0,
             total_cycles: 1,
             next_run_at: "2026-04-09T13:00:00Z".to_string(),
+            last_update_date: None,
         };
 
         save_checkpoint(&path, &cp).unwrap();
@@ -4156,5 +4242,25 @@ mod daemon_tests {
         let contents = std::fs::read_to_string(&path).unwrap();
         let pid: u32 = contents.trim().parse().unwrap();
         assert_eq!(pid, std::process::id());
+    }
+
+    #[test]
+    fn checkpoint_backward_compat_no_update_date() {
+        // Old checkpoints without last_update_date should still deserialize
+        let json = r#"{
+            "last_run_id": "test",
+            "last_run_time": "2026-04-09T12:00:00Z",
+            "outcome": "SUCCESS",
+            "consecutive_failures": 0,
+            "total_cycles": 1,
+            "next_run_at": "2026-04-09T13:00:00Z"
+        }"#;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("checkpoint.json");
+        std::fs::write(&path, json).unwrap();
+
+        let cp = load_checkpoint(&path).unwrap().unwrap();
+        assert!(cp.last_update_date.is_none());
+        assert_eq!(cp.total_cycles, 1);
     }
 }

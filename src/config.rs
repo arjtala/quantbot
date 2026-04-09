@@ -201,6 +201,9 @@ fn default_max_consecutive_failures() -> u32 {
 fn default_max_cycle_secs() -> u64 {
     300
 }
+fn default_update_timeout_secs() -> u64 {
+    300
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
@@ -210,6 +213,10 @@ pub struct DaemonConfig {
     pub max_consecutive_failures: u32,
     #[serde(default = "default_max_cycle_secs")]
     pub max_cycle_secs: u64,
+    #[serde(default)]
+    pub auto_update_data: bool,
+    #[serde(default = "default_update_timeout_secs")]
+    pub update_timeout_secs: u64,
 }
 
 // ─── App Config ──────────────────────────────────────────────────
@@ -752,6 +759,8 @@ engine = "paper"
         assert_eq!(daemon.interval_secs, 3600);
         assert_eq!(daemon.max_consecutive_failures, 5);
         assert_eq!(daemon.max_cycle_secs, 300);
+        assert!(!daemon.auto_update_data);
+        assert_eq!(daemon.update_timeout_secs, 300);
     }
 
     #[test]
@@ -764,11 +773,15 @@ engine = "paper"
 interval_secs = 1800
 max_consecutive_failures = 3
 max_cycle_secs = 600
+auto_update_data = true
+update_timeout_secs = 120
 "#;
         let config: AppConfig = toml::from_str(toml_str).unwrap();
         let daemon = config.daemon.unwrap();
         assert_eq!(daemon.interval_secs, 1800);
         assert_eq!(daemon.max_consecutive_failures, 3);
         assert_eq!(daemon.max_cycle_secs, 600);
+        assert!(daemon.auto_update_data);
+        assert_eq!(daemon.update_timeout_secs, 120);
     }
 }
