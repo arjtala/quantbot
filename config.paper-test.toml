@@ -4,6 +4,48 @@
 [execution]
 engine = "paper"
 
+# IG instrument list required by run_live for symbol resolution,
+# even in paper/dry-run mode (no IG connection made).
+[execution.ig]
+environment = "DEMO"
+account_id = "PAPER"
+
+[execution.ig.instruments."SPY"]
+epic = "IX.D.SPTRD.DAILY.IP"
+min_size = 0.1
+size_step = 0.1
+ig_point_value = 1.0
+
+[execution.ig.instruments."GC=F"]
+epic = "CC.D.GC.USS.IP"
+min_size = 1.0
+size_step = 1.0
+ig_point_value = 1.0
+
+[execution.ig.instruments."GLD"]
+epic = "UC.D.GLDUS.DAILY.IP"
+min_size = 1.0
+size_step = 1.0
+ig_point_value = 1.0
+
+[execution.ig.instruments."GBPUSD=X"]
+epic = "CS.D.GBPUSD.TODAY.IP"
+min_size = 0.5
+size_step = 0.1
+ig_point_value = 10000.0
+
+[execution.ig.instruments."USDCHF=X"]
+epic = "CS.D.USDCHF.TODAY.IP"
+min_size = 0.5
+size_step = 0.1
+ig_point_value = 10000.0
+
+[execution.ig.instruments."USDJPY=X"]
+epic = "CS.D.USDJPY.TODAY.IP"
+min_size = 0.5
+size_step = 0.1
+ig_point_value = 100.0
+
 [risk]
 max_gross_leverage = 2.5
 max_position_pct = 0.40
@@ -29,3 +71,9 @@ severe_move_k = 2.5
 enabled = true
 feed_path = "data/news_feed.json"
 default_until_days = 1
+
+# Daemon — short interval for smoke testing
+[daemon]
+interval_secs = 30
+max_consecutive_failures = 3
+max_cycle_secs = 60
