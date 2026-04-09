@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -40,6 +40,7 @@ use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::reconcile;
 use quantbot::execution::router::SizedOrder;
 use quantbot::execution::traits::{ExecutionEngine, OrderRequest};
+use quantbot::notify::{Notifier, NotifyEvent};
 use quantbot::recording::{Recorder, SignalRecord};
 
 #[derive(Parser)]
@@ -370,6 +371,10 @@ struct LiveArgs {
     /// Maximum days of data staleness before refusing to trade (default: 3)
     #[arg(long, default_value_t = 3)]
     max_stale_days: u32,
+
+    /// Path to overlay dedup sidecar file (set by daemon for cross-cycle dedup)
+    #[arg(long)]
+    overlay_dedup_file: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -1916,6 +1921,13 @@ struct DaemonCheckpoint {
 
 impl DaemonArgs {
     fn to_live_args(&self) -> LiveArgs {
+        // Derive dedup file path from checkpoint file (sibling)
+        let dedup_file = self
+            .checkpoint_file
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("overlay-dedup.json");
+
         LiveArgs {
             config: self.config.clone(),
             dry_run: self.dry_run,
@@ -1933,6 +1945,7 @@ impl DaemonArgs {
             allow_stale: self.allow_stale,
             max_stale_days: self.max_stale_days,
             flatten: false,
+            overlay_dedup_file: Some(dedup_file),
         }
     }
 }
@@ -1960,6 +1973,22 @@ fn save_checkpoint(path: &Path, cp: &DaemonCheckpoint) -> Result<()> {
     std::fs::rename(&tmp, path)
         .with_context(|| format!("failed to rename {} → {}", tmp.display(), path.display()))?;
     Ok(())
+}
+
+fn load_dedup_keys(path: &Path) -> HashSet<String> {
+    if !path.exists() {
+        return HashSet::new();
+    }
+    match std::fs::read_to_string(path) {
+        Ok(contents) => serde_json::from_str(&contents).unwrap_or_default(),
+        Err(_) => HashSet::new(),
+    }
+}
+
+fn save_dedup_keys(path: &Path, keys: &HashSet<String>) {
+    if let Ok(json) = serde_json::to_string(keys) {
+        let _ = std::fs::write(path, json);
+    }
 }
 
 fn acquire_pid_lock(path: &Path) -> Result<std::fs::File> {
@@ -2001,6 +2030,15 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
     // Load config for daemon settings
     let app_config = AppConfig::load(&args.config)
         .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+
+    // Set up notifier
+    let notifier = app_config
+        .notify
+        .as_ref()
+        .map(|nc| Notifier::new(nc.clone()));
+    if let Some(ref n) = notifier {
+        n.notify(NotifyEvent::DaemonStart, &format!("PID {}", std::process::id()));
+    }
 
     let daemon_config = app_config.daemon.unwrap_or(DaemonConfig {
         interval_secs: 3600,
@@ -2135,6 +2173,9 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
                                 );
                             }
                             // Total failure — will retry next cycle
+                            if let Some(ref n) = notifier {
+                                n.notify(NotifyEvent::DataUpdateFailed, &format!("all {} symbols failed", failed.len()));
+                            }
                         }
                     }
                     Err(_) => {
@@ -2176,6 +2217,9 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         let is_failure = outcome.starts_with("ERROR");
         if is_failure {
             consecutive_failures += 1;
+            if let Some(ref n) = notifier {
+                n.notify(NotifyEvent::DaemonError, &outcome);
+            }
         } else {
             consecutive_failures = 0;
         }
@@ -2231,6 +2275,9 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         }
     }
 
+    if let Some(ref n) = notifier {
+        n.notify(NotifyEvent::DaemonStop, &format!("{total_cycles} cycles"));
+    }
     eprintln!("Daemon stopped after {} cycles", total_cycles);
     Ok(())
 }
@@ -2241,6 +2288,12 @@ async fn run_live(args: LiveArgs) -> Result<()> {
 
     let app_config = AppConfig::load(&args.config)
         .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+
+    // Set up notifier (if configured)
+    let notifier = app_config
+        .notify
+        .as_ref()
+        .map(|nc| Notifier::new(nc.clone()));
 
     // ── Handle --flatten early ──────────────────────────────────
     if args.flatten {
@@ -2510,6 +2563,20 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                 .map(|o| o.actions.len())
                 .unwrap_or(0);
         audit.log_volatility_triggers(&vol_triggers, vol_action_count);
+
+        // Notify on severe triggers
+        if let Some(vol_cfg) = app_config.overlays.as_ref().and_then(|o| o.volatility.as_ref()) {
+            let severe: Vec<&str> = vol_triggers
+                .iter()
+                .filter(|t| t.is_severe(&vol_cfg.thresholds_for(t.category)))
+                .map(|t| t.instrument.as_str())
+                .collect();
+            if !severe.is_empty() {
+                if let Some(ref n) = notifier {
+                    n.notify(NotifyEvent::SevereVolTrigger, &severe.join(", "));
+                }
+            }
+        }
     }
 
     // ── News overlay (deterministic, manual feed) ───────────────────
@@ -2545,6 +2612,21 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     if !news_triggers.is_empty() {
         let news_action_count = overlay_actions.len() - pre_news_count;
         audit.log_news_triggers(&news_triggers, news_action_count);
+    }
+
+    // ── Overlay dedup (daemon cross-cycle) ──────────────────────────
+    if let Some(ref dedup_path) = args.overlay_dedup_file {
+        let active_keys = load_dedup_keys(dedup_path);
+        let (deduped, skipped) =
+            quantbot::overlay::dedup_actions(overlay_actions, &active_keys, eval_date);
+        if skipped > 0 {
+            eprintln!(
+                "  Overlays: {} new, {} already active (skipped)",
+                deduped.len(),
+                skipped
+            );
+        }
+        overlay_actions = deduped;
     }
 
     #[cfg(feature = "track-b")]
@@ -2688,6 +2770,14 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     } else {
         (bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history), vec![])
     };
+
+    // Notify on overlay application
+    if !applied_overlays.is_empty() {
+        if let Some(ref n) = notifier {
+            let count = applied_overlays.len();
+            n.notify(NotifyEvent::OverlayApplied, &format!("{count} overlay(s) applied"));
+        }
+    }
 
     // Log targets
     let target_entries: Vec<TargetEntry> = snapshot
@@ -2932,15 +3022,24 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         }
     }
 
+    // ── Save dedup keys for daemon cross-cycle dedup ──────────────
+    if let Some(ref dedup_path) = args.overlay_dedup_file {
+        let mut active_keys = load_dedup_keys(dedup_path);
+        for action in &overlay_actions {
+            active_keys.insert(quantbot::overlay::dedup_key(action));
+        }
+        save_dedup_keys(dedup_path, &active_keys);
+    }
+
     let result = match app_config.execution.engine {
         EngineType::Paper => {
             let engine = PaperExecutionEngine::new();
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref()).await
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref(), notifier.as_ref()).await
         }
         EngineType::Ig => {
             // Reuse IG engine created for MTM (already authenticated)
             let engine = ig_engine.expect("IG engine already created for MTM");
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref()).await
+            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref(), notifier.as_ref()).await
         }
     };
 
@@ -2959,6 +3058,7 @@ async fn run_rebalance(
     engine_name: &str,
     audit: &mut AuditLogger,
     recorder: Option<&Recorder>,
+    notifier: Option<&Notifier>,
 ) -> Result<()> {
     let start_time = std::time::Instant::now();
     let mut orders_placed: usize = 0;
@@ -3172,6 +3272,13 @@ async fn run_rebalance(
             rec.record_orders_confirmed(&acks);
         }
         breaker.record_success();
+
+        // Notify on trade execution
+        if orders_confirmed > 0 && !args.dry_run {
+            if let Some(ref n) = notifier {
+                n.notify(NotifyEvent::TradeExecuted, &format!("{orders_confirmed} order(s) confirmed"));
+            }
+        }
     }
 
     // ── Post-trade verification ────────────────────────────────
@@ -3222,6 +3329,7 @@ async fn run_rebalance(
     } else {
         "SUCCESS"
     };
+
     finish(
         audit,
         outcome,
@@ -3410,11 +3518,12 @@ fn print_volatility_triggers(
     println!();
     println!("  VOLATILITY TRIGGERS");
     for t in triggers {
+        let th = cfg.thresholds_for(t.category);
         let mut fired = Vec::new();
         if let Some(vr) = t.vol_ratio {
-            let marker = if vr >= cfg.severe_vol_ratio_threshold {
+            let marker = if vr >= th.severe_vol_ratio_threshold {
                 " [SEVERE]"
-            } else if vr >= cfg.vol_ratio_threshold {
+            } else if vr >= th.vol_ratio_threshold {
                 " [FIRED]"
             } else {
                 ""
@@ -3422,7 +3531,7 @@ fn print_volatility_triggers(
             fired.push(format!("vol_ratio={vr:.2}{marker}"));
         }
         if let Some(ap) = t.atr_pct {
-            let marker = if ap >= cfg.atr_pct_threshold {
+            let marker = if ap >= th.atr_pct_threshold {
                 " [FIRED]"
             } else {
                 ""
@@ -3430,9 +3539,9 @@ fn print_volatility_triggers(
             fired.push(format!("atr_pct={ap:.4}{marker}"));
         }
         if let Some(ms) = t.move_sigma {
-            let marker = if ms >= cfg.severe_move_k {
+            let marker = if ms >= th.severe_move_k {
                 " [SEVERE]"
-            } else if ms >= cfg.move_k {
+            } else if ms >= th.move_k {
                 " [FIRED]"
             } else {
                 ""
