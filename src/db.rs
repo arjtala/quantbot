@@ -542,6 +542,47 @@ impl Db {
         Ok(())
     }
 
+    // ── Status Queries ─────────────────────────────────────────────
+
+    /// Get overlay actions that are still active (action_json contains "until" >= today).
+    /// Returns all overlay actions from the most recent run that recorded any.
+    pub fn active_overlay_actions(&self, today: chrono::NaiveDate) -> SqlResult<Vec<OverlayActionRow>> {
+        let today_str = today.to_string(); // YYYY-MM-DD
+        let mut stmt = self.conn.prepare(
+            "SELECT run_id, instrument, action_type, action_json, ts
+             FROM overlay_actions
+             WHERE json_extract(action_json, '$.until') >= ?1
+             ORDER BY ts DESC",
+        )?;
+        let rows = stmt.query_map(params![today_str], |row| {
+            Ok(OverlayActionRow {
+                run_id: row.get(0)?,
+                instrument: row.get(1)?,
+                action_type: row.get(2)?,
+                action_json: row.get(3)?,
+                ts: row.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Get positions from the most recent run (by started_at timestamp).
+    /// Returns only 'actual' positions (not 'target'), sorted by instrument.
+    pub fn latest_positions(&self) -> SqlResult<Vec<(String, f64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT instrument, signed_deal_size FROM positions
+             WHERE run_id = (SELECT run_id FROM runs ORDER BY started_at DESC LIMIT 1)
+               AND source = 'actual'
+             ORDER BY instrument",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let instrument: String = row.get(0)?;
+            let size: f64 = row.get(1)?;
+            Ok((instrument, size))
+        })?;
+        rows.collect()
+    }
+
     /// Look up a cached LLM response by cache key.
     pub fn get_llm_cache(&self, cache_key: &str) -> SqlResult<Option<LlmCacheEntry>> {
         let result = self.conn.query_row(
@@ -609,6 +650,15 @@ pub struct SignalRow {
     pub strength: f64,
     pub confidence: f64,
     pub weight: f64,
+    pub ts: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct OverlayActionRow {
+    pub run_id: String,
+    pub instrument: String,
+    pub action_type: String,
+    pub action_json: String,
     pub ts: String,
 }
 
@@ -1173,5 +1223,67 @@ mod tests {
         let db = Db::open_memory().unwrap();
         // Should not error on missing key
         db.delete_llm_cache("no_such_key").unwrap();
+    }
+
+    #[test]
+    fn active_overlay_actions_filters_by_date() {
+        let db = Db::open_memory().unwrap();
+        db.insert_run("run-1", "{}", 1e6).unwrap();
+
+        // Active overlay (until is in the future)
+        db.insert_overlay_action(
+            "run-1", "GLD", "ScaleExposure", 1.0, 0.5,
+            r#"{"factor":0.5,"until":"2099-12-31"}"#,
+        ).unwrap();
+
+        // Expired overlay (until is in the past)
+        db.insert_overlay_action(
+            "run-1", "SPY", "FreezeEntries", 1.0, 0.0,
+            r#"{"until":"2020-01-01"}"#,
+        ).unwrap();
+
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+        let active = db.active_overlay_actions(today).unwrap();
+        assert_eq!(active.len(), 1);
+        assert_eq!(active[0].instrument, "GLD");
+        assert_eq!(active[0].action_type, "ScaleExposure");
+    }
+
+    #[test]
+    fn active_overlay_actions_empty_when_none() {
+        let db = Db::open_memory().unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
+        let active = db.active_overlay_actions(today).unwrap();
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn latest_positions_from_most_recent_run() {
+        let db = Db::open_memory().unwrap();
+        db.insert_run("run-1", "{}", 1e6).unwrap();
+        db.insert_position("run-1", "GLD", 2.0, "actual").unwrap();
+        db.insert_position("run-1", "SPY", -1.5, "actual").unwrap();
+
+        // Sleep briefly to ensure run-2 has a later started_at
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        db.insert_run("run-2", "{}", 1.01e6).unwrap();
+        db.insert_position("run-2", "GLD", 3.0, "actual").unwrap();
+        db.insert_position("run-2", "GBPUSD=X", -0.5, "actual").unwrap();
+        // target positions should be excluded
+        db.insert_position("run-2", "SPY", 99.0, "target").unwrap();
+
+        let positions = db.latest_positions().unwrap();
+        assert_eq!(positions.len(), 2);
+        assert_eq!(positions[0].0, "GBPUSD=X");
+        assert_eq!(positions[0].1, -0.5);
+        assert_eq!(positions[1].0, "GLD");
+        assert_eq!(positions[1].1, 3.0);
+    }
+
+    #[test]
+    fn latest_positions_empty_when_no_runs() {
+        let db = Db::open_memory().unwrap();
+        let positions = db.latest_positions().unwrap();
+        assert!(positions.is_empty());
     }
 }

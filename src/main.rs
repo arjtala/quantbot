@@ -66,6 +66,8 @@ enum Command {
     History(HistoryArgs),
     /// Update CSV data from Yahoo Finance
     Data(DataArgs),
+    /// Show operational status (daemon, data, portfolio, overlays, recent runs)
+    Status(StatusArgs),
     /// Evaluate strategies offline
     #[cfg(feature = "track-b")]
     Eval(EvalArgs),
@@ -133,6 +135,37 @@ struct DataArgs {
     /// Output as JSON
     #[arg(long)]
     json: bool,
+}
+
+#[derive(Parser)]
+struct StatusArgs {
+    /// Path to TOML configuration file (needed for --live)
+    #[arg(long, default_value = "config.toml")]
+    config: PathBuf,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
+
+    /// Path to state file for position persistence
+    #[arg(long, default_value = "data/live-state.json")]
+    state_file: PathBuf,
+
+    /// Path to PID lock file
+    #[arg(long, default_value = "data/daemon.pid")]
+    pid_file: PathBuf,
+
+    /// Path to checkpoint file
+    #[arg(long, default_value = "data/daemon-checkpoint.json")]
+    checkpoint_file: PathBuf,
+
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+
+    /// Query IG for live positions (requires config with IG creds)
+    #[arg(long)]
+    live: bool,
 }
 
 #[cfg(feature = "track-b")]
@@ -535,6 +568,7 @@ async fn main() {
         Command::Positions(args) => run_positions(args).await,
         Command::History(args) => run_history(args),
         Command::Data(args) => run_data(args).await,
+        Command::Status(args) => run_status(args).await,
         #[cfg(feature = "track-b")]
         Command::Eval(args) => match args.command {
             EvalCommand::Replay(replay_args) => run_eval_replay(replay_args),
@@ -2173,7 +2207,7 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
                                 );
                             }
                             // Total failure — will retry next cycle
-                            if let Some(ref n) = notifier {
+                            if let Some(n) = &notifier {
                                 n.notify(NotifyEvent::DataUpdateFailed, &format!("all {} symbols failed", failed.len()));
                             }
                         }
@@ -2217,7 +2251,7 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         let is_failure = outcome.starts_with("ERROR");
         if is_failure {
             consecutive_failures += 1;
-            if let Some(ref n) = notifier {
+            if let Some(n) = &notifier {
                 n.notify(NotifyEvent::DaemonError, &outcome);
             }
         } else {
@@ -2572,7 +2606,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                 .map(|t| t.instrument.as_str())
                 .collect();
             if !severe.is_empty() {
-                if let Some(ref n) = notifier {
+                if let Some(n) = &notifier {
                     n.notify(NotifyEvent::SevereVolTrigger, &severe.join(", "));
                 }
             }
@@ -3275,7 +3309,7 @@ async fn run_rebalance(
 
         // Notify on trade execution
         if orders_confirmed > 0 && !args.dry_run {
-            if let Some(ref n) = notifier {
+            if let Some(n) = &notifier {
                 n.notify(NotifyEvent::TradeExecuted, &format!("{orders_confirmed} order(s) confirmed"));
             }
         }
@@ -3885,6 +3919,404 @@ async fn run_data(args: DataArgs) -> Result<()> {
 
     if any_error {
         bail!("Some symbols failed to update — see errors above");
+    }
+
+    Ok(())
+}
+
+// ─── Status ──────────────────────────────────────────────────────
+
+async fn run_status(args: StatusArgs) -> Result<()> {
+    let today = chrono::Utc::now().date_naive();
+
+    // ── 1. Daemon state ─────────────────────────────────────────
+    let daemon_running = {
+        use fs2::FileExt;
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&args.pid_file)
+        {
+            Ok(f) => {
+                if f.try_lock_exclusive().is_ok() {
+                    // We got the lock → no daemon running; unlock immediately
+                    let _ = f.unlock();
+                    false
+                } else {
+                    true
+                }
+            }
+            Err(_) => false, // PID file doesn't exist
+        }
+    };
+
+    let daemon_pid = if daemon_running {
+        std::fs::read_to_string(&args.pid_file)
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+    } else {
+        None
+    };
+
+    let checkpoint = load_checkpoint(&args.checkpoint_file).unwrap_or(None);
+
+    // ── 2. Data freshness ────────────────────────────────────────
+    let tradeable: Vec<String> = TRADEABLE_UNIVERSE
+        .iter()
+        .map(|i| i.symbol.clone())
+        .collect();
+
+    let loader = CsvLoader::new(&args.data_dir);
+    let mut freshness_items: Vec<(String, Option<NaiveDate>)> = Vec::new();
+    for sym in &tradeable {
+        let last_date = loader
+            .load_bars(sym, None, None)
+            .ok()
+            .and_then(|series| series.bars().last().map(|b| b.date));
+        freshness_items.push((sym.clone(), last_date));
+    }
+
+    let stale_errors = freshness::check_all_fresh(&freshness_items, today, 3);
+
+    // ── 3. Portfolio (local state file) ──────────────────────────
+    let state = load_state(&args.state_file).unwrap_or(None);
+
+    // ── 4. SQLite data ───────────────────────────────────────────
+    let db_path = args.data_dir.join("quantbot.db");
+    let db = if db_path.exists() {
+        Db::open(&db_path).ok()
+    } else {
+        None
+    };
+
+    let peak_nav = db.as_ref().and_then(|d| d.get_peak_nav().ok().flatten());
+    let recent_runs = db
+        .as_ref()
+        .map(|d| d.list_runs(3).unwrap_or_default())
+        .unwrap_or_default();
+    let active_overlays = db
+        .as_ref()
+        .map(|d| d.active_overlay_actions(today).unwrap_or_default())
+        .unwrap_or_default();
+    let db_positions = db
+        .as_ref()
+        .map(|d| d.latest_positions().unwrap_or_default())
+        .unwrap_or_default();
+
+    // ── 5. Live (optional) ───────────────────────────────────────
+    let mut live_positions: Option<Vec<quantbot::execution::traits::LivePosition>> = None;
+    if args.live {
+        match AppConfig::load(&args.config) {
+            Ok(app_config) => {
+                if let (EngineType::Ig, Some(ig_config)) =
+                    (&app_config.execution.engine, &app_config.execution.ig)
+                {
+                    match IgExecutionEngine::new(ig_config) {
+                        Ok(engine) => {
+                            if engine.health_check().await.is_ok() {
+                                live_positions = engine.get_positions().await.ok();
+                            } else {
+                                eprintln!("  WARN: IG health check failed");
+                            }
+                        }
+                        Err(e) => eprintln!("  WARN: failed to create IG engine: {e}"),
+                    }
+                } else {
+                    eprintln!("  WARN: --live requires engine = \"ig\" with IG config");
+                }
+            }
+            Err(e) => eprintln!("  WARN: failed to load config for --live: {e}"),
+        }
+    }
+
+    // ── Output ───────────────────────────────────────────────────
+
+    // Compute summary bits for the summary line / JSON
+    let data_status = if stale_errors.is_empty() { "fresh" } else { "stale" };
+    let live_status = if args.live {
+        if live_positions.is_some() { "ok" } else { "failed" }
+    } else {
+        "skipped"
+    };
+
+    if args.json {
+        let mut out = serde_json::Map::new();
+
+        // Daemon — always present
+        let mut daemon = serde_json::Map::new();
+        daemon.insert("running".into(), daemon_running.into());
+        daemon.insert("pid".into(), daemon_pid.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+        if let Some(ref cp) = checkpoint {
+            daemon.insert("last_run_id".into(), cp.last_run_id.clone().into());
+            daemon.insert("last_run_time".into(), cp.last_run_time.clone().into());
+            daemon.insert("outcome".into(), cp.outcome.clone().into());
+            daemon.insert("consecutive_failures".into(), cp.consecutive_failures.into());
+            daemon.insert("total_cycles".into(), cp.total_cycles.into());
+            daemon.insert("next_run_at".into(), cp.next_run_at.clone().into());
+            daemon.insert("last_update_date".into(), cp.last_update_date.clone().map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+        }
+        out.insert("daemon".into(), daemon.into());
+
+        // Data freshness — always present
+        let data_arr: Vec<serde_json::Value> = freshness_items
+            .iter()
+            .map(|(sym, last)| {
+                let stale = stale_errors.iter().any(|e| format!("{e}").starts_with(sym));
+                serde_json::json!({
+                    "instrument": sym,
+                    "last_bar_date": last.map(|d| d.to_string()),
+                    "stale": stale,
+                })
+            })
+            .collect();
+        out.insert("data_freshness".into(), data_arr.into());
+
+        // Portfolio — always present (may be empty object)
+        let mut portfolio = serde_json::Map::new();
+        if let Some(ref s) = state {
+            portfolio.insert("source".into(), "state_file".into());
+            portfolio.insert("nav".into(), s.nav.into());
+            portfolio.insert("date".into(), s.date.to_string().into());
+            let pos: serde_json::Map<String, serde_json::Value> = s
+                .quantities
+                .iter()
+                .filter(|(_, q)| q.abs() > 1e-9)
+                .map(|(k, v)| (k.clone(), (*v).into()))
+                .collect();
+            portfolio.insert("positions".into(), pos.into());
+        } else if !db_positions.is_empty() {
+            portfolio.insert("source".into(), "sqlite_last_run".into());
+            let pos: serde_json::Map<String, serde_json::Value> = db_positions
+                .iter()
+                .filter(|(_, q)| q.abs() > 1e-9)
+                .map(|(k, v)| (k.clone(), (*v).into()))
+                .collect();
+            portfolio.insert("positions".into(), pos.into());
+        }
+        portfolio.insert("peak_nav".into(), peak_nav.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+        out.insert("portfolio".into(), portfolio.into());
+
+        // Live positions — always present (null if not requested, array if requested)
+        if let Some(ref positions) = live_positions {
+            let live_arr: Vec<serde_json::Value> = positions
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "instrument": p.instrument,
+                        "epic": p.epic,
+                        "direction": format!("{:?}", p.direction),
+                        "size": p.size,
+                        "open_level": p.open_level,
+                    })
+                })
+                .collect();
+            out.insert("live_positions".into(), live_arr.into());
+        } else {
+            out.insert("live_positions".into(), serde_json::Value::Null);
+        }
+
+        // Active overlays — always present (empty array if none)
+        let overlays_arr: Vec<serde_json::Value> = active_overlays
+            .iter()
+            .map(|o| {
+                serde_json::json!({
+                    "instrument": o.instrument,
+                    "action_type": o.action_type,
+                    "action_json": o.action_json,
+                })
+            })
+            .collect();
+        out.insert("active_overlays".into(), overlays_arr.into());
+
+        // Recent runs — always present (empty array if none)
+        let runs_arr: Vec<serde_json::Value> = recent_runs
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "run_id": r.run_id,
+                    "started_at": r.started_at,
+                    "nav_usd": r.nav_usd,
+                    "outcome": r.outcome,
+                    "duration_ms": r.duration_ms,
+                })
+            })
+            .collect();
+        out.insert("recent_runs".into(), runs_arr.into());
+
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::Value::Object(out))
+                .context("failed to serialize JSON")?
+        );
+        return Ok(());
+    }
+
+    // ── Human-readable output ────────────────────────────────────
+
+    // Summary line
+    let daemon_brief = if daemon_running { "running" } else { "stopped" };
+    let last_outcome = checkpoint
+        .as_ref()
+        .map(|cp| cp.outcome.as_str())
+        .unwrap_or("n/a");
+    println!(
+        "daemon={daemon_brief}  last_outcome={last_outcome}  data={data_status}  overlays={}  live={live_status}",
+        active_overlays.len()
+    );
+    println!();
+
+    // Daemon
+    println!("Daemon");
+    if daemon_running {
+        if let Some(pid) = daemon_pid {
+            println!("  status:       running (PID {pid})");
+        } else {
+            println!("  status:       running");
+        }
+    } else {
+        println!("  status:       not running");
+    }
+
+    if let Some(ref cp) = checkpoint {
+        println!(
+            "  last run:     {}  run_id={}  outcome={}",
+            cp.last_run_time,
+            &cp.last_run_id[..cp.last_run_id.len().min(8)],
+            cp.outcome
+        );
+        println!("  next run at:  {}", cp.next_run_at);
+        println!(
+            "  cycles:       {}  consecutive failures: {}",
+            cp.total_cycles, cp.consecutive_failures
+        );
+        if let Some(ref d) = cp.last_update_date {
+            println!("  data updated: {d}");
+        }
+    } else {
+        println!("  (no checkpoint — daemon has never run)");
+    }
+    println!();
+
+    // Data Freshness
+    println!("Data Freshness");
+    for (sym, last) in &freshness_items {
+        let stale = stale_errors.iter().any(|e| format!("{e}").starts_with(sym));
+        match last {
+            Some(d) => {
+                if stale {
+                    let gap = (today - *d).num_days();
+                    println!("  {:<14} {}  STALE ({gap} days)", sym, d);
+                } else {
+                    println!("  {:<14} {}  OK", sym, d);
+                }
+            }
+            None => println!("  {:<14} NO DATA", sym),
+        }
+    }
+    println!();
+
+    // Portfolio — with explicit source labels
+    if let Some(ref positions) = live_positions {
+        println!("Portfolio [live broker]");
+        if positions.is_empty() {
+            println!("  (no open positions)");
+        } else {
+            for p in positions {
+                let sign = match p.direction {
+                    OrderSide::Buy => "+",
+                    OrderSide::Sell => "-",
+                };
+                println!("  {:<14} {}{:.1} lots  @ {:.2}", p.instrument, sign, p.size, p.open_level);
+            }
+        }
+    } else if let Some(ref s) = state {
+        println!("Portfolio [state file]");
+        println!("  NAV:        ${}", format_number(s.nav));
+        if let Some(peak) = peak_nav {
+            let dd_pct = if peak > 0.0 {
+                (1.0 - s.nav / peak) * 100.0
+            } else {
+                0.0
+            };
+            println!(
+                "  peak:       ${}  (drawdown: {:.1}%)",
+                format_number(peak),
+                dd_pct
+            );
+        }
+        let mut pos_list: Vec<_> = s
+            .quantities
+            .iter()
+            .filter(|(_, q)| q.abs() > 1e-9)
+            .collect();
+        pos_list.sort_by(|a, b| a.0.cmp(b.0));
+        if pos_list.is_empty() {
+            println!("  positions:  (flat)");
+        } else {
+            println!("  positions:");
+            for (sym, qty) in &pos_list {
+                let sign = if **qty >= 0.0 { "+" } else { "" };
+                println!("    {:<14} {}{:.1} lots", sym, sign, qty);
+            }
+        }
+    } else if !db_positions.is_empty() {
+        println!("Portfolio [last run — SQLite]");
+        for (sym, qty) in &db_positions {
+            if qty.abs() > 1e-9 {
+                let sign = if *qty >= 0.0 { "+" } else { "" };
+                println!("  {:<14} {}{:.1} lots", sym, sign, qty);
+            }
+        }
+    } else {
+        println!("Portfolio");
+        println!("  (no state file or position data)");
+    }
+    println!();
+
+    // Active Overlays
+    if !active_overlays.is_empty() {
+        println!("Active Overlays");
+        for o in &active_overlays {
+            // Try to extract useful fields from action_json
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&o.action_json) {
+                let scope = if o.instrument == "*" {
+                    "Global".to_string()
+                } else {
+                    o.instrument.clone()
+                };
+                let mut detail = format!("  {:<18} {:<10}", o.action_type, scope);
+                if let Some(factor) = v.get("factor").and_then(|f| f.as_f64()) {
+                    detail.push_str(&format!("  factor={factor}"));
+                }
+                if let Some(until) = v.get("until").and_then(|u| u.as_str()) {
+                    detail.push_str(&format!("  until {until}"));
+                }
+                println!("{detail}");
+            } else {
+                println!("  {:<18} {}  {}", o.action_type, o.instrument, o.action_json);
+            }
+        }
+        println!();
+    }
+
+    // Last 3 Runs
+    if !recent_runs.is_empty() {
+        println!("Last {} Runs", recent_runs.len());
+        for r in &recent_runs {
+            let id_short = &r.run_id[..r.run_id.len().min(8)];
+            let started = &r.started_at[..r.started_at.len().min(19)];
+            let outcome = r.outcome.as_deref().unwrap_or("???");
+            let dur = r
+                .duration_ms
+                .map(|ms| format!("{}s", ms / 1000))
+                .unwrap_or_else(|| "?".into());
+            println!(
+                "  {id_short}  {started}  {:<8} NAV ${:<14} duration {dur}",
+                outcome,
+                format_number(r.nav_usd)
+            );
+        }
+        println!();
     }
 
     Ok(())
