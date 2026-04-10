@@ -3927,7 +3927,7 @@ async fn run_data(args: DataArgs) -> Result<()> {
 // ─── Status ──────────────────────────────────────────────────────
 
 async fn run_status(args: StatusArgs) -> Result<()> {
-    let today = chrono::Utc::now().date_naive();
+    let system_today = chrono::Utc::now().date_naive();
 
     // ── 1. Daemon state ─────────────────────────────────────────
     let daemon_running = {
@@ -3976,7 +3976,16 @@ async fn run_status(args: StatusArgs) -> Result<()> {
         freshness_items.push((sym.clone(), last_date));
     }
 
+    // Use latest bar date as "today" for consistency with trading logic;
+    // fall back to system date if no bars are available.
+    let today = freshness_items
+        .iter()
+        .filter_map(|(_, d)| *d)
+        .max()
+        .unwrap_or(system_today);
+
     let stale_errors = freshness::check_all_fresh(&freshness_items, today, 3);
+    let data_fresh_count = freshness_items.len() - stale_errors.len();
 
     // ── 3. Portfolio (local state file) ──────────────────────────
     let state = load_state(&args.state_file).unwrap_or(None);
@@ -4031,16 +4040,48 @@ async fn run_status(args: StatusArgs) -> Result<()> {
 
     // ── Output ───────────────────────────────────────────────────
 
-    // Compute summary bits for the summary line / JSON
-    let data_status = if stale_errors.is_empty() { "fresh" } else { "stale" };
+    // Compute summary bits
+    let daemon_brief = if daemon_running { "running" } else { "stopped" };
+    let last_outcome = checkpoint
+        .as_ref()
+        .map(|cp| cp.outcome.as_str())
+        .unwrap_or("n/a");
+    let last_run_time = checkpoint
+        .as_ref()
+        .map(|cp| cp.last_run_time.as_str())
+        .unwrap_or("n/a");
+    let data_fresh_str = format!("OK({data_fresh_count}/{})", freshness_items.len());
+    let data_summary = if stale_errors.is_empty() {
+        data_fresh_str.as_str()
+    } else {
+        "STALE"
+    };
     let live_status = if args.live {
         if live_positions.is_some() { "ok" } else { "failed" }
     } else {
         "skipped"
     };
+    let nav_value = state.as_ref().map(|s| s.nav);
+    let dd_pct = match (nav_value, peak_nav) {
+        (Some(nav), Some(peak)) if peak > 0.0 => Some((1.0 - nav / peak) * 100.0),
+        _ => None,
+    };
 
     if args.json {
         let mut out = serde_json::Map::new();
+
+        // Summary — always present
+        out.insert("summary".into(), serde_json::json!({
+            "daemon": daemon_brief,
+            "last_outcome": last_outcome,
+            "last_run_time": last_run_time,
+            "data_fresh": data_fresh_count,
+            "data_total": freshness_items.len(),
+            "active_overlays": active_overlays.len(),
+            "nav": nav_value,
+            "drawdown_pct": dd_pct,
+            "live": live_status,
+        }));
 
         // Daemon — always present
         let mut daemon = serde_json::Map::new();
@@ -4154,15 +4195,19 @@ async fn run_status(args: StatusArgs) -> Result<()> {
     // ── Human-readable output ────────────────────────────────────
 
     // Summary line
-    let daemon_brief = if daemon_running { "running" } else { "stopped" };
-    let last_outcome = checkpoint
-        .as_ref()
-        .map(|cp| cp.outcome.as_str())
-        .unwrap_or("n/a");
-    println!(
-        "daemon={daemon_brief}  last_outcome={last_outcome}  data={data_status}  overlays={}  live={live_status}",
+    let mut summary = format!(
+        "STATUS  daemon={daemon_brief}  last={last_outcome}@{}  data={data_summary}  overlays={}",
+        &last_run_time[..last_run_time.len().min(19)],
         active_overlays.len()
     );
+    if let Some(nav) = nav_value {
+        summary.push_str(&format!("  nav=${}", format_number(nav)));
+    }
+    if let Some(dd) = dd_pct {
+        summary.push_str(&format!("  dd={dd:.1}%"));
+    }
+    summary.push_str(&format!("  live={live_status}"));
+    println!("{summary}");
     println!();
 
     // Daemon
@@ -4233,15 +4278,10 @@ async fn run_status(args: StatusArgs) -> Result<()> {
         println!("Portfolio [state file]");
         println!("  NAV:        ${}", format_number(s.nav));
         if let Some(peak) = peak_nav {
-            let dd_pct = if peak > 0.0 {
-                (1.0 - s.nav / peak) * 100.0
-            } else {
-                0.0
-            };
             println!(
                 "  peak:       ${}  (drawdown: {:.1}%)",
                 format_number(peak),
-                dd_pct
+                dd_pct.unwrap_or(0.0)
             );
         }
         let mut pos_list: Vec<_> = s
