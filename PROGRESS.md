@@ -831,10 +831,34 @@ account_id = "Z69YJL"
 - [ ] Emits only bounded action types from D1
 
 ### PR D4: Daemon + Scheduling
-- [ ] Long-running process with periodic timer + trigger queue
-- [ ] "One run at a time" lock
-- [ ] Health endpoint / heartbeat
-- [ ] Intraday bars (15m/60m) as separate `BarSeries`
+- [x] Long-running process with periodic timer (configurable `interval_secs`)
+- [x] PID lock file (`data/daemon.pid`) — "one run at a time" guarantee
+- [x] `DaemonCheckpoint` JSON persistence (last run, outcome, cycles, failures, next run time)
+- [x] Graceful SIGTERM/SIGINT handling via `tokio::signal`
+- [x] Configurable via `[daemon]` section in TOML
+
+### PR D5: Auto-Update
+- [x] Daily CSV refresh from Yahoo Finance (once per day, date-tracked)
+- [x] Integrated into daemon cycle (pre-trade data update)
+
+### PR D6: Systemd Service
+- [x] `quantbot.service` systemd user unit file
+- [x] `install-service.sh` setup script
+
+### PR D9: Notifications
+- [x] `Notifier` struct with cmd + webhook backends
+- [x] Fire-and-forget notifications on trade execution, errors, risk veto
+- [x] Configurable via `[notify]` section in TOML
+
+### PR D10: Status Command
+- [x] `quantbot status` — single-command operational health check
+- [x] 5 local sources: daemon state (PID lock + checkpoint), data freshness, portfolio (state file), active overlays (SQLite), recent runs (SQLite)
+- [x] `--live` flag for real-time IG broker positions
+- [x] `--json` for machine-readable output with stable schema (all keys always present)
+- [x] Summary line: `STATUS daemon=... last=... data=OK(N/M) overlays=N nav=$... dd=...% live=...`
+- [x] JSON `.summary` key with `eval_date` + `eval_date_basis` for debugging
+- [x] Time basis from latest bar date (consistent with trading logic)
+- [x] DB helpers: `active_overlay_actions()`, `latest_positions()` + 4 tests
 
 ---
 

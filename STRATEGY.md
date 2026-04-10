@@ -126,9 +126,13 @@ Port the LLM indicator agent — calls Ollama locally, parses JSON signals. Star
 Build order (see JOURNAL.md §8 for full architecture):
 
 1. **Overlay actions v1** ✅ — typed enum (`FreezeEntries`, `ScaleExposure`, `Flatten`, `DisableInstrument`) with scope (Global/AssetClass/Instrument), date-based expiry, SQLite persistence, audit logging. Config-driven (`[[overlays.actions]]` in TOML). TightenGating deferred to v2.
-2. **Volatility/market-condition overlay** — deterministic triggers (vol spike, ATR%, large move) emitting bounded actions
+2. **Volatility/market-condition overlay** ✅ — per-asset-class vol thresholds, deterministic triggers emitting bounded actions
 3. **News overlay** — bounded risk overlay, not primary alpha. Polling + caching + classifier
-4. **Daemon + scheduling** — ops work once overlays are stable. Periodic (30min liquid hours) + event triggers
+4. **Daemon + scheduling** ✅ — PID lock, checkpoint persistence, periodic timer, auto-update, SIGTERM handling
+5. **Auto-update** ✅ — daily CSV refresh from Yahoo, integrated into daemon cycle
+6. **Systemd service** ✅ — user unit file + install script
+7. **Notifications** ✅ — cmd + webhook fire-and-forget on trade/error/veto
+8. **Status command** ✅ — `quantbot status` ops dashboard (daemon/data/portfolio/overlays/runs), `--live` IG query, `--json` stable schema
 
 ---
 

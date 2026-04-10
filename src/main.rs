@@ -3978,11 +3978,12 @@ async fn run_status(args: StatusArgs) -> Result<()> {
 
     // Use latest bar date as "today" for consistency with trading logic;
     // fall back to system date if no bars are available.
-    let today = freshness_items
+    let bar_date = freshness_items
         .iter()
         .filter_map(|(_, d)| *d)
-        .max()
-        .unwrap_or(system_today);
+        .max();
+    let today = bar_date.unwrap_or(system_today);
+    let eval_date_basis = if bar_date.is_some() { "bars" } else { "system" };
 
     let stale_errors = freshness::check_all_fresh(&freshness_items, today, 3);
     let data_fresh_count = freshness_items.len() - stale_errors.len();
@@ -4081,6 +4082,8 @@ async fn run_status(args: StatusArgs) -> Result<()> {
             "nav": nav_value,
             "drawdown_pct": dd_pct,
             "live": live_status,
+            "eval_date": today.to_string(),
+            "eval_date_basis": eval_date_basis,
         }));
 
         // Daemon — always present
