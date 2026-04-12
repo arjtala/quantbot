@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 /// Schema version stored in PRAGMA user_version. Bump when making breaking
 /// changes to the table layout.
-pub const DB_SCHEMA_VERSION: i32 = 6;
+pub const DB_SCHEMA_VERSION: i32 = 7;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS runs (
@@ -110,6 +110,28 @@ CREATE TABLE IF NOT EXISTS overlay_actions (
 CREATE INDEX IF NOT EXISTS idx_overlay_actions_run ON overlay_actions(run_id);
 ";
 
+/// SQL for the forecast_cache table added in schema v7.
+const FORECAST_CACHE_SQL: &str = "
+CREATE TABLE IF NOT EXISTS forecast_cache (
+    cache_key         TEXT PRIMARY KEY,
+    model_name        TEXT NOT NULL,
+    model_version     TEXT NOT NULL,
+    instrument        TEXT NOT NULL,
+    eval_date         TEXT NOT NULL,
+    horizon_days      INTEGER NOT NULL,
+    lookback_bars     INTEGER NOT NULL,
+    input_hash        TEXT NOT NULL,
+    sample_count      INTEGER NOT NULL,
+    status            TEXT NOT NULL,
+    forecast_json     TEXT NOT NULL,
+    raw_response_json TEXT,
+    latency_ms        INTEGER,
+    created_at        TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_forecast_cache_instr_date ON forecast_cache(instrument, eval_date);
+CREATE INDEX IF NOT EXISTS idx_forecast_cache_model ON forecast_cache(model_name, model_version, horizon_days);
+";
+
 // ─── Database ───────────────────────────────────────────────────
 
 /// SQLite database for recording trading activity across runs.
@@ -124,7 +146,9 @@ impl Db {
             std::fs::create_dir_all(parent).ok();
         }
         let conn = Connection::open(path)?;
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;")?;
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
+        )?;
         conn.execute_batch(SCHEMA_SQL)?;
         Self::check_schema_version(&conn)?;
         Ok(Self { conn })
@@ -148,6 +172,7 @@ impl Db {
             conn.execute_batch(RISK_STATE_SQL)?;
             conn.execute_batch(LLM_CACHE_SQL)?;
             conn.execute_batch(OVERLAY_ACTIONS_SQL)?;
+            conn.execute_batch(FORECAST_CACHE_SQL)?;
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
         } else if current < DB_SCHEMA_VERSION {
             // Run migrations
@@ -155,20 +180,30 @@ impl Db {
                 conn.execute_batch(RISK_STATE_SQL)?;
             }
             if current < 3 {
-                conn.execute_batch("ALTER TABLE signals ADD COLUMN agent_name TEXT NOT NULL DEFAULT 'tsmom';")?;
-                conn.execute_batch("CREATE INDEX IF NOT EXISTS idx_signals_agent ON signals(agent_name);")?;
+                conn.execute_batch(
+                    "ALTER TABLE signals ADD COLUMN agent_name TEXT NOT NULL DEFAULT 'tsmom';",
+                )?;
+                conn.execute_batch(
+                    "CREATE INDEX IF NOT EXISTS idx_signals_agent ON signals(agent_name);",
+                )?;
             }
             if current < 4 {
                 // Best-effort: ignore errors if columns already exist
-                conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_hash TEXT;").ok();
-                conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_source TEXT;").ok();
-                conn.execute_batch("ALTER TABLE runs ADD COLUMN llm_model TEXT;").ok();
+                conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_hash TEXT;")
+                    .ok();
+                conn.execute_batch("ALTER TABLE runs ADD COLUMN prompt_source TEXT;")
+                    .ok();
+                conn.execute_batch("ALTER TABLE runs ADD COLUMN llm_model TEXT;")
+                    .ok();
             }
             if current < 5 {
                 conn.execute_batch(LLM_CACHE_SQL)?;
             }
             if current < 6 {
                 conn.execute_batch(OVERLAY_ACTIONS_SQL)?;
+            }
+            if current < 7 {
+                conn.execute_batch(FORECAST_CACHE_SQL)?;
             }
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
             eprintln!("  DB migrated from schema v{current} to v{DB_SCHEMA_VERSION}");
@@ -182,7 +217,8 @@ impl Db {
 
     /// Return the schema version stored in the database.
     pub fn schema_version(&self) -> SqlResult<i32> {
-        self.conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
+        self.conn
+            .query_row("PRAGMA user_version;", [], |row| row.get(0))
     }
 
     // ── Inserts ─────────────────────────────────────────────────
@@ -201,12 +237,7 @@ impl Db {
         result
     }
 
-    pub fn insert_run(
-        &self,
-        run_id: &str,
-        config_json: &str,
-        nav_usd: f64,
-    ) -> SqlResult<()> {
+    pub fn insert_run(&self, run_id: &str, config_json: &str, nav_usd: f64) -> SqlResult<()> {
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Micros, true);
         self.conn.execute(
             "INSERT INTO runs (run_id, started_at, config_json, nav_usd) VALUES (?1, ?2, ?3, ?4)",
@@ -215,12 +246,7 @@ impl Db {
         Ok(())
     }
 
-    pub fn finish_run(
-        &self,
-        run_id: &str,
-        outcome: &str,
-        duration_ms: u64,
-    ) -> SqlResult<()> {
+    pub fn finish_run(&self, run_id: &str, outcome: &str, duration_ms: u64) -> SqlResult<()> {
         self.conn.execute(
             "UPDATE runs SET outcome = ?1, duration_ms = ?2 WHERE run_id = ?3",
             params![outcome, duration_ms as i64, run_id],
@@ -542,11 +568,155 @@ impl Db {
         Ok(())
     }
 
+    /// Insert a forecast cache entry. Uses INSERT OR IGNORE so existing entries
+    /// are never overwritten.
+    pub fn insert_forecast_cache(&self, entry: &ForecastCacheEntry) -> SqlResult<()> {
+        self.conn.execute(
+            "INSERT OR IGNORE INTO forecast_cache
+             (cache_key, model_name, model_version, instrument, eval_date, horizon_days,
+              lookback_bars, input_hash, sample_count, status, forecast_json,
+              raw_response_json, latency_ms, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                entry.cache_key,
+                entry.model_name,
+                entry.model_version,
+                entry.instrument,
+                entry.eval_date,
+                entry.horizon_days as i64,
+                entry.lookback_bars as i64,
+                entry.input_hash,
+                entry.sample_count as i64,
+                entry.status,
+                entry.forecast_json,
+                entry.raw_response_json,
+                entry.latency_ms.map(|v| v as i64),
+                entry.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    /// Delete a cached forecast entry by cache key. No-op if the key does not exist.
+    pub fn delete_forecast_cache(&self, cache_key: &str) -> SqlResult<()> {
+        self.conn.execute(
+            "DELETE FROM forecast_cache WHERE cache_key = ?1",
+            params![cache_key],
+        )?;
+        Ok(())
+    }
+
+    /// Look up a cached forecast by cache key.
+    pub fn get_forecast_cache(&self, cache_key: &str) -> SqlResult<Option<ForecastCacheEntry>> {
+        let result = self.conn.query_row(
+            "SELECT cache_key, model_name, model_version, instrument, eval_date, horizon_days,
+                    lookback_bars, input_hash, sample_count, status, forecast_json,
+                    raw_response_json, latency_ms, created_at
+             FROM forecast_cache WHERE cache_key = ?1",
+            params![cache_key],
+            |row| {
+                let horizon_days: i64 = row.get(5)?;
+                let lookback_bars: i64 = row.get(6)?;
+                let sample_count: i64 = row.get(8)?;
+                let latency_ms: Option<i64> = row.get(12)?;
+                Ok(ForecastCacheEntry {
+                    cache_key: row.get(0)?,
+                    model_name: row.get(1)?,
+                    model_version: row.get(2)?,
+                    instrument: row.get(3)?,
+                    eval_date: row.get(4)?,
+                    horizon_days: horizon_days as u32,
+                    lookback_bars: lookback_bars as usize,
+                    input_hash: row.get(7)?,
+                    sample_count: sample_count as usize,
+                    status: row.get(9)?,
+                    forecast_json: row.get(10)?,
+                    raw_response_json: row.get(11)?,
+                    latency_ms: latency_ms.map(|v| v as u64),
+                    created_at: row.get(13)?,
+                })
+            },
+        );
+        match result {
+            Ok(entry) => Ok(Some(entry)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Count successful cached forecasts per (instrument, horizon) for a given model version.
+    pub fn forecast_cache_coverage(
+        &self,
+        model_name: &str,
+        model_version: &str,
+    ) -> SqlResult<HashMap<(String, u32), usize>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT instrument, horizon_days, COUNT(*) FROM forecast_cache
+             WHERE model_name = ?1 AND model_version = ?2 AND status = 'ok'
+             GROUP BY instrument, horizon_days",
+        )?;
+        let rows = stmt.query_map(params![model_name, model_version], |row| {
+            let instrument: String = row.get(0)?;
+            let horizon_days: i64 = row.get(1)?;
+            let count: i64 = row.get(2)?;
+            Ok(((instrument, horizon_days as u32), count as usize))
+        })?;
+        let mut result = HashMap::new();
+        for row in rows {
+            let (key, count) = row?;
+            result.insert(key, count);
+        }
+        Ok(result)
+    }
+
+    /// List cached forecast entries for a given model up to and including an eval date.
+    pub fn list_forecast_cache_for_model_up_to(
+        &self,
+        model_name: &str,
+        model_version: &str,
+        eval_date: &str,
+    ) -> SqlResult<Vec<ForecastCacheEntry>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT cache_key, model_name, model_version, instrument, eval_date, horizon_days,
+                    lookback_bars, input_hash, sample_count, status, forecast_json,
+                    raw_response_json, latency_ms, created_at
+             FROM forecast_cache
+             WHERE model_name = ?1 AND model_version = ?2 AND eval_date <= ?3
+             ORDER BY instrument, horizon_days, eval_date",
+        )?;
+        let rows = stmt.query_map(params![model_name, model_version, eval_date], |row| {
+            let horizon_days: i64 = row.get(5)?;
+            let lookback_bars: i64 = row.get(6)?;
+            let sample_count: i64 = row.get(8)?;
+            let latency_ms: Option<i64> = row.get(12)?;
+            Ok(ForecastCacheEntry {
+                cache_key: row.get(0)?,
+                model_name: row.get(1)?,
+                model_version: row.get(2)?,
+                instrument: row.get(3)?,
+                eval_date: row.get(4)?,
+                horizon_days: horizon_days as u32,
+                lookback_bars: lookback_bars as usize,
+                input_hash: row.get(7)?,
+                sample_count: sample_count as usize,
+                status: row.get(9)?,
+                forecast_json: row.get(10)?,
+                raw_response_json: row.get(11)?,
+                latency_ms: latency_ms.map(|v| v as u64),
+                created_at: row.get(13)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     // ── Status Queries ─────────────────────────────────────────────
 
     /// Get overlay actions that are still active (action_json contains "until" >= today).
     /// Returns all overlay actions from the most recent run that recorded any.
-    pub fn active_overlay_actions(&self, today: chrono::NaiveDate) -> SqlResult<Vec<OverlayActionRow>> {
+    pub fn active_overlay_actions(
+        &self,
+        today: chrono::NaiveDate,
+    ) -> SqlResult<Vec<OverlayActionRow>> {
         let today_str = today.to_string(); // YYYY-MM-DD
         let mut stmt = self.conn.prepare(
             "SELECT run_id, instrument, action_type, action_json, ts
@@ -680,6 +850,25 @@ pub struct LlmCacheEntry {
     pub created_at: String,
 }
 
+/// A cached canonical forecast summary for deterministic replay.
+#[derive(Debug, Clone)]
+pub struct ForecastCacheEntry {
+    pub cache_key: String,
+    pub model_name: String,
+    pub model_version: String,
+    pub instrument: String,
+    pub eval_date: String,
+    pub horizon_days: u32,
+    pub lookback_bars: usize,
+    pub input_hash: String,
+    pub sample_count: usize,
+    pub status: String,
+    pub forecast_json: String,
+    pub raw_response_json: Option<String>,
+    pub latency_ms: Option<u64>,
+    pub created_at: String,
+}
+
 // ─── Tests ──────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -701,10 +890,26 @@ mod tests {
     fn insert_and_query_orders() {
         let db = Db::open_memory().unwrap();
         db.insert_run("run-1", "{}", 1e6).unwrap();
-        db.insert_order("run-1", "SPY", "IX.D.SPTRD.DAILY.IP", "SELL", 282.0, Some("REF1"), Some("Accepted"))
-            .unwrap();
-        db.insert_order("run-1", "GLD", "UC.D.GLDUS.DAILY.IP", "BUY", 1388.0, Some("REF2"), Some("Accepted"))
-            .unwrap();
+        db.insert_order(
+            "run-1",
+            "SPY",
+            "IX.D.SPTRD.DAILY.IP",
+            "SELL",
+            282.0,
+            Some("REF1"),
+            Some("Accepted"),
+        )
+        .unwrap();
+        db.insert_order(
+            "run-1",
+            "GLD",
+            "UC.D.GLDUS.DAILY.IP",
+            "BUY",
+            1388.0,
+            Some("REF2"),
+            Some("Accepted"),
+        )
+        .unwrap();
 
         let orders = db.orders_for_run("run-1").unwrap();
         assert_eq!(orders.len(), 2);
@@ -731,8 +936,10 @@ mod tests {
     fn insert_positions() {
         let db = Db::open_memory().unwrap();
         db.insert_run("run-1", "{}", 1e6).unwrap();
-        db.insert_position("run-1", "GC=F", 128.0, "target").unwrap();
-        db.insert_position("run-1", "GC=F", 128.0, "actual").unwrap();
+        db.insert_position("run-1", "GC=F", 128.0, "target")
+            .unwrap();
+        db.insert_position("run-1", "GC=F", 128.0, "actual")
+            .unwrap();
     }
 
     #[test]
@@ -771,7 +978,7 @@ mod tests {
     fn schema_version_set_on_fresh_db() {
         let db = Db::open_memory().unwrap();
         assert_eq!(db.schema_version().unwrap(), DB_SCHEMA_VERSION);
-        assert_eq!(DB_SCHEMA_VERSION, 6);
+        assert_eq!(DB_SCHEMA_VERSION, 7);
     }
 
     #[test]
@@ -794,20 +1001,42 @@ mod tests {
     fn orders_for_run_filtered_by_status() {
         let db = Db::open_memory().unwrap();
         db.insert_run("run-1", "{}", 1e6).unwrap();
-        db.insert_order("run-1", "SPY", "EPIC", "SELL", 100.0, Some("REF1"), Some("Accepted")).unwrap();
-        db.insert_order("run-1", "GLD", "EPIC", "BUY", 50.0, Some("REF2"), Some("Rejected")).unwrap();
+        db.insert_order(
+            "run-1",
+            "SPY",
+            "EPIC",
+            "SELL",
+            100.0,
+            Some("REF1"),
+            Some("Accepted"),
+        )
+        .unwrap();
+        db.insert_order(
+            "run-1",
+            "GLD",
+            "EPIC",
+            "BUY",
+            50.0,
+            Some("REF2"),
+            Some("Rejected"),
+        )
+        .unwrap();
 
         // All orders
         let all = db.orders_for_run_filtered("run-1", None).unwrap();
         assert_eq!(all.len(), 2);
 
         // Only accepted
-        let accepted = db.orders_for_run_filtered("run-1", Some("Accepted")).unwrap();
+        let accepted = db
+            .orders_for_run_filtered("run-1", Some("Accepted"))
+            .unwrap();
         assert_eq!(accepted.len(), 1);
         assert_eq!(accepted[0].instrument, "SPY");
 
         // Only rejected
-        let rejected = db.orders_for_run_filtered("run-1", Some("Rejected")).unwrap();
+        let rejected = db
+            .orders_for_run_filtered("run-1", Some("Rejected"))
+            .unwrap();
         assert_eq!(rejected.len(), 1);
         assert_eq!(rejected[0].instrument, "GLD");
     }
@@ -851,9 +1080,9 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_is_6() {
+    fn schema_version_is_7() {
         let db = Db::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 6);
+        assert_eq!(db.schema_version().unwrap(), 7);
     }
 
     #[test]
@@ -862,7 +1091,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         // Create tables without agent_name (v2 schema)
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
                 config_json TEXT NOT NULL, nav_usd REAL NOT NULL,
@@ -898,7 +1128,9 @@ mod tests {
             CREATE INDEX IF NOT EXISTS idx_positions_instrument ON positions(instrument);
             CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at);
             CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
-        ").unwrap();
+        ",
+        )
+        .unwrap();
         // Stamp as v2
         conn.execute_batch("PRAGMA user_version = 2;").unwrap();
         // Insert a v2 signal (no agent_name)
@@ -910,21 +1142,26 @@ mod tests {
             "INSERT INTO signals (run_id, instrument, direction, strength, confidence, weight, ts)
              VALUES ('r1', 'SPY', 'Long', 0.5, 0.75, 0.33, 'now')",
             [],
-        ).unwrap();
+        )
+        .unwrap();
 
         // Now run migration
         Db::check_schema_version(&conn).unwrap();
 
         // Verify version bumped
-        let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 6);
+        let version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 7);
 
         // Verify existing row got default agent_name
-        let agent: String = conn.query_row(
-            "SELECT agent_name FROM signals WHERE run_id = 'r1'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let agent: String = conn
+            .query_row(
+                "SELECT agent_name FROM signals WHERE run_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(agent, "tsmom");
 
         // Verify new inserts with agent_name work
@@ -933,12 +1170,122 @@ mod tests {
              VALUES ('r1', 'GLD', 'indicator', 'Short', -0.5, 0.7, 0.0, 'now')",
             [],
         ).unwrap();
-        let agent2: String = conn.query_row(
-            "SELECT agent_name FROM signals WHERE instrument = 'GLD'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let agent2: String = conn
+            .query_row(
+                "SELECT agent_name FROM signals WHERE instrument = 'GLD'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(agent2, "indicator");
+    }
+
+    #[test]
+    fn forecast_cache_insert_and_lookup() {
+        let db = Db::open_memory().unwrap();
+        let entry = ForecastCacheEntry {
+            cache_key: "kronos|v1|SPY|2025-03-31|h5|lb512|abc|n64".into(),
+            model_name: "NeoQuasar/Kronos-mini".into(),
+            model_version: "v1".into(),
+            instrument: "SPY".into(),
+            eval_date: "2025-03-31".into(),
+            horizon_days: 5,
+            lookback_bars: 512,
+            input_hash: "abc".into(),
+            sample_count: 64,
+            status: "ok".into(),
+            forecast_json: "{\"instrument\":\"SPY\"}".into(),
+            raw_response_json: None,
+            latency_ms: Some(123),
+            created_at: "2026-04-12T00:00:00Z".into(),
+        };
+        db.insert_forecast_cache(&entry).unwrap();
+
+        let found = db.get_forecast_cache(&entry.cache_key).unwrap().unwrap();
+        assert_eq!(found.model_name, "NeoQuasar/Kronos-mini");
+        assert_eq!(found.horizon_days, 5);
+        assert_eq!(found.sample_count, 64);
+    }
+
+    #[test]
+    fn forecast_cache_insert_or_ignore() {
+        let db = Db::open_memory().unwrap();
+        let entry1 = ForecastCacheEntry {
+            cache_key: "dup-key".into(),
+            model_name: "m1".into(),
+            model_version: "v1".into(),
+            instrument: "SPY".into(),
+            eval_date: "2025-03-31".into(),
+            horizon_days: 5,
+            lookback_bars: 512,
+            input_hash: "abc".into(),
+            sample_count: 64,
+            status: "ok".into(),
+            forecast_json: "{\"a\":1}".into(),
+            raw_response_json: None,
+            latency_ms: None,
+            created_at: "t1".into(),
+        };
+        let entry2 = ForecastCacheEntry {
+            cache_key: "dup-key".into(),
+            model_name: "m2".into(),
+            model_version: "v2".into(),
+            instrument: "GLD".into(),
+            eval_date: "2025-04-01".into(),
+            horizon_days: 21,
+            lookback_bars: 256,
+            input_hash: "xyz".into(),
+            sample_count: 32,
+            status: "error".into(),
+            forecast_json: "{\"a\":2}".into(),
+            raw_response_json: Some("raw".into()),
+            latency_ms: Some(999),
+            created_at: "t2".into(),
+        };
+        db.insert_forecast_cache(&entry1).unwrap();
+        db.insert_forecast_cache(&entry2).unwrap();
+
+        let found = db.get_forecast_cache("dup-key").unwrap().unwrap();
+        assert_eq!(found.model_name, "m1");
+        assert_eq!(found.instrument, "SPY");
+        assert_eq!(found.horizon_days, 5);
+    }
+
+    #[test]
+    fn forecast_cache_coverage_counts_ok_only() {
+        let db = Db::open_memory().unwrap();
+        for (key, instrument, horizon, status) in [
+            ("a", "SPY", 5, "ok"),
+            ("b", "SPY", 5, "ok"),
+            ("c", "SPY", 21, "ok"),
+            ("d", "GLD", 5, "error"),
+            ("e", "GLD", 5, "ok"),
+        ] {
+            db.insert_forecast_cache(&ForecastCacheEntry {
+                cache_key: key.into(),
+                model_name: "NeoQuasar/Kronos-mini".into(),
+                model_version: "v1".into(),
+                instrument: instrument.into(),
+                eval_date: "2025-03-31".into(),
+                horizon_days: horizon,
+                lookback_bars: 512,
+                input_hash: format!("hash-{key}"),
+                sample_count: 64,
+                status: status.into(),
+                forecast_json: "{}".into(),
+                raw_response_json: None,
+                latency_ms: None,
+                created_at: "t".into(),
+            })
+            .unwrap();
+        }
+
+        let coverage = db
+            .forecast_cache_coverage("NeoQuasar/Kronos-mini", "v1")
+            .unwrap();
+        assert_eq!(coverage.get(&("SPY".to_string(), 5)), Some(&2));
+        assert_eq!(coverage.get(&("SPY".to_string(), 21)), Some(&1));
+        assert_eq!(coverage.get(&("GLD".to_string(), 5)), Some(&1));
     }
 
     #[test]
@@ -946,7 +1293,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         // Create v3 schema (no prompt columns on runs)
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
                 config_json TEXT NOT NULL, nav_usd REAL NOT NULL,
@@ -975,7 +1323,9 @@ mod tests {
             CREATE TABLE IF NOT EXISTS risk_state (
                 key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL
             );
-        ").unwrap();
+        ",
+        )
+        .unwrap();
         conn.execute_batch("PRAGMA user_version = 3;").unwrap();
 
         // Insert a v3 run
@@ -988,8 +1338,10 @@ mod tests {
         Db::check_schema_version(&conn).unwrap();
 
         // Verify version bumped to 5
-        let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 6);
+        let version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 7);
 
         // Verify prompt columns exist and are nullable
         conn.execute(
@@ -997,11 +1349,13 @@ mod tests {
             [],
         ).unwrap();
 
-        let hash: Option<String> = conn.query_row(
-            "SELECT prompt_hash FROM runs WHERE run_id = 'r1'",
-            [],
-            |r| r.get(0),
-        ).unwrap();
+        let hash: Option<String> = conn
+            .query_row(
+                "SELECT prompt_hash FROM runs WHERE run_id = 'r1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(hash, Some("abc123".to_string()));
     }
 
@@ -1009,7 +1363,8 @@ mod tests {
     fn update_run_prompt() {
         let db = Db::open_memory().unwrap();
         db.insert_run("run-p", "{}", 1e6).unwrap();
-        db.update_run_prompt("run-p", "abcdef0123456789", "embedded", "llama3").unwrap();
+        db.update_run_prompt("run-p", "abcdef0123456789", "embedded", "llama3")
+            .unwrap();
 
         let runs = db.list_runs(1).unwrap();
         assert_eq!(runs[0].prompt_hash.as_deref(), Some("abcdef0123456789"));
@@ -1109,7 +1464,8 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
         // Create v4 schema (has prompt columns on runs, no llm_cache table)
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             CREATE TABLE IF NOT EXISTS runs (
                 run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
                 config_json TEXT NOT NULL, nav_usd REAL NOT NULL,
@@ -1139,15 +1495,19 @@ mod tests {
             CREATE TABLE IF NOT EXISTS risk_state (
                 key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL
             );
-        ").unwrap();
+        ",
+        )
+        .unwrap();
         conn.execute_batch("PRAGMA user_version = 4;").unwrap();
 
         // Run migration
         Db::check_schema_version(&conn).unwrap();
 
         // Verify version bumped to 5
-        let version: i32 = conn.query_row("PRAGMA user_version;", [], |r| r.get(0)).unwrap();
-        assert_eq!(version, 6);
+        let version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 7);
 
         // Verify llm_cache table exists
         conn.execute(
@@ -1156,7 +1516,9 @@ mod tests {
             [],
         ).unwrap();
 
-        let count: i32 = conn.query_row("SELECT COUNT(*) FROM llm_cache", [], |r| r.get(0)).unwrap();
+        let count: i32 = conn
+            .query_row("SELECT COUNT(*) FROM llm_cache", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -1232,15 +1594,25 @@ mod tests {
 
         // Active overlay (until is in the future)
         db.insert_overlay_action(
-            "run-1", "GLD", "ScaleExposure", 1.0, 0.5,
+            "run-1",
+            "GLD",
+            "ScaleExposure",
+            1.0,
+            0.5,
             r#"{"factor":0.5,"until":"2099-12-31"}"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         // Expired overlay (until is in the past)
         db.insert_overlay_action(
-            "run-1", "SPY", "FreezeEntries", 1.0, 0.0,
+            "run-1",
+            "SPY",
+            "FreezeEntries",
+            1.0,
+            0.0,
             r#"{"until":"2020-01-01"}"#,
-        ).unwrap();
+        )
+        .unwrap();
 
         let today = chrono::NaiveDate::from_ymd_opt(2026, 4, 9).unwrap();
         let active = db.active_overlay_actions(today).unwrap();
@@ -1268,7 +1640,8 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(10));
         db.insert_run("run-2", "{}", 1.01e6).unwrap();
         db.insert_position("run-2", "GLD", 3.0, "actual").unwrap();
-        db.insert_position("run-2", "GBPUSD=X", -0.5, "actual").unwrap();
+        db.insert_position("run-2", "GBPUSD=X", -0.5, "actual")
+            .unwrap();
         // target positions should be excluded
         db.insert_position("run-2", "SPY", 99.0, "target").unwrap();
 

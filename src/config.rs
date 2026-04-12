@@ -41,6 +41,7 @@ pub struct OverlayConfig {
     pub actions: Vec<OverlayAction>,
     pub volatility: Option<VolatilityOverlayConfig>,
     pub news: Option<NewsOverlayConfig>,
+    pub kronos: Option<KronosOverlayConfig>,
 }
 
 // ─── Volatility Overlay Config ──────────────────────────────────
@@ -196,6 +197,151 @@ pub struct NewsOverlayConfig {
     pub default_until_days: u32,
 }
 
+// ─── Kronos Overlay Config ─────────────────────────────────────
+
+fn default_kronos_model_name() -> String {
+    "NeoQuasar/Kronos-mini".to_string()
+}
+fn default_kronos_model_version() -> String {
+    "v1".to_string()
+}
+fn default_kronos_lookback_bars() -> usize {
+    512
+}
+fn default_kronos_sample_count() -> usize {
+    64
+}
+fn default_kronos_horizons() -> Vec<u32> {
+    vec![1, 5, 21]
+}
+fn default_kronos_target_field() -> String {
+    "close".to_string()
+}
+fn default_kronos_cache_dir() -> String {
+    "data".to_string()
+}
+fn default_std_quantile_trigger() -> f64 {
+    0.80
+}
+fn default_std_quantile_severe() -> f64 {
+    0.95
+}
+fn default_tail_prob_neg_2pct() -> f64 {
+    0.40
+}
+fn default_tail_prob_neg_5pct() -> f64 {
+    0.35
+}
+fn default_scale_factor_kronos() -> f64 {
+    0.5
+}
+fn default_freeze_days_kronos() -> u32 {
+    5
+}
+fn default_scale_days_kronos() -> u32 {
+    5
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KronosOverlayConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_kronos_model_name")]
+    pub model_name: String,
+    #[serde(default = "default_kronos_model_version")]
+    pub model_version: String,
+    #[serde(default = "default_kronos_lookback_bars")]
+    pub lookback_bars: usize,
+    #[serde(default = "default_kronos_sample_count")]
+    pub sample_count: usize,
+    #[serde(default = "default_kronos_horizons")]
+    pub horizons: Vec<u32>,
+    #[serde(default = "default_kronos_target_field")]
+    pub target_field: String,
+    #[serde(default = "default_kronos_cache_dir")]
+    pub cache_dir: String,
+    #[serde(default)]
+    pub thresholds: KronosThresholdConfig,
+    #[serde(default)]
+    pub gold: Option<KronosAssetClassOverrides>,
+    #[serde(default)]
+    pub equity: Option<KronosAssetClassOverrides>,
+    #[serde(default)]
+    pub forex: Option<KronosAssetClassOverrides>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KronosThresholdConfig {
+    #[serde(default = "default_std_quantile_trigger")]
+    pub std_quantile_trigger: f64,
+    #[serde(default = "default_std_quantile_severe")]
+    pub std_quantile_severe: f64,
+    #[serde(default = "default_tail_prob_neg_2pct")]
+    pub tail_prob_5d_neg_2pct: f64,
+    #[serde(default = "default_tail_prob_neg_5pct")]
+    pub tail_prob_21d_neg_5pct: f64,
+}
+
+impl Default for KronosThresholdConfig {
+    fn default() -> Self {
+        Self {
+            std_quantile_trigger: default_std_quantile_trigger(),
+            std_quantile_severe: default_std_quantile_severe(),
+            tail_prob_5d_neg_2pct: default_tail_prob_neg_2pct(),
+            tail_prob_21d_neg_5pct: default_tail_prob_neg_5pct(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct KronosAssetClassOverrides {
+    pub scale_factor: Option<f64>,
+    pub freeze_days: Option<u32>,
+    pub scale_days: Option<u32>,
+    pub tail_prob_5d_neg_2pct: Option<f64>,
+    pub tail_prob_21d_neg_5pct: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedKronosThresholds {
+    pub scale_factor: f64,
+    pub freeze_days: u32,
+    pub scale_days: u32,
+    pub tail_prob_5d_neg_2pct: f64,
+    pub tail_prob_21d_neg_5pct: f64,
+}
+
+impl KronosOverlayConfig {
+    pub fn thresholds_for(&self, cat: BlendCategory) -> ResolvedKronosThresholds {
+        let overrides = match cat {
+            BlendCategory::Gold => self.gold.as_ref(),
+            BlendCategory::Equity => self.equity.as_ref(),
+            BlendCategory::Forex => self.forex.as_ref(),
+        };
+
+        match overrides {
+            Some(o) => ResolvedKronosThresholds {
+                scale_factor: o.scale_factor.unwrap_or_else(default_scale_factor_kronos),
+                freeze_days: o.freeze_days.unwrap_or_else(default_freeze_days_kronos),
+                scale_days: o.scale_days.unwrap_or_else(default_scale_days_kronos),
+                tail_prob_5d_neg_2pct: o
+                    .tail_prob_5d_neg_2pct
+                    .unwrap_or(self.thresholds.tail_prob_5d_neg_2pct),
+                tail_prob_21d_neg_5pct: o
+                    .tail_prob_21d_neg_5pct
+                    .unwrap_or(self.thresholds.tail_prob_21d_neg_5pct),
+            },
+            None => ResolvedKronosThresholds {
+                scale_factor: default_scale_factor_kronos(),
+                freeze_days: default_freeze_days_kronos(),
+                scale_days: default_scale_days_kronos(),
+                tail_prob_5d_neg_2pct: self.thresholds.tail_prob_5d_neg_2pct,
+                tail_prob_21d_neg_5pct: self.thresholds.tail_prob_21d_neg_5pct,
+            },
+        }
+    }
+}
+
 // ─── Blend Config (track-b) ─────────────────────────────────────
 
 #[cfg(feature = "track-b")]
@@ -329,7 +475,11 @@ impl AppConfig {
         #[cfg(feature = "track-b")]
         if let Some(blend) = &self.blending {
             if blend.enabled {
-                for cat in [BlendCategory::Gold, BlendCategory::Equity, BlendCategory::Forex] {
+                for cat in [
+                    BlendCategory::Gold,
+                    BlendCategory::Equity,
+                    BlendCategory::Forex,
+                ] {
                     if !blend.weights.contains_key(&cat) {
                         eprintln!("  WARN: blending enabled but no weights for {cat} — defaulting to TSMOM-only");
                     }
@@ -337,6 +487,31 @@ impl AppConfig {
                 for (cat, w) in &blend.weights {
                     if w.tsmom + w.indicator <= 0.0 {
                         anyhow::bail!("blending.weights.{cat}: tsmom + indicator must be > 0");
+                    }
+                }
+            }
+        }
+        if let Some(overlays) = &self.overlays {
+            if let Some(kronos) = &overlays.kronos {
+                if kronos.enabled {
+                    if kronos.lookback_bars == 0 {
+                        anyhow::bail!("overlays.kronos.lookback_bars must be > 0");
+                    }
+                    if kronos.sample_count == 0 {
+                        anyhow::bail!("overlays.kronos.sample_count must be > 0");
+                    }
+                    if kronos.horizons.is_empty() {
+                        anyhow::bail!("overlays.kronos.horizons must not be empty");
+                    }
+                    if !(0.0..=1.0).contains(&kronos.thresholds.std_quantile_trigger) {
+                        anyhow::bail!(
+                            "overlays.kronos.thresholds.std_quantile_trigger must be in [0,1]"
+                        );
+                    }
+                    if !(0.0..=1.0).contains(&kronos.thresholds.std_quantile_severe) {
+                        anyhow::bail!(
+                            "overlays.kronos.thresholds.std_quantile_severe must be in [0,1]"
+                        );
                     }
                 }
             }
@@ -907,5 +1082,51 @@ update_timeout_secs = 120
         assert_eq!(daemon.max_cycle_secs, 600);
         assert!(daemon.auto_update_data);
         assert_eq!(daemon.update_timeout_secs, 120);
+    }
+
+    #[test]
+    fn parse_kronos_overlay_config() {
+        let toml_str = r#"
+[execution]
+engine = "paper"
+
+[overlays.kronos]
+enabled = true
+model_name = "NeoQuasar/Kronos-mini"
+model_version = "research-v1"
+lookback_bars = 512
+sample_count = 64
+horizons = [1, 5, 21]
+target_field = "close"
+
+[overlays.kronos.thresholds]
+std_quantile_trigger = 0.80
+std_quantile_severe = 0.95
+tail_prob_5d_neg_2pct = 0.40
+tail_prob_21d_neg_5pct = 0.35
+
+[overlays.kronos.gold]
+scale_factor = 0.3
+freeze_days = 7
+"#;
+        let config: AppConfig = toml::from_str(toml_str).unwrap();
+        let kronos = config.overlays.unwrap().kronos.unwrap();
+        assert!(kronos.enabled);
+        assert_eq!(kronos.model_name, "NeoQuasar/Kronos-mini");
+        assert_eq!(kronos.model_version, "research-v1");
+        assert_eq!(kronos.lookback_bars, 512);
+        assert_eq!(kronos.sample_count, 64);
+        assert_eq!(kronos.horizons, vec![1, 5, 21]);
+        assert_eq!(kronos.target_field, "close");
+        assert_eq!(kronos.thresholds.tail_prob_5d_neg_2pct, 0.40);
+
+        let gold = kronos.thresholds_for(BlendCategory::Gold);
+        assert_eq!(gold.scale_factor, 0.3);
+        assert_eq!(gold.freeze_days, 7);
+        assert_eq!(gold.tail_prob_5d_neg_2pct, 0.40);
+
+        let equity = kronos.thresholds_for(BlendCategory::Equity);
+        assert_eq!(equity.scale_factor, 0.5);
+        assert_eq!(equity.freeze_days, 5);
     }
 }

@@ -78,6 +78,38 @@ max_drawdown_pct = 0.15      # max drawdown from peak NAV (15%)
 # enabled = true
 # feed_path = "data/news_feed.json"
 # default_until_days = 1
+#
+# Kronos overlay — research-only forecast/uncertainty integration.
+# Uses cached forecast summaries (stored in SQLite forecast_cache), then maps
+# them to bounded overlays like ScaleExposure / FreezeEntries.
+#
+# [overlays.kronos]
+# enabled = false
+# model_name = "NeoQuasar/Kronos-mini"
+# model_version = "v1"
+# lookback_bars = 512
+# sample_count = 64
+# horizons = [1, 5, 21]
+# target_field = "close"
+# cache_dir = "data"
+#
+# [overlays.kronos.thresholds]
+# std_quantile_trigger = 0.80
+# std_quantile_severe = 0.95
+# tail_prob_5d_neg_2pct = 0.40
+# tail_prob_21d_neg_5pct = 0.35
+#
+# [overlays.kronos.gold]
+# scale_factor = 0.3
+# freeze_days = 7
+#
+# [overlays.kronos.equity]
+# scale_factor = 0.5
+# freeze_days = 5
+#
+# [overlays.kronos.forex]
+# scale_factor = 0.7
+# freeze_days = 3
 
 [execution.ig]
 environment = "DEMO"

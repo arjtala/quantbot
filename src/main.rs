@@ -10,18 +10,16 @@ use clap::{Parser, Subcommand};
 #[cfg(feature = "track-b")]
 use quantbot::agents::combiner;
 #[cfg(feature = "track-b")]
-use quantbot::agents::indicator::DummyIndicatorAgent;
+use quantbot::agents::indicator::cached_agent::CachedIndicatorAgent;
 #[cfg(feature = "track-b")]
 use quantbot::agents::indicator::llm_agent::LlmIndicatorAgent;
 #[cfg(feature = "track-b")]
-use quantbot::agents::indicator::cached_agent::CachedIndicatorAgent;
-#[cfg(feature = "track-b")]
-use quantbot::agents::SignalAgent;
+use quantbot::agents::indicator::DummyIndicatorAgent;
 use quantbot::agents::risk::{RiskAgent, RiskDecision};
 use quantbot::agents::tsmom::TSMOMAgent;
-use quantbot::audit::{
-    self, AuditLogger, RunId, RunSummary, TargetEntry,
-};
+#[cfg(feature = "track-b")]
+use quantbot::agents::SignalAgent;
+use quantbot::audit::{self, AuditLogger, RunId, RunSummary, TargetEntry};
 use quantbot::backtest::engine::{BacktestConfig, BacktestEngine, TargetSnapshot};
 use quantbot::backtest::metrics::BacktestResult;
 use quantbot::config::{AppConfig, EngineType};
@@ -40,6 +38,7 @@ use quantbot::execution::paper::PaperExecutionEngine;
 use quantbot::execution::reconcile;
 use quantbot::execution::router::SizedOrder;
 use quantbot::execution::traits::{ExecutionEngine, OrderRequest};
+use quantbot::forecast::ForecastSummary;
 use quantbot::notify::{Notifier, NotifyEvent};
 use quantbot::recording::{Recorder, SignalRecord};
 
@@ -74,6 +73,8 @@ enum Command {
     /// Batch-fill LLM cache for eval replay
     #[cfg(feature = "track-b")]
     Cache(CacheArgs),
+    /// Kronos forecast research workflows
+    Forecast(ForecastArgs),
 }
 
 #[derive(Parser)]
@@ -235,6 +236,58 @@ struct EvalReplayArgs {
 struct CacheArgs {
     #[command(subcommand)]
     command: CacheCommand,
+}
+
+#[derive(Parser)]
+struct ForecastArgs {
+    #[command(subcommand)]
+    command: ForecastCommand,
+}
+
+#[derive(Subcommand)]
+enum ForecastCommand {
+    /// Show cached forecast coverage by instrument and horizon
+    Coverage(ForecastCoverageArgs),
+    /// Replay cached forecast summaries into Kronos overlay actions
+    Replay(ForecastReplayArgs),
+}
+
+#[derive(Parser)]
+struct ForecastCoverageArgs {
+    /// Path to SQLite database
+    #[arg(long, default_value = "data/quantbot.db")]
+    db: PathBuf,
+
+    /// Forecast model name
+    #[arg(long, default_value = "NeoQuasar/Kronos-mini")]
+    model_name: String,
+
+    /// Forecast model version
+    #[arg(long, default_value = "v1")]
+    model_version: String,
+
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
+struct ForecastReplayArgs {
+    /// Path to TOML configuration file (must have [overlays.kronos])
+    #[arg(long)]
+    config: PathBuf,
+
+    /// Evaluation date (YYYY-MM-DD)
+    #[arg(long)]
+    eval_date: NaiveDate,
+
+    /// Path to SQLite database
+    #[arg(long, default_value = "data/quantbot.db")]
+    db: PathBuf,
+
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
 }
 
 #[cfg(feature = "track-b")]
@@ -577,6 +630,10 @@ async fn main() {
         Command::Cache(args) => match args.command {
             CacheCommand::Fill(fill_args) => run_cache_fill(fill_args).await,
         },
+        Command::Forecast(args) => match args.command {
+            ForecastCommand::Coverage(coverage_args) => run_forecast_coverage(coverage_args),
+            ForecastCommand::Replay(replay_args) => run_forecast_replay(replay_args),
+        },
     };
 
     if let Err(e) = result {
@@ -698,12 +755,7 @@ fn compute_attribution(
 
     // Get point_value per instrument from contract specs
     let specs = ContractSpec::ig_defaults();
-    let get_pv = |sym: &str| -> f64 {
-        specs
-            .get(sym)
-            .map(|s| s.point_value)
-            .unwrap_or(1.0)
-    };
+    let get_pv = |sym: &str| -> f64 { specs.get(sym).map(|s| s.point_value).unwrap_or(1.0) };
 
     let mut attr: HashMap<String, InstrumentAttribution> = HashMap::new();
     let mut prev_qty: HashMap<String, f64> = HashMap::new();
@@ -943,7 +995,10 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         .llm_cache_coverage(&args.model, &args.prompt_hash)
         .context("failed to query LLM cache coverage")?;
 
-    eprintln!("  Cache coverage for model={} prompt_hash={}:", args.model, args.prompt_hash);
+    eprintln!(
+        "  Cache coverage for model={} prompt_hash={}:",
+        args.model, args.prompt_hash
+    );
     let mut total_cached = 0usize;
     for sym in &symbols {
         let count = coverage.get(sym).copied().unwrap_or(0);
@@ -1016,19 +1071,22 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
 
     if args.json {
         let mut output = serde_json::Map::new();
-        output.insert(
-            "blended".into(),
-            serde_json::to_value(&result).unwrap(),
-        );
+        output.insert("blended".into(), serde_json::to_value(&result).unwrap());
         if let Some(ref tr) = tsmom_result {
-            output.insert(
-                "tsmom_only".into(),
-                serde_json::to_value(tr).unwrap(),
-            );
+            output.insert("tsmom_only".into(), serde_json::to_value(tr).unwrap());
         }
-        output.insert("cache_hit_rate".into(), serde_json::Value::from(cov_report.hit_rate()));
-        output.insert("cache_hits".into(), serde_json::Value::from(cov_report.total_hits as u64));
-        output.insert("cache_misses".into(), serde_json::Value::from(cov_report.total_misses as u64));
+        output.insert(
+            "cache_hit_rate".into(),
+            serde_json::Value::from(cov_report.hit_rate()),
+        );
+        output.insert(
+            "cache_hits".into(),
+            serde_json::Value::from(cov_report.total_hits as u64),
+        );
+        output.insert(
+            "cache_misses".into(),
+            serde_json::Value::from(cov_report.total_misses as u64),
+        );
 
         // Per-instrument attribution
         let blended_attr = compute_attribution(&snapshots, &bars);
@@ -1051,11 +1109,26 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             let mut entry = serde_json::Map::new();
             entry.insert("blended_pnl".into(), serde_json::Value::from(b.pnl_usd));
             entry.insert("tsmom_pnl".into(), serde_json::Value::from(base_pnl));
-            entry.insert("delta_pnl".into(), serde_json::Value::from(b.pnl_usd - base_pnl));
-            entry.insert("avg_abs_position_pct".into(), serde_json::Value::from(avg_abs_pct));
-            entry.insert("trade_count".into(), serde_json::Value::from(b.trade_count as u64));
-            entry.insert("indicator_used_pct".into(), serde_json::Value::from(ind_used_pct));
-            entry.insert("total_days".into(), serde_json::Value::from(b.total_days as u64));
+            entry.insert(
+                "delta_pnl".into(),
+                serde_json::Value::from(b.pnl_usd - base_pnl),
+            );
+            entry.insert(
+                "avg_abs_position_pct".into(),
+                serde_json::Value::from(avg_abs_pct),
+            );
+            entry.insert(
+                "trade_count".into(),
+                serde_json::Value::from(b.trade_count as u64),
+            );
+            entry.insert(
+                "indicator_used_pct".into(),
+                serde_json::Value::from(ind_used_pct),
+            );
+            entry.insert(
+                "total_days".into(),
+                serde_json::Value::from(b.total_days as u64),
+            );
             attr_map.insert(sym.clone(), serde_json::Value::Object(entry));
         }
         output.insert("attribution".into(), serde_json::Value::Object(attr_map));
@@ -1066,7 +1139,11 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             use quantbot::config::BlendCategory;
 
             let mut class_rollup = serde_json::Map::new();
-            for cat in [BlendCategory::Gold, BlendCategory::Equity, BlendCategory::Forex] {
+            for cat in [
+                BlendCategory::Gold,
+                BlendCategory::Equity,
+                BlendCategory::Forex,
+            ] {
                 let mut bc = 0.0_f64;
                 let mut tc = 0.0_f64;
                 let mut trades = 0usize;
@@ -1088,38 +1165,58 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
                 entry.insert("trade_count".into(), serde_json::Value::from(trades as u64));
                 class_rollup.insert(cat.to_string(), serde_json::Value::Object(entry));
             }
-            output.insert("attribution_by_class".into(), serde_json::Value::Object(class_rollup));
+            output.insert(
+                "attribution_by_class".into(),
+                serde_json::Value::Object(class_rollup),
+            );
         }
 
         // Gold disagreement in JSON
         {
             let disagreement = compute_disagreement(&snapshots, &bars);
             let mut dis_map = serde_json::Map::new();
-            dis_map.insert("gold_indicator_days".into(), serde_json::Value::from(disagreement.gold_indicator_days as u64));
+            dis_map.insert(
+                "gold_indicator_days".into(),
+                serde_json::Value::from(disagreement.gold_indicator_days as u64),
+            );
 
-            for (key, days) in [("sign_flips", &disagreement.sign_flips), ("dampened", &disagreement.dampened)] {
+            for (key, days) in [
+                ("sign_flips", &disagreement.sign_flips),
+                ("dampened", &disagreement.dampened),
+            ] {
                 let mut section = serde_json::Map::new();
                 section.insert("count".into(), serde_json::Value::from(days.len() as u64));
 
                 for (label, horizon) in [("1d", 0usize), ("5d", 1), ("21d", 2)] {
-                    let with_ret: Vec<&DisagreementDay> = days.iter()
+                    let with_ret: Vec<&DisagreementDay> = days
+                        .iter()
                         .filter(|d| d.fwd_returns[horizon].is_some())
                         .collect();
                     if !with_ret.is_empty() {
                         let n = with_ret.len();
                         let win = if key == "sign_flips" {
-                            with_ret.iter().filter(|d| {
-                                let ret = d.fwd_returns[horizon].unwrap();
-                                (ret > 0.0 && d.indicator_weight > 0.0) || (ret < 0.0 && d.indicator_weight < 0.0)
-                            }).count()
+                            with_ret
+                                .iter()
+                                .filter(|d| {
+                                    let ret = d.fwd_returns[horizon].unwrap();
+                                    (ret > 0.0 && d.indicator_weight > 0.0)
+                                        || (ret < 0.0 && d.indicator_weight < 0.0)
+                                })
+                                .count()
                         } else {
-                            with_ret.iter().filter(|d| {
-                                let ret = d.fwd_returns[horizon].unwrap();
-                                ret * d.combined_weight > ret * d.tsmom_weight
-                            }).count()
+                            with_ret
+                                .iter()
+                                .filter(|d| {
+                                    let ret = d.fwd_returns[horizon].unwrap();
+                                    ret * d.combined_weight > ret * d.tsmom_weight
+                                })
+                                .count()
                         };
                         let mut h = serde_json::Map::new();
-                        h.insert("win_rate".into(), serde_json::Value::from(win as f64 / n as f64));
+                        h.insert(
+                            "win_rate".into(),
+                            serde_json::Value::from(win as f64 / n as f64),
+                        );
                         h.insert("n".into(), serde_json::Value::from(n as u64));
                         section.insert(label.to_string(), serde_json::Value::Object(h));
                     }
@@ -1176,10 +1273,8 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
         let initial_nav = args.initial_cash;
         let mut sorted_syms: Vec<&String> = blended_attr.keys().collect();
         sorted_syms.sort_by(|a, b| {
-            let da = blended_attr[*a].pnl_usd
-                - baseline_attr.get(*a).map_or(0.0, |x| x.pnl_usd);
-            let db = blended_attr[*b].pnl_usd
-                - baseline_attr.get(*b).map_or(0.0, |x| x.pnl_usd);
+            let da = blended_attr[*a].pnl_usd - baseline_attr.get(*a).map_or(0.0, |x| x.pnl_usd);
+            let db = blended_attr[*b].pnl_usd - baseline_attr.get(*b).map_or(0.0, |x| x.pnl_usd);
             da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
         });
 
@@ -1242,13 +1337,22 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
                 "{:<14} {:>12} {:>12} {:>10} {:>30} {:>8}",
                 "Asset Class", "Blnd PnL", "TSMOM PnL", "Delta", "", "Trades"
             );
-            for cat in [BlendCategory::Gold, BlendCategory::Equity, BlendCategory::Forex] {
+            for cat in [
+                BlendCategory::Gold,
+                BlendCategory::Equity,
+                BlendCategory::Forex,
+            ] {
                 let bc = class_blended.get(&cat).copied().unwrap_or(0.0);
                 let tc = class_baseline.get(&cat).copied().unwrap_or(0.0);
                 let trades = class_trades.get(&cat).copied().unwrap_or(0);
                 println!(
                     "{:<14} {:>12.0} {:>12.0} {:>+10.0} {:>30} {:>8}",
-                    format!("[{cat}]"), bc, tc, bc - tc, "", trades,
+                    format!("[{cat}]"),
+                    bc,
+                    tc,
+                    bc - tc,
+                    "",
+                    trades,
                 );
             }
         }
@@ -1280,20 +1384,36 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             println!();
             println!("  Sign Flips (indicator opposes TSMOM direction):");
             let n = disagreement.sign_flips.len();
-            println!("    Count:  {} / {} gold-indicator-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
+            println!(
+                "    Count:  {} / {} gold-indicator-days ({:.1}%)",
+                n,
+                total,
+                100.0 * n as f64 / total as f64
+            );
             for (label, horizon) in [("1d", 0), ("5d", 1), ("21d", 2)] {
-                let with_ret: Vec<&DisagreementDay> = disagreement.sign_flips.iter()
+                let with_ret: Vec<&DisagreementDay> = disagreement
+                    .sign_flips
+                    .iter()
                     .filter(|d| d.fwd_returns[horizon].is_some())
                     .collect();
                 if with_ret.is_empty() {
                     println!("    Indicator correct ({label}):  n/a");
                 } else {
-                    let correct = with_ret.iter().filter(|d| {
-                        let ret = d.fwd_returns[horizon].unwrap();
-                        (ret > 0.0 && d.indicator_weight > 0.0) || (ret < 0.0 && d.indicator_weight < 0.0)
-                    }).count();
-                    let avg_ret: f64 = with_ret.iter().map(|d| d.fwd_returns[horizon].unwrap()).sum::<f64>() / with_ret.len() as f64;
-                    println!("    Indicator correct ({label}):  {:.1}%  (avg fwd ret: {:+.2}%, n={})",
+                    let correct = with_ret
+                        .iter()
+                        .filter(|d| {
+                            let ret = d.fwd_returns[horizon].unwrap();
+                            (ret > 0.0 && d.indicator_weight > 0.0)
+                                || (ret < 0.0 && d.indicator_weight < 0.0)
+                        })
+                        .count();
+                    let avg_ret: f64 = with_ret
+                        .iter()
+                        .map(|d| d.fwd_returns[horizon].unwrap())
+                        .sum::<f64>()
+                        / with_ret.len() as f64;
+                    println!(
+                        "    Indicator correct ({label}):  {:.1}%  (avg fwd ret: {:+.2}%, n={})",
                         100.0 * correct as f64 / with_ret.len() as f64,
                         avg_ret * 100.0,
                         with_ret.len(),
@@ -1304,23 +1424,38 @@ fn run_eval_replay(args: EvalReplayArgs) -> Result<()> {
             println!();
             println!("  Dampening (same sign, |Δweight| > 0.1):");
             let n = disagreement.dampened.len();
-            println!("    Count:  {} / {} gold-indicator-days ({:.1}%)", n, total, 100.0 * n as f64 / total as f64);
+            println!(
+                "    Count:  {} / {} gold-indicator-days ({:.1}%)",
+                n,
+                total,
+                100.0 * n as f64 / total as f64
+            );
             for (label, horizon) in [("1d", 0), ("5d", 1), ("21d", 2)] {
-                let with_ret: Vec<&DisagreementDay> = disagreement.dampened.iter()
+                let with_ret: Vec<&DisagreementDay> = disagreement
+                    .dampened
+                    .iter()
                     .filter(|d| d.fwd_returns[horizon].is_some())
                     .collect();
                 if with_ret.is_empty() {
                     println!("    Blend outperforms ({label}):  n/a");
                 } else {
-                    let outperforms = with_ret.iter().filter(|d| {
-                        let ret = d.fwd_returns[horizon].unwrap();
-                        ret * d.combined_weight > ret * d.tsmom_weight
-                    }).count();
-                    let avg_edge: f64 = with_ret.iter().map(|d| {
-                        let ret = d.fwd_returns[horizon].unwrap();
-                        ret * d.combined_weight - ret * d.tsmom_weight
-                    }).sum::<f64>() / with_ret.len() as f64;
-                    println!("    Blend outperforms ({label}):  {:.1}%  (avg edge: {:+.4}%, n={})",
+                    let outperforms = with_ret
+                        .iter()
+                        .filter(|d| {
+                            let ret = d.fwd_returns[horizon].unwrap();
+                            ret * d.combined_weight > ret * d.tsmom_weight
+                        })
+                        .count();
+                    let avg_edge: f64 = with_ret
+                        .iter()
+                        .map(|d| {
+                            let ret = d.fwd_returns[horizon].unwrap();
+                            ret * d.combined_weight - ret * d.tsmom_weight
+                        })
+                        .sum::<f64>()
+                        / with_ret.len() as f64;
+                    println!(
+                        "    Blend outperforms ({label}):  {:.1}%  (avg edge: {:+.4}%, n={})",
                         100.0 * outperforms as f64 / with_ret.len() as f64,
                         avg_edge * 100.0,
                         with_ret.len(),
@@ -1358,9 +1493,15 @@ async fn run_cache_fill(args: CacheFillArgs) -> Result<()> {
     let symbols: Vec<String> = if let Some(syms) = args.instruments {
         syms
     } else if args.tradeable_only {
-        TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect()
+        TRADEABLE_UNIVERSE
+            .iter()
+            .map(|i| i.symbol.clone())
+            .collect()
     } else {
-        TRADEABLE_UNIVERSE.iter().map(|i| i.symbol.clone()).collect()
+        TRADEABLE_UNIVERSE
+            .iter()
+            .map(|i| i.symbol.clone())
+            .collect()
     };
 
     if !args.data_dir.is_dir() {
@@ -1417,14 +1558,10 @@ async fn run_cache_fill(args: CacheFillArgs) -> Result<()> {
             instrument_eligible += 1;
 
             // Build sub-series for TA computation
-            let sub_bars = BarSeries::new(bars_slice[0..=i].to_vec())
-                .expect("sub-series from valid bars");
+            let sub_bars =
+                BarSeries::new(bars_slice[0..=i].to_vec()).expect("sub-series from valid bars");
             let snapshot = TaSnapshot::compute(&sub_bars);
-            let user_prompt = format!(
-                "Instrument: {}\n\n{}",
-                sym,
-                snapshot.format_for_prompt()
-            );
+            let user_prompt = format!("Instrument: {}\n\n{}", sym, snapshot.format_for_prompt());
 
             let eval_date = bar.date.to_string();
             let ta_hash = sha256_short(&user_prompt);
@@ -1509,8 +1646,7 @@ async fn run_cache_fill(args: CacheFillArgs) -> Result<()> {
             llm_ok,
             parse_ok,
             latency_ms: Some(latency_ms),
-            created_at: chrono::Utc::now()
-                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
         };
         db.insert_llm_cache(&entry)?;
 
@@ -1581,6 +1717,122 @@ async fn run_cache_fill(args: CacheFillArgs) -> Result<()> {
             0.0
         };
         println!("  {sym:<14} {cached}/{eligible} ({pct:.0}%)");
+    }
+
+    Ok(())
+}
+
+fn run_forecast_coverage(args: ForecastCoverageArgs) -> Result<()> {
+    let db = Db::open(&args.db)
+        .with_context(|| format!("failed to open database at {}", args.db.display()))?;
+    let coverage = db
+        .forecast_cache_coverage(&args.model_name, &args.model_version)
+        .context("failed to query forecast cache coverage")?;
+
+    if args.json {
+        let rows: Vec<_> = coverage
+            .into_iter()
+            .map(|((instrument, horizon_days), count)| {
+                serde_json::json!({
+                    "instrument": instrument,
+                    "horizon_days": horizon_days,
+                    "count": count,
+                })
+            })
+            .collect();
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "model_name": args.model_name,
+                "model_version": args.model_version,
+                "coverage": rows,
+            }))?
+        );
+    } else {
+        println!(
+            "Forecast cache coverage — {} {}",
+            args.model_name, args.model_version
+        );
+        let mut rows: Vec<_> = coverage.into_iter().collect();
+        rows.sort_by(|a, b| a.0.cmp(&b.0));
+        for ((instrument, horizon_days), count) in rows {
+            println!("  {:10}  h={:<2}  {}", instrument, horizon_days, count);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_forecast_replay(args: ForecastReplayArgs) -> Result<()> {
+    use quantbot::overlay::dedup_key;
+
+    let app_config = AppConfig::load(&args.config)
+        .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+    let kronos_cfg = app_config
+        .overlays
+        .and_then(|o| o.kronos)
+        .context("config must have [overlays.kronos] for forecast replay")?;
+
+    let db = Db::open(&args.db)
+        .with_context(|| format!("failed to open database at {}", args.db.display()))?;
+
+    let mut history: HashMap<String, Vec<ForecastSummary>> = HashMap::new();
+    let entries = db
+        .list_forecast_cache_for_model_up_to(
+            &kronos_cfg.model_name,
+            &kronos_cfg.model_version,
+            &args.eval_date.to_string(),
+        )
+        .context("failed to load cached forecasts for replay")?;
+
+    let mut skipped_bad_rows = 0usize;
+    for entry in entries {
+        if entry.status != "ok" {
+            continue;
+        }
+        match serde_json::from_str::<ForecastSummary>(&entry.forecast_json) {
+            Ok(summary) => {
+                history
+                    .entry(entry.instrument.clone())
+                    .or_default()
+                    .push(summary);
+            }
+            Err(_) => skipped_bad_rows += 1,
+        }
+    }
+
+    let active_keys: HashSet<String> = db
+        .active_overlay_actions(args.eval_date)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|row| {
+            serde_json::from_str::<quantbot::overlay::OverlayAction>(&row.action_json).ok()
+        })
+        .map(|a| dedup_key(&a))
+        .collect();
+
+    let (actions, triggers) =
+        quantbot::overlay::kronos::compute_kronos_actions(&history, args.eval_date, &kronos_cfg);
+    let (actions, skipped) =
+        quantbot::overlay::dedup_actions(actions, &active_keys, args.eval_date);
+
+    if args.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "eval_date": args.eval_date,
+                "actions": actions,
+                "skipped_duplicates": skipped,
+                "trigger_count": triggers.len(),
+                "bad_cache_rows_skipped": skipped_bad_rows,
+            }))?
+        );
+    } else {
+        println!("Forecast replay scaffold for {}", args.eval_date);
+        println!("  Triggers: {}", triggers.len());
+        println!("  Actions: {}", actions.len());
+        println!("  Skipped duplicates: {}", skipped);
+        println!("  Bad cache rows skipped: {}", skipped_bad_rows);
     }
 
     Ok(())
@@ -1804,7 +2056,12 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
 
             // Apply overlays
             let applied_overlays = if !overlay_actions.is_empty() {
-                quantbot::overlay::apply_overlays(&mut combined_weights, &current_quantities, &overlay_actions, eval_date)
+                quantbot::overlay::apply_overlays(
+                    &mut combined_weights,
+                    &current_quantities,
+                    &overlay_actions,
+                    eval_date,
+                )
             } else {
                 vec![]
             };
@@ -1837,8 +2094,12 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
                 };
                 println!(
                     "  {:<14} {:<10} {:>+8.2} {:>+10.2} {:>+10.2} {:>6}",
-                    r.instrument, r.blend_category, r.tsmom_weight, r.indicator_weight,
-                    r.combined_weight, used_str,
+                    r.instrument,
+                    r.blend_category,
+                    r.tsmom_weight,
+                    r.indicator_weight,
+                    r.combined_weight,
+                    used_str,
                 );
             }
             println!();
@@ -1862,7 +2123,12 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
                 tsmom_signals.insert(sym.clone(), sig);
             }
 
-            let applied_overlays = quantbot::overlay::apply_overlays(&mut tsmom_weights, &current_quantities, &overlay_actions, eval_date);
+            let applied_overlays = quantbot::overlay::apply_overlays(
+                &mut tsmom_weights,
+                &current_quantities,
+                &overlay_actions,
+                eval_date,
+            );
             if !applied_overlays.is_empty() {
                 print_overlay_summary(&applied_overlays);
             }
@@ -1901,7 +2167,12 @@ fn run_paper_trade(args: PaperTradeArgs) -> Result<()> {
             tsmom_signals.insert(sym.clone(), sig);
         }
 
-        let applied_overlays = quantbot::overlay::apply_overlays(&mut tsmom_weights, &current_quantities, &overlay_actions, eval_date);
+        let applied_overlays = quantbot::overlay::apply_overlays(
+            &mut tsmom_weights,
+            &current_quantities,
+            &overlay_actions,
+            eval_date,
+        );
         if !applied_overlays.is_empty() {
             print_overlay_summary(&applied_overlays);
         }
@@ -2002,8 +2273,7 @@ fn save_checkpoint(path: &Path, cp: &DaemonCheckpoint) -> Result<()> {
     }
     let tmp = path.with_extension("json.tmp");
     let json = serde_json::to_string_pretty(cp).context("failed to serialize checkpoint")?;
-    std::fs::write(&tmp, &json)
-        .with_context(|| format!("failed to write {}", tmp.display()))?;
+    std::fs::write(&tmp, &json).with_context(|| format!("failed to write {}", tmp.display()))?;
     std::fs::rename(&tmp, path)
         .with_context(|| format!("failed to rename {} → {}", tmp.display(), path.display()))?;
     Ok(())
@@ -2040,11 +2310,12 @@ fn acquire_pid_lock(path: &Path) -> Result<std::fs::File> {
         .open(path)
         .with_context(|| format!("failed to open PID file: {}", path.display()))?;
 
-    file.try_lock_exclusive()
-        .with_context(|| format!(
+    file.try_lock_exclusive().with_context(|| {
+        format!(
             "another daemon is already running (PID file locked: {})",
             path.display()
-        ))?;
+        )
+    })?;
 
     // Write current PID for diagnostics
     let mut f = &file;
@@ -2071,7 +2342,10 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         .as_ref()
         .map(|nc| Notifier::new(nc.clone()));
     if let Some(ref n) = notifier {
-        n.notify(NotifyEvent::DaemonStart, &format!("PID {}", std::process::id()));
+        n.notify(
+            NotifyEvent::DaemonStart,
+            &format!("PID {}", std::process::id()),
+        );
     }
 
     let daemon_config = app_config.daemon.unwrap_or(DaemonConfig {
@@ -2146,7 +2420,11 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
 
         total_cycles += 1;
         let cycle_start = chrono::Utc::now();
-        eprintln!("\n── Daemon cycle {} at {} ──", total_cycles, cycle_start.format("%Y-%m-%dT%H:%M:%SZ"));
+        eprintln!(
+            "\n── Daemon cycle {} at {} ──",
+            total_cycles,
+            cycle_start.format("%Y-%m-%dT%H:%M:%SZ")
+        );
 
         // ── Auto-update data (once per eval_date) ─────────────────
         if auto_update_data {
@@ -2171,10 +2449,7 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
                 .await
                 {
                     Ok(results) => {
-                        let failed: Vec<_> = results
-                            .iter()
-                            .filter(|r| r.error.is_some())
-                            .collect();
+                        let failed: Vec<_> = results.iter().filter(|r| r.error.is_some()).collect();
                         if failed.is_empty() {
                             eprintln!("  Data update complete ({} symbols)", results.len());
                             last_update_date = Some(today);
@@ -2208,7 +2483,10 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
                             }
                             // Total failure — will retry next cycle
                             if let Some(n) = &notifier {
-                                n.notify(NotifyEvent::DataUpdateFailed, &format!("all {} symbols failed", failed.len()));
+                                n.notify(
+                                    NotifyEvent::DataUpdateFailed,
+                                    &format!("all {} symbols failed", failed.len()),
+                                );
                             }
                         }
                     }
@@ -2262,9 +2540,13 @@ async fn run_daemon(args: DaemonArgs) -> Result<()> {
         if let Ok(fresh_config) = AppConfig::load(&args.config) {
             if let Some(dc) = fresh_config.daemon {
                 if dc.interval_secs != interval_secs {
-                    eprintln!("  Interval changed: {}s → {}s", interval_secs, dc.interval_secs);
+                    eprintln!(
+                        "  Interval changed: {}s → {}s",
+                        interval_secs, dc.interval_secs
+                    );
                     interval_secs = dc.interval_secs;
-                    interval = tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+                    interval =
+                        tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
                     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                     // Consume the immediate first tick so we don't re-run right away
                     interval.tick().await;
@@ -2425,10 +2707,7 @@ async fn run_live(args: LiveArgs) -> Result<()> {
 
     let (nav, mtm_result) = if let Some(engine) = &ig_engine {
         eprintln!("  Authenticating for MTM NAV...");
-        engine
-            .health_check()
-            .await
-            .context("health check failed")?;
+        engine.health_check().await.context("health check failed")?;
         let positions = engine
             .get_positions()
             .await
@@ -2599,7 +2878,11 @@ async fn run_live(args: LiveArgs) -> Result<()> {
         audit.log_volatility_triggers(&vol_triggers, vol_action_count);
 
         // Notify on severe triggers
-        if let Some(vol_cfg) = app_config.overlays.as_ref().and_then(|o| o.volatility.as_ref()) {
+        if let Some(vol_cfg) = app_config
+            .overlays
+            .as_ref()
+            .and_then(|o| o.volatility.as_ref())
+        {
             let severe: Vec<&str> = vol_triggers
                 .iter()
                 .filter(|t| t.is_severe(&vol_cfg.thresholds_for(t.category)))
@@ -2615,10 +2898,8 @@ async fn run_live(args: LiveArgs) -> Result<()> {
 
     // ── News overlay (deterministic, manual feed) ───────────────────
     let pre_news_count = overlay_actions.len();
-    let news_triggers = if let Some(news_cfg) = app_config
-        .overlays
-        .as_ref()
-        .and_then(|o| o.news.as_ref())
+    let news_triggers = if let Some(news_cfg) =
+        app_config.overlays.as_ref().and_then(|o| o.news.as_ref())
     {
         if news_cfg.enabled {
             let feed_path = std::path::Path::new(&news_cfg.feed_path);
@@ -2664,114 +2945,15 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     }
 
     #[cfg(feature = "track-b")]
-    let (snapshot, combined_results, applied_overlays): (TargetSnapshot, Option<Vec<combiner::CombinedResult>>, Vec<quantbot::overlay::AppliedOverlay>) =
-        if app_config
-            .blending
-            .as_ref()
-            .is_some_and(|b| b.enabled)
-        {
-            let blend_config = app_config.blending.as_ref().unwrap();
-            eprintln!("  Blending mode: ENABLED");
+    let (snapshot, combined_results, applied_overlays): (
+        TargetSnapshot,
+        Option<Vec<combiner::CombinedResult>>,
+        Vec<quantbot::overlay::AppliedOverlay>,
+    ) = if app_config.blending.as_ref().is_some_and(|b| b.enabled) {
+        let blend_config = app_config.blending.as_ref().unwrap();
+        eprintln!("  Blending mode: ENABLED");
 
-            // Generate TSMOM signals (same logic as generate_targets)
-            let mut tsmom_signals = HashMap::new();
-            let mut tsmom_weights = HashMap::new();
-            for (sym, series) in &bars {
-                if series.bars().len() < args.min_history {
-                    continue;
-                }
-                let sig = agent.generate_signal(series, sym);
-                let weight = if sig.direction != SignalDirection::Flat {
-                    TSMOMAgent::compute_target_weight(&sig)
-                } else {
-                    0.0
-                };
-                tsmom_weights.insert(sym.clone(), weight);
-                tsmom_signals.insert(sym.clone(), sig);
-            }
-
-            // Build indicator signal map
-            let indicator_map: HashMap<String, quantbot::core::signal::Signal> = indicator_signals
-                .iter()
-                .map(|(sym, sig)| (sym.clone(), sig.clone()))
-                .collect();
-
-            // Combine
-            let results = combiner::combine_signals(&tsmom_signals, &indicator_map, blend_config);
-
-            // Build override maps
-            let mut combined_weights = HashMap::new();
-            let mut combined_signals = HashMap::new();
-            for r in &results {
-                combined_weights.insert(r.instrument.clone(), r.combined_weight);
-                let combined_sig = combiner::build_combined_signal(
-                    r,
-                    &tsmom_signals[&r.instrument],
-                    indicator_map.get(&r.instrument),
-                );
-                combined_signals.insert(r.instrument.clone(), combined_sig);
-            }
-
-            // Apply overlays
-            let applied_overlays = if !overlay_actions.is_empty() {
-                quantbot::overlay::apply_overlays(&mut combined_weights, &HashMap::new(), &overlay_actions, eval_date)
-            } else {
-                vec![]
-            };
-            if !applied_overlays.is_empty() {
-                print_overlay_summary(&applied_overlays);
-                audit.log_overlays_applied(&applied_overlays);
-            }
-
-            let snap = bt_engine.generate_targets_with_overrides(
-                combined_signals,
-                combined_weights,
-                &bars,
-                &HashMap::new(),
-                nav,
-            );
-            (snap, Some(results), applied_overlays)
-        } else if !overlay_actions.is_empty() {
-            eprintln!("  Blending mode: disabled (TSMOM-only + overlays)");
-            let mut tsmom_signals = HashMap::new();
-            let mut tsmom_weights = HashMap::new();
-            for (sym, series) in &bars {
-                if series.bars().len() < args.min_history {
-                    continue;
-                }
-                let sig = agent.generate_signal(series, sym);
-                let weight = if sig.direction != SignalDirection::Flat {
-                    TSMOMAgent::compute_target_weight(&sig)
-                } else {
-                    0.0
-                };
-                tsmom_weights.insert(sym.clone(), weight);
-                tsmom_signals.insert(sym.clone(), sig);
-            }
-
-            let applied_overlays = quantbot::overlay::apply_overlays(&mut tsmom_weights, &HashMap::new(), &overlay_actions, eval_date);
-            if !applied_overlays.is_empty() {
-                print_overlay_summary(&applied_overlays);
-                audit.log_overlays_applied(&applied_overlays);
-            }
-
-            let snap = bt_engine.generate_targets_with_overrides(
-                tsmom_signals,
-                tsmom_weights,
-                &bars,
-                &HashMap::new(),
-                nav,
-            );
-            (snap, None, applied_overlays)
-        } else {
-            eprintln!("  Blending mode: disabled (TSMOM-only)");
-            let snap =
-                bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
-            (snap, None, vec![])
-        };
-
-    #[cfg(not(feature = "track-b"))]
-    let (snapshot, applied_overlays): (TargetSnapshot, Vec<quantbot::overlay::AppliedOverlay>) = if !overlay_actions.is_empty() {
+        // Generate TSMOM signals (same logic as generate_targets)
         let mut tsmom_signals = HashMap::new();
         let mut tsmom_weights = HashMap::new();
         for (sym, series) in &bars {
@@ -2788,28 +2970,151 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             tsmom_signals.insert(sym.clone(), sig);
         }
 
-        let applied = quantbot::overlay::apply_overlays(&mut tsmom_weights, &HashMap::new(), &overlay_actions, eval_date);
-        if !applied.is_empty() {
-            print_overlay_summary(&applied);
-            audit.log_overlays_applied(&applied);
+        // Build indicator signal map
+        let indicator_map: HashMap<String, quantbot::core::signal::Signal> = indicator_signals
+            .iter()
+            .map(|(sym, sig)| (sym.clone(), sig.clone()))
+            .collect();
+
+        // Combine
+        let results = combiner::combine_signals(&tsmom_signals, &indicator_map, blend_config);
+
+        // Build override maps
+        let mut combined_weights = HashMap::new();
+        let mut combined_signals = HashMap::new();
+        for r in &results {
+            combined_weights.insert(r.instrument.clone(), r.combined_weight);
+            let combined_sig = combiner::build_combined_signal(
+                r,
+                &tsmom_signals[&r.instrument],
+                indicator_map.get(&r.instrument),
+            );
+            combined_signals.insert(r.instrument.clone(), combined_sig);
         }
 
-        (bt_engine.generate_targets_with_overrides(
+        // Apply overlays
+        let applied_overlays = if !overlay_actions.is_empty() {
+            quantbot::overlay::apply_overlays(
+                &mut combined_weights,
+                &HashMap::new(),
+                &overlay_actions,
+                eval_date,
+            )
+        } else {
+            vec![]
+        };
+        if !applied_overlays.is_empty() {
+            print_overlay_summary(&applied_overlays);
+            audit.log_overlays_applied(&applied_overlays);
+        }
+
+        let snap = bt_engine.generate_targets_with_overrides(
+            combined_signals,
+            combined_weights,
+            &bars,
+            &HashMap::new(),
+            nav,
+        );
+        (snap, Some(results), applied_overlays)
+    } else if !overlay_actions.is_empty() {
+        eprintln!("  Blending mode: disabled (TSMOM-only + overlays)");
+        let mut tsmom_signals = HashMap::new();
+        let mut tsmom_weights = HashMap::new();
+        for (sym, series) in &bars {
+            if series.bars().len() < args.min_history {
+                continue;
+            }
+            let sig = agent.generate_signal(series, sym);
+            let weight = if sig.direction != SignalDirection::Flat {
+                TSMOMAgent::compute_target_weight(&sig)
+            } else {
+                0.0
+            };
+            tsmom_weights.insert(sym.clone(), weight);
+            tsmom_signals.insert(sym.clone(), sig);
+        }
+
+        let applied_overlays = quantbot::overlay::apply_overlays(
+            &mut tsmom_weights,
+            &HashMap::new(),
+            &overlay_actions,
+            eval_date,
+        );
+        if !applied_overlays.is_empty() {
+            print_overlay_summary(&applied_overlays);
+            audit.log_overlays_applied(&applied_overlays);
+        }
+
+        let snap = bt_engine.generate_targets_with_overrides(
             tsmom_signals,
             tsmom_weights,
             &bars,
             &HashMap::new(),
             nav,
-        ), applied)
+        );
+        (snap, None, applied_overlays)
     } else {
-        (bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history), vec![])
+        eprintln!("  Blending mode: disabled (TSMOM-only)");
+        let snap =
+            bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history);
+        (snap, None, vec![])
     };
+
+    #[cfg(not(feature = "track-b"))]
+    let (snapshot, applied_overlays): (TargetSnapshot, Vec<quantbot::overlay::AppliedOverlay>) =
+        if !overlay_actions.is_empty() {
+            let mut tsmom_signals = HashMap::new();
+            let mut tsmom_weights = HashMap::new();
+            for (sym, series) in &bars {
+                if series.bars().len() < args.min_history {
+                    continue;
+                }
+                let sig = agent.generate_signal(series, sym);
+                let weight = if sig.direction != SignalDirection::Flat {
+                    TSMOMAgent::compute_target_weight(&sig)
+                } else {
+                    0.0
+                };
+                tsmom_weights.insert(sym.clone(), weight);
+                tsmom_signals.insert(sym.clone(), sig);
+            }
+
+            let applied = quantbot::overlay::apply_overlays(
+                &mut tsmom_weights,
+                &HashMap::new(),
+                &overlay_actions,
+                eval_date,
+            );
+            if !applied.is_empty() {
+                print_overlay_summary(&applied);
+                audit.log_overlays_applied(&applied);
+            }
+
+            (
+                bt_engine.generate_targets_with_overrides(
+                    tsmom_signals,
+                    tsmom_weights,
+                    &bars,
+                    &HashMap::new(),
+                    nav,
+                ),
+                applied,
+            )
+        } else {
+            (
+                bt_engine.generate_targets(&agent, &bars, &HashMap::new(), nav, args.min_history),
+                vec![],
+            )
+        };
 
     // Notify on overlay application
     if !applied_overlays.is_empty() {
         if let Some(ref n) = notifier {
             let count = applied_overlays.len();
-            n.notify(NotifyEvent::OverlayApplied, &format!("{count} overlay(s) applied"));
+            n.notify(
+                NotifyEvent::OverlayApplied,
+                &format!("{count} overlay(s) applied"),
+            );
         }
     }
 
@@ -2941,7 +3246,10 @@ async fn run_live(args: LiveArgs) -> Result<()> {
             (Some(rec), peak)
         }
         Err(e) => {
-            eprintln!("  WARN: failed to open SQLite database {}: {e}", db_path.display());
+            eprintln!(
+                "  WARN: failed to open SQLite database {}: {e}",
+                db_path.display()
+            );
             (None, None)
         }
     };
@@ -3048,8 +3356,12 @@ async fn run_live(args: LiveArgs) -> Result<()> {
                 };
                 println!(
                     "  {:<14} {:<10} {:>+8.2} {:>+10.2} {:>+10.2} {:>6}",
-                    r.instrument, r.blend_category, r.tsmom_weight, r.indicator_weight,
-                    r.combined_weight, used_str,
+                    r.instrument,
+                    r.blend_category,
+                    r.tsmom_weight,
+                    r.indicator_weight,
+                    r.combined_weight,
+                    used_str,
                 );
             }
             println!();
@@ -3068,12 +3380,36 @@ async fn run_live(args: LiveArgs) -> Result<()> {
     let result = match app_config.execution.engine {
         EngineType::Paper => {
             let engine = PaperExecutionEngine::new();
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref(), notifier.as_ref()).await
+            run_rebalance(
+                &engine,
+                &snapshot,
+                &symbols,
+                ig_config,
+                &args,
+                nav,
+                engine_name,
+                &mut audit,
+                recorder.as_ref(),
+                notifier.as_ref(),
+            )
+            .await
         }
         EngineType::Ig => {
             // Reuse IG engine created for MTM (already authenticated)
             let engine = ig_engine.expect("IG engine already created for MTM");
-            run_rebalance(&engine, &snapshot, &symbols, ig_config, &args, nav, engine_name, &mut audit, recorder.as_ref(), notifier.as_ref()).await
+            run_rebalance(
+                &engine,
+                &snapshot,
+                &symbols,
+                ig_config,
+                &args,
+                nav,
+                engine_name,
+                &mut audit,
+                recorder.as_ref(),
+                notifier.as_ref(),
+            )
+            .await
         }
     };
 
@@ -3249,7 +3585,16 @@ async fn run_rebalance(
             eprintln!("  Flatten failed: {e}");
         }
         finish(
-            audit, "BREAKER_TRIPPED", 0, 0, 0, dust_skipped, 0, start_time, args.json, recorder,
+            audit,
+            "BREAKER_TRIPPED",
+            0,
+            0,
+            0,
+            dust_skipped,
+            0,
+            start_time,
+            args.json,
+            recorder,
         );
         bail!("circuit breaker tripped: {reason}");
     }
@@ -3263,7 +3608,16 @@ async fn run_rebalance(
         eprintln!("  --dry-run: no orders placed");
         audit.log_execution_skipped("dry_run", delta_orders.len());
         finish(
-            audit, "DRY_RUN", 0, 0, 0, dust_skipped, 0, start_time, args.json, recorder,
+            audit,
+            "DRY_RUN",
+            0,
+            0,
+            0,
+            dust_skipped,
+            0,
+            start_time,
+            args.json,
+            recorder,
         );
         return Ok(());
     }
@@ -3310,7 +3664,10 @@ async fn run_rebalance(
         // Notify on trade execution
         if orders_confirmed > 0 && !args.dry_run {
             if let Some(n) = &notifier {
-                n.notify(NotifyEvent::TradeExecuted, &format!("{orders_confirmed} order(s) confirmed"));
+                n.notify(
+                    NotifyEvent::TradeExecuted,
+                    &format!("{orders_confirmed} order(s) confirmed"),
+                );
             }
         }
     }
@@ -3340,7 +3697,10 @@ async fn run_rebalance(
         }
     }
 
-    audit.log_verify(mismatches.is_empty(), &audit::mismatches_to_entries(&mismatches));
+    audit.log_verify(
+        mismatches.is_empty(),
+        &audit::mismatches_to_entries(&mismatches),
+    );
 
     if let Some(rec) = recorder {
         rec.record_post_trade_positions(&post_signed);
@@ -3527,7 +3887,11 @@ fn print_overlay_summary(applied: &[quantbot::overlay::AppliedOverlay]) {
             quantbot::overlay::OverlayAction::FreezeEntries { scope, until } => {
                 format!("freeze_entries scope={scope:?} until={until}")
             }
-            quantbot::overlay::OverlayAction::ScaleExposure { scope, factor, until } => {
+            quantbot::overlay::OverlayAction::ScaleExposure {
+                scope,
+                factor,
+                until,
+            } => {
                 format!("scale_exposure scope={scope:?} factor={factor} until={until}")
             }
             quantbot::overlay::OverlayAction::Flatten { scope, reason } => {
@@ -3591,8 +3955,11 @@ fn print_volatility_triggers(
 
 fn print_news_triggers(triggers: &[quantbot::overlay::news::NewsTrigger]) {
     println!();
-    println!("  NEWS OVERLAY: matched {} events, emitted {} actions",
-        triggers.len(), triggers.len());
+    println!(
+        "  NEWS OVERLAY: matched {} events, emitted {} actions",
+        triggers.len(),
+        triggers.len()
+    );
     for t in triggers {
         println!(
             "    [{:<8}] {:<28} scope={:<20} until={} reason={:?}",
@@ -3871,11 +4238,7 @@ async fn run_data(args: DataArgs) -> Result<()> {
     };
 
     let today = chrono::Utc::now().date_naive();
-    eprintln!(
-        "  Updating {} symbol(s) to {}...",
-        symbols.len(),
-        today
-    );
+    eprintln!("  Updating {} symbol(s) to {}...", symbols.len(), today);
 
     let updater = DataUpdater::new(&args.data_dir);
     let mut client = YahooClient::new();
@@ -3978,10 +4341,7 @@ async fn run_status(args: StatusArgs) -> Result<()> {
 
     // Use latest bar date as "today" for consistency with trading logic;
     // fall back to system date if no bars are available.
-    let bar_date = freshness_items
-        .iter()
-        .filter_map(|(_, d)| *d)
-        .max();
+    let bar_date = freshness_items.iter().filter_map(|(_, d)| *d).max();
     let today = bar_date.unwrap_or(system_today);
     let eval_date_basis = if bar_date.is_some() { "bars" } else { "system" };
 
@@ -4058,7 +4418,11 @@ async fn run_status(args: StatusArgs) -> Result<()> {
         "STALE"
     };
     let live_status = if args.live {
-        if live_positions.is_some() { "ok" } else { "failed" }
+        if live_positions.is_some() {
+            "ok"
+        } else {
+            "failed"
+        }
     } else {
         "skipped"
     };
@@ -4072,32 +4436,49 @@ async fn run_status(args: StatusArgs) -> Result<()> {
         let mut out = serde_json::Map::new();
 
         // Summary — always present
-        out.insert("summary".into(), serde_json::json!({
-            "daemon": daemon_brief,
-            "last_outcome": last_outcome,
-            "last_run_time": last_run_time,
-            "data_fresh": data_fresh_count,
-            "data_total": freshness_items.len(),
-            "active_overlays": active_overlays.len(),
-            "nav": nav_value,
-            "drawdown_pct": dd_pct,
-            "live": live_status,
-            "eval_date": today.to_string(),
-            "eval_date_basis": eval_date_basis,
-        }));
+        out.insert(
+            "summary".into(),
+            serde_json::json!({
+                "daemon": daemon_brief,
+                "last_outcome": last_outcome,
+                "last_run_time": last_run_time,
+                "data_fresh": data_fresh_count,
+                "data_total": freshness_items.len(),
+                "active_overlays": active_overlays.len(),
+                "nav": nav_value,
+                "drawdown_pct": dd_pct,
+                "live": live_status,
+                "eval_date": today.to_string(),
+                "eval_date_basis": eval_date_basis,
+            }),
+        );
 
         // Daemon — always present
         let mut daemon = serde_json::Map::new();
         daemon.insert("running".into(), daemon_running.into());
-        daemon.insert("pid".into(), daemon_pid.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+        daemon.insert(
+            "pid".into(),
+            daemon_pid
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+        );
         if let Some(ref cp) = checkpoint {
             daemon.insert("last_run_id".into(), cp.last_run_id.clone().into());
             daemon.insert("last_run_time".into(), cp.last_run_time.clone().into());
             daemon.insert("outcome".into(), cp.outcome.clone().into());
-            daemon.insert("consecutive_failures".into(), cp.consecutive_failures.into());
+            daemon.insert(
+                "consecutive_failures".into(),
+                cp.consecutive_failures.into(),
+            );
             daemon.insert("total_cycles".into(), cp.total_cycles.into());
             daemon.insert("next_run_at".into(), cp.next_run_at.clone().into());
-            daemon.insert("last_update_date".into(), cp.last_update_date.clone().map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+            daemon.insert(
+                "last_update_date".into(),
+                cp.last_update_date
+                    .clone()
+                    .map(serde_json::Value::from)
+                    .unwrap_or(serde_json::Value::Null),
+            );
         }
         out.insert("daemon".into(), daemon.into());
 
@@ -4137,7 +4518,12 @@ async fn run_status(args: StatusArgs) -> Result<()> {
                 .collect();
             portfolio.insert("positions".into(), pos.into());
         }
-        portfolio.insert("peak_nav".into(), peak_nav.map(serde_json::Value::from).unwrap_or(serde_json::Value::Null));
+        portfolio.insert(
+            "peak_nav".into(),
+            peak_nav
+                .map(serde_json::Value::from)
+                .unwrap_or(serde_json::Value::Null),
+        );
         out.insert("portfolio".into(), portfolio.into());
 
         // Live positions — always present (null if not requested, array if requested)
@@ -4274,7 +4660,10 @@ async fn run_status(args: StatusArgs) -> Result<()> {
                     OrderSide::Buy => "+",
                     OrderSide::Sell => "-",
                 };
-                println!("  {:<14} {}{:.1} lots  @ {:.2}", p.instrument, sign, p.size, p.open_level);
+                println!(
+                    "  {:<14} {}{:.1} lots  @ {:.2}",
+                    p.instrument, sign, p.size, p.open_level
+                );
             }
         }
     } else if let Some(ref s) = state {
@@ -4336,7 +4725,10 @@ async fn run_status(args: StatusArgs) -> Result<()> {
                 }
                 println!("{detail}");
             } else {
-                println!("  {:<18} {}  {}", o.action_type, o.instrument, o.action_json);
+                println!(
+                    "  {:<18} {}  {}",
+                    o.action_type, o.instrument, o.action_json
+                );
             }
         }
         println!();
@@ -4449,8 +4841,12 @@ mod attribution_tests {
         // Total: 20
         let bars: HashMap<String, BarSeries> = [(
             "SPY".to_string(),
-            BarSeries::new(vec![make_bar(1, 100.0), make_bar(2, 105.0), make_bar(3, 102.0)])
-                .unwrap(),
+            BarSeries::new(vec![
+                make_bar(1, 100.0),
+                make_bar(2, 105.0),
+                make_bar(3, 102.0),
+            ])
+            .unwrap(),
         )]
         .into();
 
@@ -4492,8 +4888,12 @@ mod attribution_tests {
     fn test_indicator_used_tracking() {
         let bars: HashMap<String, BarSeries> = [(
             "GLD".to_string(),
-            BarSeries::new(vec![make_bar(1, 200.0), make_bar(2, 202.0), make_bar(3, 204.0)])
-                .unwrap(),
+            BarSeries::new(vec![
+                make_bar(1, 200.0),
+                make_bar(2, 202.0),
+                make_bar(3, 204.0),
+            ])
+            .unwrap(),
         )]
         .into();
 
@@ -4553,9 +4953,7 @@ mod attribution_tests {
     #[test]
     fn test_instrument_appears_only_in_signals() {
         let bars: HashMap<String, BarSeries> = HashMap::new();
-        let snapshots = vec![
-            make_snapshot(1, &[], &[("USDJPY=X", Some(0.0))], &[]),
-        ];
+        let snapshots = vec![make_snapshot(1, &[], &[("USDJPY=X", Some(0.0))], &[])];
 
         let attr = compute_attribution(&snapshots, &bars);
         let jpy = &attr["USDJPY=X"];
@@ -4582,10 +4980,22 @@ mod disagreement_tests {
     use quantbot::core::signal::{Signal, SignalDirection, SignalType};
 
     fn make_bar(date: NaiveDate, close: f64) -> Bar {
-        Bar { date, open: close, high: close, low: close, close, volume: 1000.0 }
+        Bar {
+            date,
+            open: close,
+            high: close,
+            low: close,
+            close,
+            volume: 1000.0,
+        }
     }
 
-    fn make_gold_signal(tsmom_w: f64, indicator_w: f64, blend_tsmom: f64, blend_indicator: f64) -> Signal {
+    fn make_gold_signal(
+        tsmom_w: f64,
+        indicator_w: f64,
+        blend_tsmom: f64,
+        blend_indicator: f64,
+    ) -> Signal {
         let mut metadata = HashMap::new();
         metadata.insert("tsmom_weight".into(), tsmom_w);
         metadata.insert("indicator_weight".into(), indicator_w);
@@ -4594,7 +5004,11 @@ mod disagreement_tests {
         metadata.insert("indicator_used".into(), 1.0);
         Signal {
             instrument: "GLD".into(),
-            direction: if tsmom_w > 0.0 { SignalDirection::Long } else { SignalDirection::Short },
+            direction: if tsmom_w > 0.0 {
+                SignalDirection::Long
+            } else {
+                SignalDirection::Short
+            },
             strength: 0.5,
             confidence: 0.8,
             agent_name: "combined".into(),
@@ -4626,10 +5040,12 @@ mod disagreement_tests {
         // TSMOM long (+1.0), indicator short (-0.8), 50/50 blend
         let snap = make_snapshot_with_signal(10, make_gold_signal(1.0, -0.8, 0.5, 0.5));
         // Bars: day 10 close=100, day 11 close=98 (price went down → indicator was correct)
-        let bars_vec = (10..=15).map(|d| {
-            let close = if d == 10 { 100.0 } else { 98.0 };
-            make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), close)
-        }).collect::<Vec<_>>();
+        let bars_vec = (10..=15)
+            .map(|d| {
+                let close = if d == 10 { 100.0 } else { 98.0 };
+                make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), close)
+            })
+            .collect::<Vec<_>>();
         let series = BarSeries::new(bars_vec).unwrap();
         let mut bars = HashMap::new();
         bars.insert("GLD".into(), series);
@@ -4649,9 +5065,14 @@ mod disagreement_tests {
         // Both long, but indicator dampens: tsmom=1.5, indicator=0.3, 50/50 blend → combined=0.9
         // |combined - tsmom| = |0.9 - 1.5| = 0.6 > 0.1 → dampened
         let snap = make_snapshot_with_signal(10, make_gold_signal(1.5, 0.3, 0.5, 0.5));
-        let bars_vec = (10..=15).map(|d| {
-            make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), 100.0 + (d - 10) as f64)
-        }).collect::<Vec<_>>();
+        let bars_vec = (10..=15)
+            .map(|d| {
+                make_bar(
+                    NaiveDate::from_ymd_opt(2025, 1, d).unwrap(),
+                    100.0 + (d - 10) as f64,
+                )
+            })
+            .collect::<Vec<_>>();
         let series = BarSeries::new(bars_vec).unwrap();
         let mut bars = HashMap::new();
         bars.insert("GLD".into(), series);
@@ -4689,9 +5110,9 @@ mod disagreement_tests {
         let mut sig = make_gold_signal(1.0, 0.0, 1.0, 0.0);
         sig.metadata.insert("indicator_used".into(), 0.0);
         let snap = make_snapshot_with_signal(10, sig);
-        let bars_vec = (10..=15).map(|d| {
-            make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), 100.0)
-        }).collect::<Vec<_>>();
+        let bars_vec = (10..=15)
+            .map(|d| make_bar(NaiveDate::from_ymd_opt(2025, 1, d).unwrap(), 100.0))
+            .collect::<Vec<_>>();
         let series = BarSeries::new(bars_vec).unwrap();
         let mut bars = HashMap::new();
         bars.insert("GLD".into(), series);
@@ -4812,9 +5233,7 @@ mod daemon_tests {
         let _lock1 = acquire_pid_lock(&path).unwrap();
         let result = acquire_pid_lock(&path);
         assert!(result.is_err());
-        assert!(
-            format!("{:#}", result.unwrap_err()).contains("already running")
-        );
+        assert!(format!("{:#}", result.unwrap_err()).contains("already running"));
     }
 
     #[test]

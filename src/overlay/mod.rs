@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::BlendCategory;
 
+pub mod kronos;
 pub mod news;
 pub mod volatility;
 
@@ -210,12 +211,7 @@ pub fn dedup_key(action: &OverlayAction) -> String {
             factor,
             until,
         } => {
-            format!(
-                "scale|{}|{:.4}|{}",
-                scope_canonical(scope),
-                factor,
-                until
-            )
+            format!("scale|{}|{:.4}|{}", scope_canonical(scope), factor, until)
         }
         OverlayAction::Flatten { scope, reason } => {
             format!("flatten|{}|{}", scope_canonical(scope), reason)
@@ -377,8 +373,12 @@ mod tests {
             factor: 0.5,
             until: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
         }];
-        let applied =
-            apply_overlays(&mut weights, &HashMap::new(), &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &HashMap::new(),
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert_eq!(applied.len(), 1);
         assert!((weights["GLD"] - 0.2).abs() < 1e-10);
@@ -394,8 +394,12 @@ mod tests {
             factor: 0.5,
             until: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
         }];
-        let applied =
-            apply_overlays(&mut weights, &HashMap::new(), &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &HashMap::new(),
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert_eq!(applied.len(), 1);
         assert!((weights["GLD"] - 0.2).abs() < 1e-10);
@@ -412,8 +416,12 @@ mod tests {
             until: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
         }];
         // No current positions → all weights zeroed
-        let applied =
-            apply_overlays(&mut weights, &HashMap::new(), &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &HashMap::new(),
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert_eq!(applied.len(), 1);
         assert_eq!(weights["GLD"], 0.0);
@@ -426,14 +434,18 @@ mod tests {
         let mut weights = make_weights();
         let mut current = HashMap::new();
         current.insert("GLD".into(), 100.0); // has position
-        // SPY and GBPUSD=X have no position
+                                             // SPY and GBPUSD=X have no position
 
         let actions = vec![OverlayAction::FreezeEntries {
             scope: OverlayScope::Global,
             until: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
         }];
-        let applied =
-            apply_overlays(&mut weights, &current, &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &current,
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert_eq!(applied.len(), 1);
         // GLD preserved (has position)
@@ -450,8 +462,12 @@ mod tests {
             scope: OverlayScope::AssetClass(BlendCategory::Forex),
             reason: "weekend risk".into(),
         }];
-        let applied =
-            apply_overlays(&mut weights, &HashMap::new(), &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &HashMap::new(),
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert_eq!(applied.len(), 1);
         assert_eq!(weights["GBPUSD=X"], 0.0);
@@ -467,8 +483,12 @@ mod tests {
             instrument: "SPY".into(),
             until: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
         }];
-        let applied =
-            apply_overlays(&mut weights, &HashMap::new(), &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &HashMap::new(),
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert_eq!(applied.len(), 1);
         assert_eq!(weights["SPY"], 0.0);
@@ -483,8 +503,12 @@ mod tests {
             factor: 0.5,
             until: NaiveDate::from_ymd_opt(2026, 4, 1).unwrap(), // before eval_date
         }];
-        let applied =
-            apply_overlays(&mut weights, &HashMap::new(), &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &HashMap::new(),
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert!(applied.is_empty());
         // Weights unchanged
@@ -510,8 +534,12 @@ mod tests {
                 until: NaiveDate::from_ymd_opt(2026, 12, 31).unwrap(),
             },
         ];
-        let applied =
-            apply_overlays(&mut weights, &current, &actions, NaiveDate::from_ymd_opt(2026, 4, 8).unwrap());
+        let applied = apply_overlays(
+            &mut weights,
+            &current,
+            &actions,
+            NaiveDate::from_ymd_opt(2026, 4, 8).unwrap(),
+        );
 
         assert_eq!(applied.len(), 2);
         // GLD: scaled to 0.2, then freeze skipped (has position)
