@@ -291,6 +291,10 @@ struct ForecastFillArgs {
     /// Stream Python worker stdout/stderr directly
     #[arg(long)]
     progress: bool,
+
+    /// Force the Python worker to use deterministic stub mode
+    #[arg(long)]
+    force_stub: bool,
 }
 
 #[derive(Parser)]
@@ -1845,6 +1849,10 @@ fn run_forecast_fill(args: ForecastFillArgs) -> Result<()> {
         .arg("--target-field")
         .arg(&kronos_cfg.target_field);
 
+    if args.force_stub {
+        cmd.arg("--force-stub");
+    }
+
     eprintln!("  Forecast fill setup:");
     eprintln!("    Python:         {}", args.python);
     eprintln!("    Script:         {}", script_path.display());
@@ -1858,6 +1866,7 @@ fn run_forecast_fill(args: ForecastFillArgs) -> Result<()> {
     eprintln!("    Sample count:   {}", kronos_cfg.sample_count);
     eprintln!("    Target field:   {}", kronos_cfg.target_field);
     eprintln!("    DB:             {}", args.db.display());
+    eprintln!("    Force stub:     {}", args.force_stub);
 
     if args.progress {
         let status = cmd

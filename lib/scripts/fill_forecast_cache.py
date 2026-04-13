@@ -324,18 +324,66 @@ class KronosForecaster(BaseForecaster):
     def __init__(self) -> None:
         # Deferred imports so the script can run without Kronos installed.
         import pandas as pd  # type: ignore
+        import importlib
+        import os
 
+        model_module = None
+        last_error: Exception | None = None
+        kronos_path = os.environ.get("KRONOS_PYTHON_PATH")
+        search_paths = []
+        if kronos_path:
+            search_paths.append(kronos_path)
+        search_paths.append(str(Path.cwd()))
+        search_paths.append(str(Path.cwd() / "Kronos"))
+        search_paths.append(str(Path.cwd() / "third_party" / "Kronos"))
+
+        original_sys_path = list(sys.path)
         try:
-            from model import Kronos, KronosPredictor, KronosTokenizer  # type: ignore
-        except ModuleNotFoundError as exc:  # pragma: no cover
-            raise RuntimeError(
-                "Kronos Python modules are not importable; use --force-stub or install Kronos."
-            ) from exc
+            for path in search_paths:
+                if path and path not in sys.path:
+                    sys.path.insert(0, path)
+                try:
+                    model_module = importlib.import_module("model")
+                    break
+                except Exception as exc:  # pragma: no cover
+                    last_error = exc
+            if model_module is None:
+                raise RuntimeError(
+                    "Kronos Python modules are not importable; set KRONOS_PYTHON_PATH to the "
+                    "Kronos repo root, vendor the repo locally, or use --force-stub."
+                ) from last_error
+        finally:
+            sys.path = original_sys_path
+
+        Kronos = getattr(model_module, "Kronos")
+        KronosPredictor = getattr(model_module, "KronosPredictor")
+        KronosTokenizer = getattr(model_module, "KronosTokenizer")
 
         self.pd = pd
         self.Kronos = Kronos
         self.KronosPredictor = KronosPredictor
         self.KronosTokenizer = KronosTokenizer
+        self._predictor_cache: dict[tuple[str, str, int], Any] = {}
+
+    def _device(self) -> str:
+        import torch  # type: ignore
+
+        return "cuda:0" if torch.cuda.is_available() else "cpu"
+
+    def _get_predictor(
+        self, *, model_name: str, tokenizer_name: str, max_context: int
+    ) -> Any:
+        key = (model_name, tokenizer_name, max_context)
+        if key in self._predictor_cache:
+            return self._predictor_cache[key]
+
+        tokenizer = self.KronosTokenizer.from_pretrained(tokenizer_name)
+        model = self.Kronos.from_pretrained(model_name)
+        predictor = self.KronosPredictor(
+            model, tokenizer, device=self._device(), max_context=max_context
+        )
+        self._predictor_cache[key] = predictor
+        return predictor
 
     def predict_summary(
         self,
@@ -350,13 +398,100 @@ class KronosForecaster(BaseForecaster):
         top_p: float,
         target_field: str,
     ) -> tuple[ForecastSummary, dict[str, Any]]:
-        # This is a deliberately conservative adapter skeleton. The exact Kronos
-        # import path / API may evolve; when wired for real use, replace this
-        # placeholder with the repo's recommended predictor flow.
-        raise RuntimeError(
-            "Real Kronos inference adapter not fully wired yet; run with --force-stub "
-            "or extend KronosForecaster.predict_summary() for your environment."
+        predictor = self._get_predictor(
+            model_name=getattr(self, "model_name"),
+            tokenizer_name=getattr(self, "tokenizer_name"),
+            max_context=lookback_bars,
         )
+        pd = self.pd
+
+        x_df = pd.DataFrame(
+            [
+                {
+                    "open": bar.open,
+                    "high": bar.high,
+                    "low": bar.low,
+                    "close": bar.close,
+                    "volume": bar.volume,
+                }
+                for bar in history
+            ]
+        )
+        x_timestamp = pd.Series(pd.to_datetime([bar.date.isoformat() for bar in history]))
+        future_dates = pd.bdate_range(
+            start=pd.Timestamp(eval_date.isoformat()) + pd.offsets.BDay(1),
+            periods=horizon_days,
+        )
+        y_timestamp = pd.Series(future_dates)
+
+        pred_df = predictor.predict(
+            df=x_df,
+            x_timestamp=x_timestamp,
+            y_timestamp=y_timestamp,
+            pred_len=horizon_days,
+            T=temperature,
+            top_p=top_p,
+            sample_count=sample_count,
+        )
+
+        if target_field not in pred_df.columns:
+            raise ValueError(
+                f"Kronos prediction missing target field '{target_field}'; got columns {list(pred_df.columns)}"
+            )
+
+        last_value = float(getattr(history[-1], target_field))
+        if last_value <= 0.0:
+            raise ValueError("last target value must be > 0 for return normalization")
+        target_values = [float(v) for v in pred_df[target_field].tolist()]
+        if not target_values:
+            raise ValueError("Kronos prediction returned no rows")
+
+        final_return = target_values[-1] / last_value - 1.0
+        samples = [final_return] * sample_count
+
+        summary = ForecastSummary(
+            instrument=instrument,
+            eval_date=eval_date.isoformat(),
+            horizon_days=horizon_days,
+            lookback_bars=lookback_bars,
+            sample_count=sample_count,
+            target_field=target_field,
+            forecast_return=ReturnSummary(
+                mean=final_return,
+                median=final_return,
+                std=0.0,
+                p05=final_return,
+                p25=final_return,
+                p75=final_return,
+                p95=final_return,
+            ),
+            probabilities=ProbabilitySummary(
+                return_lt_0=1.0 if final_return < 0.0 else 0.0,
+                return_lt_neg_1pct=1.0 if final_return < -0.01 else 0.0,
+                return_lt_neg_2pct=1.0 if final_return < -0.02 else 0.0,
+                return_lt_neg_5pct=1.0 if final_return < -0.05 else 0.0,
+                return_gt_1pct=1.0 if final_return > 0.01 else 0.0,
+            ),
+            distribution=DistributionSummary(iqr=0.0, tail_width_90=0.0),
+            diagnostics=ForecastDiagnostics(
+                input_truncated=len(history) == lookback_bars,
+                sampling_temperature=temperature,
+                top_p=top_p,
+                notes="kronos_mode: point forecast adapted into canonical summary",
+            ),
+        )
+        raw_payload = {
+            "mode": self.mode_name,
+            "predicted_rows": len(pred_df),
+            "target_values": target_values,
+            "sample_count": sample_count,
+            "warning": (
+                "Upstream Kronos predict() returns averaged forecasts; canonical distribution "
+                "summary is currently approximated from the point forecast until direct sample "
+                "path extraction is wired."
+            ),
+        }
+        return summary, raw_payload
 
 
 def select_forecaster(force_stub: bool) -> BaseForecaster:
@@ -458,7 +593,13 @@ def ensure_forecast_cache_table(conn: sqlite3.Connection) -> None:
     conn.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_forecast_cache_model
-        ON forecast_cache(model_name, model_version, horizon_days)
+        ON forecast_cache(model_name, model_version, tokenizer_name, horizon_days)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_forecast_cache_status
+        ON forecast_cache(status)
         """
     )
 
@@ -551,6 +692,9 @@ def main() -> int:
     args = resolve_args(parse_args())
     ensure_parent_dir(args.db)
     forecaster = select_forecaster(args.force_stub)
+    if isinstance(forecaster, KronosForecaster):
+        forecaster.model_name = args.model_name
+        forecaster.tokenizer_name = args.tokenizer_name
 
     conn = sqlite3.connect(args.db)
     conn.execute("PRAGMA journal_mode=WAL;")
