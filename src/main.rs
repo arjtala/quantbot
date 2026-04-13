@@ -246,10 +246,51 @@ struct ForecastArgs {
 
 #[derive(Subcommand)]
 enum ForecastCommand {
+    /// Fill forecast_cache by shelling out to the Python batch worker
+    Fill(ForecastFillArgs),
     /// Show cached forecast coverage by instrument and horizon
     Coverage(ForecastCoverageArgs),
     /// Replay cached forecast summaries into Kronos overlay actions
     Replay(ForecastReplayArgs),
+}
+
+#[derive(Parser)]
+struct ForecastFillArgs {
+    /// Path to TOML configuration file (must have [overlays.kronos])
+    #[arg(long)]
+    config: PathBuf,
+
+    /// Start date (YYYY-MM-DD)
+    #[arg(long = "from")]
+    from: NaiveDate,
+
+    /// End date (YYYY-MM-DD)
+    #[arg(long = "to")]
+    to: NaiveDate,
+
+    /// Forecast horizon in trading days
+    #[arg(long)]
+    horizon: u32,
+
+    /// Comma-separated instrument symbols
+    #[arg(long, value_delimiter = ',')]
+    instruments: Option<Vec<String>>,
+
+    /// Path to directory containing CSV data files
+    #[arg(long, default_value = "data", env = "QUANTBOT_DATA")]
+    data_dir: PathBuf,
+
+    /// Path to SQLite database
+    #[arg(long, default_value = "data/quantbot.db")]
+    db: PathBuf,
+
+    /// Python interpreter to use
+    #[arg(long, default_value = "python3")]
+    python: String,
+
+    /// Stream Python worker stdout/stderr directly
+    #[arg(long)]
+    progress: bool,
 }
 
 #[derive(Parser)]
@@ -631,6 +672,7 @@ async fn main() {
             CacheCommand::Fill(fill_args) => run_cache_fill(fill_args).await,
         },
         Command::Forecast(args) => match args.command {
+            ForecastCommand::Fill(fill_args) => run_forecast_fill(fill_args),
             ForecastCommand::Coverage(coverage_args) => run_forecast_coverage(coverage_args),
             ForecastCommand::Replay(replay_args) => run_forecast_replay(replay_args),
         },
@@ -1717,6 +1759,156 @@ async fn run_cache_fill(args: CacheFillArgs) -> Result<()> {
             0.0
         };
         println!("  {sym:<14} {cached}/{eligible} ({pct:.0}%)");
+    }
+
+    Ok(())
+}
+
+fn run_forecast_fill(args: ForecastFillArgs) -> Result<()> {
+    let app_config = AppConfig::load(&args.config)
+        .with_context(|| format!("failed to load config from {}", args.config.display()))?;
+    let kronos_cfg = app_config
+        .overlays
+        .and_then(|o| o.kronos)
+        .context("config must have [overlays.kronos] for forecast fill")?;
+
+    if args.to < args.from {
+        bail!("--to must be on or after --from");
+    }
+
+    if !kronos_cfg.horizons.contains(&args.horizon) {
+        eprintln!(
+            "  WARN: requested horizon {} is not listed in overlays.kronos.horizons = {:?}",
+            args.horizon, kronos_cfg.horizons
+        );
+    }
+
+    if !args.data_dir.is_dir() {
+        bail!("Data directory does not exist: {}", args.data_dir.display());
+    }
+
+    if let Some(parent) = args.db.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create directory {}", parent.display()))?;
+    }
+
+    let script_path = PathBuf::from("lib/scripts/fill_forecast_cache.py");
+    if !script_path.exists() {
+        bail!(
+            "Python forecast worker not found: {}",
+            script_path.display()
+        );
+    }
+
+    let symbols: Vec<String> = match args.instruments {
+        Some(syms) => syms,
+        None => TRADEABLE_UNIVERSE
+            .iter()
+            .map(|i| i.symbol.clone())
+            .collect(),
+    };
+
+    let tokenizer_name = kronos_cfg.tokenizer_name.clone();
+    let temperature = kronos_cfg.temperature;
+    let top_p = kronos_cfg.top_p;
+
+    let mut cmd = process::Command::new(&args.python);
+    cmd.arg(&script_path)
+        .arg("--config")
+        .arg(&args.config)
+        .arg("--db")
+        .arg(&args.db)
+        .arg("--data-dir")
+        .arg(&args.data_dir)
+        .arg("--from")
+        .arg(args.from.to_string())
+        .arg("--to")
+        .arg(args.to.to_string())
+        .arg("--horizon")
+        .arg(args.horizon.to_string())
+        .arg("--instruments")
+        .arg(symbols.join(","))
+        .arg("--model-name")
+        .arg(&kronos_cfg.model_name)
+        .arg("--model-version")
+        .arg(&kronos_cfg.model_version)
+        .arg("--tokenizer-name")
+        .arg(&tokenizer_name)
+        .arg("--lookback-bars")
+        .arg(kronos_cfg.lookback_bars.to_string())
+        .arg("--sample-count")
+        .arg(kronos_cfg.sample_count.to_string())
+        .arg("--temperature")
+        .arg(format!("{temperature:.3}"))
+        .arg("--top-p")
+        .arg(format!("{top_p:.3}"))
+        .arg("--target-field")
+        .arg(&kronos_cfg.target_field);
+
+    eprintln!("  Forecast fill setup:");
+    eprintln!("    Python:         {}", args.python);
+    eprintln!("    Script:         {}", script_path.display());
+    eprintln!("    Model:          {}", kronos_cfg.model_name);
+    eprintln!("    Version:        {}", kronos_cfg.model_version);
+    eprintln!("    Tokenizer:      {}", tokenizer_name);
+    eprintln!("    Date range:     {} to {}", args.from, args.to);
+    eprintln!("    Horizon:        {}d", args.horizon);
+    eprintln!("    Instruments:    {}", symbols.join(", "));
+    eprintln!("    Lookback bars:  {}", kronos_cfg.lookback_bars);
+    eprintln!("    Sample count:   {}", kronos_cfg.sample_count);
+    eprintln!("    Target field:   {}", kronos_cfg.target_field);
+    eprintln!("    DB:             {}", args.db.display());
+
+    if args.progress {
+        let status = cmd
+            .status()
+            .with_context(|| format!("failed to launch Python worker via {}", args.python))?;
+        if !status.success() {
+            bail!("forecast fill worker exited with status {status}");
+        }
+        return Ok(());
+    }
+
+    let output = cmd
+        .output()
+        .with_context(|| format!("failed to launch Python worker via {}", args.python))?;
+
+    if !output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "forecast fill worker failed with status {}{}\n{}{}",
+            output.status,
+            if stdout.trim().is_empty() {
+                ""
+            } else {
+                "\nstdout:\n"
+            },
+            stdout,
+            if stderr.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\nstderr:\n{stderr}")
+            }
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stdout.trim().is_empty() {
+        println!("{stdout}");
+    } else {
+        println!(
+            "Forecast fill completed for {} instrument(s), horizon {}d, {} → {}",
+            symbols.len(),
+            args.horizon,
+            args.from,
+            args.to
+        );
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.trim().is_empty() {
+        eprintln!("{stderr}");
     }
 
     Ok(())

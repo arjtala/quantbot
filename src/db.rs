@@ -8,7 +8,7 @@ use rusqlite::{params, Connection, Result as SqlResult};
 
 /// Schema version stored in PRAGMA user_version. Bump when making breaking
 /// changes to the table layout.
-pub const DB_SCHEMA_VERSION: i32 = 7;
+pub const DB_SCHEMA_VERSION: i32 = 8;
 
 const SCHEMA_SQL: &str = "
 CREATE TABLE IF NOT EXISTS runs (
@@ -110,26 +110,32 @@ CREATE TABLE IF NOT EXISTS overlay_actions (
 CREATE INDEX IF NOT EXISTS idx_overlay_actions_run ON overlay_actions(run_id);
 ";
 
-/// SQL for the forecast_cache table added in schema v7.
+/// SQL for the forecast_cache table added in schema v7 (expanded in v8).
 const FORECAST_CACHE_SQL: &str = "
 CREATE TABLE IF NOT EXISTS forecast_cache (
     cache_key         TEXT PRIMARY KEY,
     model_name        TEXT NOT NULL,
     model_version     TEXT NOT NULL,
+    tokenizer_name    TEXT NOT NULL,
     instrument        TEXT NOT NULL,
     eval_date         TEXT NOT NULL,
     horizon_days      INTEGER NOT NULL,
     lookback_bars     INTEGER NOT NULL,
     input_hash        TEXT NOT NULL,
     sample_count      INTEGER NOT NULL,
+    temperature       REAL NOT NULL,
+    top_p             REAL NOT NULL,
+    target_field      TEXT NOT NULL,
     status            TEXT NOT NULL,
     forecast_json     TEXT NOT NULL,
     raw_response_json TEXT,
+    error_text        TEXT,
     latency_ms        INTEGER,
     created_at        TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_forecast_cache_instr_date ON forecast_cache(instrument, eval_date);
-CREATE INDEX IF NOT EXISTS idx_forecast_cache_model ON forecast_cache(model_name, model_version, horizon_days);
+CREATE INDEX IF NOT EXISTS idx_forecast_cache_model ON forecast_cache(model_name, model_version, tokenizer_name, horizon_days);
+CREATE INDEX IF NOT EXISTS idx_forecast_cache_status ON forecast_cache(status);
 ";
 
 // ─── Database ───────────────────────────────────────────────────
@@ -204,6 +210,30 @@ impl Db {
             }
             if current < 7 {
                 conn.execute_batch(FORECAST_CACHE_SQL)?;
+            }
+            if current < 8 {
+                conn.execute_batch("ALTER TABLE forecast_cache ADD COLUMN tokenizer_name TEXT NOT NULL DEFAULT '';")
+                    .ok();
+                conn.execute_batch(
+                    "ALTER TABLE forecast_cache ADD COLUMN temperature REAL NOT NULL DEFAULT 1.0;",
+                )
+                .ok();
+                conn.execute_batch(
+                    "ALTER TABLE forecast_cache ADD COLUMN top_p REAL NOT NULL DEFAULT 0.9;",
+                )
+                .ok();
+                conn.execute_batch("ALTER TABLE forecast_cache ADD COLUMN target_field TEXT NOT NULL DEFAULT 'close';")
+                    .ok();
+                conn.execute_batch("ALTER TABLE forecast_cache ADD COLUMN error_text TEXT;")
+                    .ok();
+                conn.execute_batch(
+                    "CREATE INDEX IF NOT EXISTS idx_forecast_cache_status ON forecast_cache(status);",
+                )
+                .ok();
+                conn.execute_batch(
+                    "CREATE INDEX IF NOT EXISTS idx_forecast_cache_model ON forecast_cache(model_name, model_version, tokenizer_name, horizon_days);",
+                )
+                .ok();
             }
             conn.execute_batch(&format!("PRAGMA user_version = {};", DB_SCHEMA_VERSION))?;
             eprintln!("  DB migrated from schema v{current} to v{DB_SCHEMA_VERSION}");
@@ -573,23 +603,29 @@ impl Db {
     pub fn insert_forecast_cache(&self, entry: &ForecastCacheEntry) -> SqlResult<()> {
         self.conn.execute(
             "INSERT OR IGNORE INTO forecast_cache
-             (cache_key, model_name, model_version, instrument, eval_date, horizon_days,
-              lookback_bars, input_hash, sample_count, status, forecast_json,
-              raw_response_json, latency_ms, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+             (cache_key, model_name, model_version, tokenizer_name, instrument, eval_date,
+              horizon_days, lookback_bars, input_hash, sample_count, temperature, top_p,
+              target_field, status, forecast_json, raw_response_json, error_text,
+              latency_ms, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
             params![
                 entry.cache_key,
                 entry.model_name,
                 entry.model_version,
+                entry.tokenizer_name,
                 entry.instrument,
                 entry.eval_date,
                 entry.horizon_days as i64,
                 entry.lookback_bars as i64,
                 entry.input_hash,
                 entry.sample_count as i64,
+                entry.temperature,
+                entry.top_p,
+                entry.target_field,
                 entry.status,
                 entry.forecast_json,
                 entry.raw_response_json,
+                entry.error_text,
                 entry.latency_ms.map(|v| v as i64),
                 entry.created_at,
             ],
@@ -609,31 +645,37 @@ impl Db {
     /// Look up a cached forecast by cache key.
     pub fn get_forecast_cache(&self, cache_key: &str) -> SqlResult<Option<ForecastCacheEntry>> {
         let result = self.conn.query_row(
-            "SELECT cache_key, model_name, model_version, instrument, eval_date, horizon_days,
-                    lookback_bars, input_hash, sample_count, status, forecast_json,
-                    raw_response_json, latency_ms, created_at
+            "SELECT cache_key, model_name, model_version, tokenizer_name, instrument, eval_date,
+                    horizon_days, lookback_bars, input_hash, sample_count, temperature, top_p,
+                    target_field, status, forecast_json, raw_response_json, error_text,
+                    latency_ms, created_at
              FROM forecast_cache WHERE cache_key = ?1",
             params![cache_key],
             |row| {
-                let horizon_days: i64 = row.get(5)?;
-                let lookback_bars: i64 = row.get(6)?;
-                let sample_count: i64 = row.get(8)?;
-                let latency_ms: Option<i64> = row.get(12)?;
+                let horizon_days: i64 = row.get(6)?;
+                let lookback_bars: i64 = row.get(7)?;
+                let sample_count: i64 = row.get(9)?;
+                let latency_ms: Option<i64> = row.get(17)?;
                 Ok(ForecastCacheEntry {
                     cache_key: row.get(0)?,
                     model_name: row.get(1)?,
                     model_version: row.get(2)?,
-                    instrument: row.get(3)?,
-                    eval_date: row.get(4)?,
+                    tokenizer_name: row.get(3)?,
+                    instrument: row.get(4)?,
+                    eval_date: row.get(5)?,
                     horizon_days: horizon_days as u32,
                     lookback_bars: lookback_bars as usize,
-                    input_hash: row.get(7)?,
+                    input_hash: row.get(8)?,
                     sample_count: sample_count as usize,
-                    status: row.get(9)?,
-                    forecast_json: row.get(10)?,
-                    raw_response_json: row.get(11)?,
+                    temperature: row.get(10)?,
+                    top_p: row.get(11)?,
+                    target_field: row.get(12)?,
+                    status: row.get(13)?,
+                    forecast_json: row.get(14)?,
+                    raw_response_json: row.get(15)?,
+                    error_text: row.get(16)?,
                     latency_ms: latency_ms.map(|v| v as u64),
-                    created_at: row.get(13)?,
+                    created_at: row.get(18)?,
                 })
             },
         );
@@ -677,33 +719,39 @@ impl Db {
         eval_date: &str,
     ) -> SqlResult<Vec<ForecastCacheEntry>> {
         let mut stmt = self.conn.prepare(
-            "SELECT cache_key, model_name, model_version, instrument, eval_date, horizon_days,
-                    lookback_bars, input_hash, sample_count, status, forecast_json,
-                    raw_response_json, latency_ms, created_at
+            "SELECT cache_key, model_name, model_version, tokenizer_name, instrument, eval_date,
+                    horizon_days, lookback_bars, input_hash, sample_count, temperature, top_p,
+                    target_field, status, forecast_json, raw_response_json, error_text,
+                    latency_ms, created_at
              FROM forecast_cache
              WHERE model_name = ?1 AND model_version = ?2 AND eval_date <= ?3
              ORDER BY instrument, horizon_days, eval_date",
         )?;
         let rows = stmt.query_map(params![model_name, model_version, eval_date], |row| {
-            let horizon_days: i64 = row.get(5)?;
-            let lookback_bars: i64 = row.get(6)?;
-            let sample_count: i64 = row.get(8)?;
-            let latency_ms: Option<i64> = row.get(12)?;
+            let horizon_days: i64 = row.get(6)?;
+            let lookback_bars: i64 = row.get(7)?;
+            let sample_count: i64 = row.get(9)?;
+            let latency_ms: Option<i64> = row.get(17)?;
             Ok(ForecastCacheEntry {
                 cache_key: row.get(0)?,
                 model_name: row.get(1)?,
                 model_version: row.get(2)?,
-                instrument: row.get(3)?,
-                eval_date: row.get(4)?,
+                tokenizer_name: row.get(3)?,
+                instrument: row.get(4)?,
+                eval_date: row.get(5)?,
                 horizon_days: horizon_days as u32,
                 lookback_bars: lookback_bars as usize,
-                input_hash: row.get(7)?,
+                input_hash: row.get(8)?,
                 sample_count: sample_count as usize,
-                status: row.get(9)?,
-                forecast_json: row.get(10)?,
-                raw_response_json: row.get(11)?,
+                temperature: row.get(10)?,
+                top_p: row.get(11)?,
+                target_field: row.get(12)?,
+                status: row.get(13)?,
+                forecast_json: row.get(14)?,
+                raw_response_json: row.get(15)?,
+                error_text: row.get(16)?,
                 latency_ms: latency_ms.map(|v| v as u64),
-                created_at: row.get(13)?,
+                created_at: row.get(18)?,
             })
         })?;
         rows.collect()
@@ -856,15 +904,20 @@ pub struct ForecastCacheEntry {
     pub cache_key: String,
     pub model_name: String,
     pub model_version: String,
+    pub tokenizer_name: String,
     pub instrument: String,
     pub eval_date: String,
     pub horizon_days: u32,
     pub lookback_bars: usize,
     pub input_hash: String,
     pub sample_count: usize,
+    pub temperature: f64,
+    pub top_p: f64,
+    pub target_field: String,
     pub status: String,
     pub forecast_json: String,
     pub raw_response_json: Option<String>,
+    pub error_text: Option<String>,
     pub latency_ms: Option<u64>,
     pub created_at: String,
 }
@@ -978,7 +1031,7 @@ mod tests {
     fn schema_version_set_on_fresh_db() {
         let db = Db::open_memory().unwrap();
         assert_eq!(db.schema_version().unwrap(), DB_SCHEMA_VERSION);
-        assert_eq!(DB_SCHEMA_VERSION, 7);
+        assert_eq!(DB_SCHEMA_VERSION, 8);
     }
 
     #[test]
@@ -1082,7 +1135,7 @@ mod tests {
     #[test]
     fn schema_version_is_7() {
         let db = Db::open_memory().unwrap();
-        assert_eq!(db.schema_version().unwrap(), 7);
+        assert_eq!(db.schema_version().unwrap(), 8);
     }
 
     #[test]
@@ -1152,7 +1205,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version;", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
 
         // Verify existing row got default agent_name
         let agent: String = conn
@@ -1187,15 +1240,20 @@ mod tests {
             cache_key: "kronos|v1|SPY|2025-03-31|h5|lb512|abc|n64".into(),
             model_name: "NeoQuasar/Kronos-mini".into(),
             model_version: "v1".into(),
+            tokenizer_name: "NeoQuasar/Kronos-Tokenizer-2k".into(),
             instrument: "SPY".into(),
             eval_date: "2025-03-31".into(),
             horizon_days: 5,
             lookback_bars: 512,
             input_hash: "abc".into(),
             sample_count: 64,
+            temperature: 1.0,
+            top_p: 0.9,
+            target_field: "close".into(),
             status: "ok".into(),
             forecast_json: "{\"instrument\":\"SPY\"}".into(),
             raw_response_json: None,
+            error_text: None,
             latency_ms: Some(123),
             created_at: "2026-04-12T00:00:00Z".into(),
         };
@@ -1214,15 +1272,20 @@ mod tests {
             cache_key: "dup-key".into(),
             model_name: "m1".into(),
             model_version: "v1".into(),
+            tokenizer_name: "NeoQuasar/Kronos-Tokenizer-2k".into(),
             instrument: "SPY".into(),
             eval_date: "2025-03-31".into(),
             horizon_days: 5,
             lookback_bars: 512,
             input_hash: "abc".into(),
             sample_count: 64,
+            temperature: 1.0,
+            top_p: 0.9,
+            target_field: "close".into(),
             status: "ok".into(),
             forecast_json: "{\"a\":1}".into(),
             raw_response_json: None,
+            error_text: None,
             latency_ms: None,
             created_at: "t1".into(),
         };
@@ -1230,15 +1293,20 @@ mod tests {
             cache_key: "dup-key".into(),
             model_name: "m2".into(),
             model_version: "v2".into(),
+            tokenizer_name: "tok2".into(),
             instrument: "GLD".into(),
             eval_date: "2025-04-01".into(),
             horizon_days: 21,
             lookback_bars: 256,
             input_hash: "xyz".into(),
             sample_count: 32,
+            temperature: 0.7,
+            top_p: 0.8,
+            target_field: "close".into(),
             status: "error".into(),
             forecast_json: "{\"a\":2}".into(),
             raw_response_json: Some("raw".into()),
+            error_text: Some("boom".into()),
             latency_ms: Some(999),
             created_at: "t2".into(),
         };
@@ -1265,15 +1333,20 @@ mod tests {
                 cache_key: key.into(),
                 model_name: "NeoQuasar/Kronos-mini".into(),
                 model_version: "v1".into(),
+                tokenizer_name: "NeoQuasar/Kronos-Tokenizer-2k".into(),
                 instrument: instrument.into(),
                 eval_date: "2025-03-31".into(),
                 horizon_days: horizon,
                 lookback_bars: 512,
                 input_hash: format!("hash-{key}"),
                 sample_count: 64,
+                temperature: 1.0,
+                top_p: 0.9,
+                target_field: "close".into(),
                 status: status.into(),
                 forecast_json: "{}".into(),
                 raw_response_json: None,
+                error_text: None,
                 latency_ms: None,
                 created_at: "t".into(),
             })
@@ -1286,6 +1359,101 @@ mod tests {
         assert_eq!(coverage.get(&("SPY".to_string(), 5)), Some(&2));
         assert_eq!(coverage.get(&("SPY".to_string(), 21)), Some(&1));
         assert_eq!(coverage.get(&("GLD".to_string(), 5)), Some(&1));
+    }
+
+    #[test]
+    fn migration_v7_to_v8_adds_forecast_cache_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch(
+            "
+            CREATE TABLE IF NOT EXISTS runs (
+                run_id TEXT PRIMARY KEY, started_at TEXT NOT NULL,
+                config_json TEXT NOT NULL, nav_usd REAL NOT NULL,
+                outcome TEXT, duration_ms INTEGER,
+                prompt_hash TEXT, prompt_source TEXT, llm_model TEXT
+            );
+            CREATE TABLE IF NOT EXISTS signals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, agent_name TEXT NOT NULL DEFAULT 'tsmom',
+                direction TEXT NOT NULL, strength REAL NOT NULL,
+                confidence REAL NOT NULL, weight REAL NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, epic TEXT NOT NULL,
+                direction TEXT NOT NULL, size REAL NOT NULL,
+                deal_reference TEXT, status TEXT, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS positions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL REFERENCES runs(run_id),
+                instrument TEXT NOT NULL, signed_deal_size REAL NOT NULL,
+                source TEXT NOT NULL, ts TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS risk_state (
+                key TEXT PRIMARY KEY, value REAL NOT NULL, updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS llm_cache (
+                cache_key TEXT PRIMARY KEY,
+                llm_model TEXT NOT NULL, prompt_hash TEXT NOT NULL, instrument TEXT NOT NULL,
+                eval_date TEXT NOT NULL, ta_hash TEXT NOT NULL, response_text TEXT NOT NULL,
+                llm_ok INTEGER NOT NULL, parse_ok INTEGER NOT NULL, latency_ms INTEGER, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS overlay_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL, instrument TEXT NOT NULL,
+                action_type TEXT NOT NULL, weight_before REAL, weight_after REAL,
+                action_json TEXT NOT NULL, ts TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES runs(run_id)
+            );
+            CREATE TABLE IF NOT EXISTS forecast_cache (
+                cache_key TEXT PRIMARY KEY,
+                model_name TEXT NOT NULL,
+                model_version TEXT NOT NULL,
+                instrument TEXT NOT NULL,
+                eval_date TEXT NOT NULL,
+                horizon_days INTEGER NOT NULL,
+                lookback_bars INTEGER NOT NULL,
+                input_hash TEXT NOT NULL,
+                sample_count INTEGER NOT NULL,
+                status TEXT NOT NULL,
+                forecast_json TEXT NOT NULL,
+                raw_response_json TEXT,
+                latency_ms INTEGER,
+                created_at TEXT NOT NULL
+            );
+        ",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO forecast_cache (cache_key, model_name, model_version, instrument, eval_date, horizon_days, lookback_bars, input_hash, sample_count, status, forecast_json, raw_response_json, latency_ms, created_at)
+             VALUES ('k1', 'm', 'v1', 'SPY', '2025-03-31', 5, 512, 'abc', 64, 'ok', '{}', NULL, 123, 'now')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch("PRAGMA user_version = 7;").unwrap();
+
+        Db::check_schema_version(&conn).unwrap();
+
+        let version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 8);
+
+        let row: (String, f64, f64, String, Option<String>) = conn
+            .query_row(
+                "SELECT tokenizer_name, temperature, top_p, target_field, error_text FROM forecast_cache WHERE cache_key = 'k1'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "");
+        assert_eq!(row.1, 1.0);
+        assert_eq!(row.2, 0.9);
+        assert_eq!(row.3, "close");
+        assert!(row.4.is_none());
     }
 
     #[test]
@@ -1341,7 +1509,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version;", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
 
         // Verify prompt columns exist and are nullable
         conn.execute(
@@ -1507,7 +1675,7 @@ mod tests {
         let version: i32 = conn
             .query_row("PRAGMA user_version;", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
 
         // Verify llm_cache table exists
         conn.execute(

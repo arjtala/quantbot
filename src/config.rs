@@ -205,11 +205,20 @@ fn default_kronos_model_name() -> String {
 fn default_kronos_model_version() -> String {
     "v1".to_string()
 }
+fn default_kronos_tokenizer_name() -> String {
+    "NeoQuasar/Kronos-Tokenizer-2k".to_string()
+}
 fn default_kronos_lookback_bars() -> usize {
     512
 }
 fn default_kronos_sample_count() -> usize {
     64
+}
+fn default_kronos_temperature() -> f64 {
+    1.0
+}
+fn default_kronos_top_p() -> f64 {
+    0.9
 }
 fn default_kronos_horizons() -> Vec<u32> {
     vec![1, 5, 21]
@@ -250,10 +259,16 @@ pub struct KronosOverlayConfig {
     pub model_name: String,
     #[serde(default = "default_kronos_model_version")]
     pub model_version: String,
+    #[serde(default = "default_kronos_tokenizer_name")]
+    pub tokenizer_name: String,
     #[serde(default = "default_kronos_lookback_bars")]
     pub lookback_bars: usize,
     #[serde(default = "default_kronos_sample_count")]
     pub sample_count: usize,
+    #[serde(default = "default_kronos_temperature")]
+    pub temperature: f64,
+    #[serde(default = "default_kronos_top_p")]
+    pub top_p: f64,
     #[serde(default = "default_kronos_horizons")]
     pub horizons: Vec<u32>,
     #[serde(default = "default_kronos_target_field")]
@@ -499,6 +514,12 @@ impl AppConfig {
                     }
                     if kronos.sample_count == 0 {
                         anyhow::bail!("overlays.kronos.sample_count must be > 0");
+                    }
+                    if !(0.0..=5.0).contains(&kronos.temperature) {
+                        anyhow::bail!("overlays.kronos.temperature must be in [0,5]");
+                    }
+                    if !(0.0..=1.0).contains(&kronos.top_p) {
+                        anyhow::bail!("overlays.kronos.top_p must be in [0,1]");
                     }
                     if kronos.horizons.is_empty() {
                         anyhow::bail!("overlays.kronos.horizons must not be empty");
@@ -1094,8 +1115,11 @@ engine = "paper"
 enabled = true
 model_name = "NeoQuasar/Kronos-mini"
 model_version = "research-v1"
+tokenizer_name = "NeoQuasar/Kronos-Tokenizer-2k"
 lookback_bars = 512
 sample_count = 64
+temperature = 1.0
+top_p = 0.9
 horizons = [1, 5, 21]
 target_field = "close"
 
@@ -1114,8 +1138,11 @@ freeze_days = 7
         assert!(kronos.enabled);
         assert_eq!(kronos.model_name, "NeoQuasar/Kronos-mini");
         assert_eq!(kronos.model_version, "research-v1");
+        assert_eq!(kronos.tokenizer_name, "NeoQuasar/Kronos-Tokenizer-2k");
         assert_eq!(kronos.lookback_bars, 512);
         assert_eq!(kronos.sample_count, 64);
+        assert_eq!(kronos.temperature, 1.0);
+        assert_eq!(kronos.top_p, 0.9);
         assert_eq!(kronos.horizons, vec![1, 5, 21]);
         assert_eq!(kronos.target_field, "close");
         assert_eq!(kronos.thresholds.tail_prob_5d_neg_2pct, 0.40);
