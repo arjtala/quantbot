@@ -1,0 +1,67 @@
+# Paper-safe Kronos research config.
+# Intended for:
+#   quantbot forecast fill
+#   quantbot forecast coverage
+#   quantbot forecast replay
+
+[execution]
+engine = "paper"
+
+# Keep minimal IG instrument metadata for symbol resolution consistency.
+[execution.ig]
+environment = "DEMO"
+account_id = "PAPER"
+
+[execution.ig.instruments."SPY"]
+epic = "IX.D.SPTRD.DAILY.IP"
+min_size = 0.1
+size_step = 0.1
+ig_point_value = 1.0
+
+[execution.ig.instruments."GC=F"]
+epic = "CC.D.GC.USS.IP"
+min_size = 1.0
+size_step = 1.0
+ig_point_value = 1.0
+
+[execution.ig.instruments."GLD"]
+epic = "UC.D.GLDUS.DAILY.IP"
+min_size = 1.0
+size_step = 1.0
+ig_point_value = 1.0
+
+[risk]
+max_gross_leverage = 2.5
+max_position_pct = 0.40
+max_drawdown_pct = 0.15
+
+[overlays.kronos]
+enabled = true
+model_name = "NeoQuasar/Kronos-mini"
+model_version = "v1"
+tokenizer_name = "NeoQuasar/Kronos-Tokenizer-2k"
+lookback_bars = 512
+sample_count = 64
+temperature = 1.0
+top_p = 0.9
+horizons = [5]
+target_field = "close"
+cache_dir = "data"
+
+[overlays.kronos.thresholds]
+std_quantile_trigger = 0.80
+std_quantile_severe = 0.95
+tail_prob_5d_neg_2pct = 0.40
+tail_prob_21d_neg_5pct = 0.35
+
+[overlays.kronos.gold]
+scale_factor = 0.3
+freeze_days = 7
+
+[overlays.kronos.equity]
+scale_factor = 0.5
+freeze_days = 5
+
+[overlays.kronos.forex]
+scale_factor = 0.7
+freeze_days = 3
