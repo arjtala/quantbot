@@ -620,3 +620,106 @@ Already built: reconciliation, circuit breaker, audit logs, SQLite recording. No
 - Periodic: every 30 min during liquid hours (13:30–20:00 UTC), every 2–4 hours outside
 - Event triggers: volatility spike, large move (>1.5σ), news detection
 - Daily TSMOM determines core direction and max risk budget; intraday overlay adjusts timing/position scaling (small deltas, not full flips)
+
+---
+
+## 9. AutoHedge Review — What to Borrow vs What to Ignore
+
+**Reference:** [The-Swarm-Corporation/AutoHedge](https://github.com/The-Swarm-Corporation/AutoHedge)
+
+### Snapshot
+AutoHedge is best understood as a Python **agent hedge fund framework/template** for highly autonomous trading, currently oriented toward **crypto/Solana execution** with role-based agents (director → quant → risk → execution), structured outputs, and continuous operation.
+
+### Bottom Line
+Useful as a **framework inspiration**, not as a direct integration candidate for quantbot.
+
+Quantbot's current design target is stronger on the dimensions that matter for this repo:
+- deterministic core
+- bounded overlays
+- replayable evaluation
+- explicit risk vetoes
+- SQLite/audit trail
+
+AutoHedge would mostly add autonomy and orchestration complexity, not solve the current bottlenecks (signal quality, overlay calibration, live ops validation).
+
+### What to Borrow
+
+#### 1. Strict role separation
+Portable design pattern:
+- strategy/signal producer
+- risk gate
+- execution planner
+- execution adapter
+
+Quantbot already has the seeds of this; the takeaway is to keep those boundaries crisp and typed.
+
+#### 2. Structured machine-readable handoffs
+Worth reinforcing in quantbot:
+- non-deterministic modules should emit structured JSON / typed summaries
+- downstream modules should consume contracts, not prose
+
+Concrete quantbot examples:
+- `ForecastSummary`
+- `OverlayAction`
+- `RiskDecision`
+- `OrderRequest`
+
+#### 3. Logging / operator ergonomics
+Framework-style repos often do a good job packaging:
+- continuous operation
+- status surfaces
+- logging across stages
+
+This is relevant to quantbot's daemon/service layer, though the repo already has a safer and more replayable ops foundation.
+
+### What to Ignore
+
+#### 1. Autonomous thesis generation as the trading driver
+Not aligned with quantbot.
+
+Reason:
+- hard to replay
+- hard to evaluate OOS
+- easy to create "ghost behavior"
+- encourages unbounded strategy drift
+
+In quantbot, adaptive intelligence should remain a **bounded modifier**, not the primary source of trade intent.
+
+#### 2. Solana / wallet-key / crypto-native execution stack
+Not useful for the current system.
+
+Quantbot currently lives closer to:
+- daily bars
+- SPY / GLD / GC=F / FX
+- IG / paper-style execution
+- deterministic research loops
+
+So code reuse from AutoHedge would be low-value and high-friction.
+
+#### 3. Fully autonomous always-on Python agent stack with live keys
+Too much blast radius for the current design goals.
+
+Quantbot should prefer:
+- deterministic trading loop
+- explicit action constraints
+- strong auditability
+- isolated execution permissions
+
+### Practical Rule
+If borrowing from AutoHedge, borrow **contracts and packaging**, not **autonomy**.
+
+Good borrow:
+- "every stage has a typed output"
+- "risk is a veto gate"
+- "execution is isolated from strategy generation"
+
+Bad borrow:
+- "let multiple LLM agents continuously improvise the portfolio"
+
+### Decision
+Do **not** add AutoHedge as an integration target or core dependency.
+
+Keep it in the notes bucket as:
+- agent orchestration reference
+- JSON schema / handoff reference
+- productization / ops inspiration
