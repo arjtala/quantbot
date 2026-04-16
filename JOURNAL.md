@@ -723,3 +723,473 @@ Keep it in the notes bucket as:
 - agent orchestration reference
 - JSON schema / handoff reference
 - productization / ops inspiration
+
+---
+
+## 10. FinGPT Review — Useful for News Overlay Research, Not Core Integration
+
+**Reference:** [AI4Finance-Foundation/FinGPT](https://github.com/AI4Finance-Foundation/FinGPT)
+
+### Snapshot
+FinGPT is most relevant to quantbot as a **financial NLP / news research toolkit**, not as a core trading engine. The strongest overlap is in:
+- financial text processing
+- sentiment / event classification
+- finance-specific prompt and label design
+- data pipeline ideas for point-in-time text tasks
+
+### Bottom Line
+Potentially useful for a **bounded news overlay**, but not something to integrate wholesale into the core system.
+
+Quantbot's current architecture is still the right discipline:
+- deterministic core
+- bounded overlays
+- explicit risk vetoes
+- replayable evaluation via caching
+
+FinGPT should only enter through that same gate.
+
+### What to Borrow
+
+#### 1. Finance-specific NLP task design
+Use FinGPT as inspiration for narrow text tasks such as:
+- sentiment classification
+- event severity scoring
+- asset-class scope detection
+- macro / instrument risk tagging
+
+These tasks fit naturally into quantbot's overlay layer.
+
+#### 2. Data pipeline ideas
+The repo is useful for:
+- financial news ingestion patterns
+- text normalization / preprocessing ideas
+- finance-specific labeling strategies
+- benchmark task framing
+
+This is likely more useful than adopting the full model stack.
+
+#### 3. Structured outputs for text models
+Good lesson for quantbot:
+- make text models emit structured classifications
+- avoid prose-first decision flows
+
+Target shape should remain narrow and machine-readable, e.g.:
+- sentiment
+- severity
+- scope
+- confidence
+- action hint
+
+### What to Ignore
+
+#### 1. Whole-framework adoption
+Avoid integrating FinGPT as a large dependency bundle or "AI trading system."
+
+Reason:
+- too much Python/ML surface area
+- weakens evaluation clarity
+- adds complexity before proving value
+
+#### 2. Text-to-portfolio autonomy
+Avoid any design where text models directly:
+- set portfolio direction
+- size positions
+- drive execution
+
+For quantbot, text should influence **risk overlays**, not become the primary source of trade intent.
+
+#### 3. Any non-point-in-time text pipeline
+Strict requirement:
+- all text inputs must be point-in-time aligned
+- cached outputs must be replayable
+
+Otherwise results are likely contaminated by look-ahead and article revision effects.
+
+### Best Quantbot Use Case
+
+#### Bounded News Overlay
+This is the strongest fit.
+
+Desired role for FinGPT-like models:
+- classify recent headlines/news as risk-on / neutral / risk-off
+- determine affected scope (global / asset class / instrument)
+- estimate severity/confidence
+- suggest only bounded actions
+
+Allowed outputs should map to existing overlay actions such as:
+- `ScaleExposure`
+- `FreezeEntries`
+- `DisableInstrument`
+
+### Recommended Output Contract
+If using a FinGPT-style model, force it into a tight structured contract:
+
+```json
+{
+  "sentiment": "negative",
+  "severity": 0.82,
+  "scope": {
+    "asset_class": "equity"
+  },
+  "action_hint": "freeze_entries",
+  "confidence": 0.76,
+  "reason": "Tariff escalation increases near-term equity downside uncertainty"
+}
+```
+
+Quantbot should still map this deterministically into a real overlay action.
+
+### Research Plan
+
+#### Phase 1 — Offline cache only
+Build a historical text cache:
+- raw headline/article metadata
+- structured FinGPT output
+- parse success/failure
+- model version
+- created_at
+
+Same discipline as:
+- LLM cache
+- Kronos forecast cache
+
+#### Phase 2 — Replay through overlay logic
+Convert structured text outputs into a very small set of bounded actions:
+- severe negative macro/equity news → `FreezeEntries(AssetClass(Equity), until=+1d/+3d)`
+- moderate risk-off signal → `ScaleExposure(AssetClass(Equity), factor=0.5, until=+1d)`
+- severe instrument event → `DisableInstrument(sym, until=+1d)`
+
+#### Phase 3 — Compare against existing overlays
+Run replay comparisons:
+1. TSMOM only
+2. TSMOM + volatility overlay
+3. TSMOM + FinGPT news overlay
+4. TSMOM + volatility + FinGPT
+5. later: TSMOM + Kronos + FinGPT
+
+Metrics:
+- Sharpe
+- max drawdown
+- turnover
+- number of overlay days
+- tail-period behavior
+- false-positive freeze/scale rate
+
+### First Practical Experiment
+Do **not** start with full article reasoning or direct trade decisions.
+
+Start with:
+- daily headline bundle classification
+- one-day overlay horizon
+- instruments / asset classes: SPY, GLD, GC=F
+- actions limited to `ScaleExposure` and `FreezeEntries`
+
+### Decision
+FinGPT is more relevant to quantbot than AutoHedge, but still belongs in the **research-input** bucket, not the core architecture bucket.
+
+Use it, if at all, as:
+- a future bounded news overlay input
+- a source of finance-specific NLP task design
+- a data/prompt reference
+
+Do **not** use it as:
+- a trading brain
+- an execution system
+- a justification for weakening replayability or boundedness
+
+---
+
+## 11. NautilusTrader Review — Strong Architecture Reference, Not a Near-Term Migration
+
+**Reference:** [nautechsystems/nautilus_trader](https://github.com/nautechsystems/nautilus_trader)
+
+### Snapshot
+NautilusTrader is much closer to quantbot's operating philosophy than agent-first repos:
+- deterministic event-driven engine
+- strong replay / simulation emphasis
+- adapter-based integration model
+- serious backtest/live parity mindset
+
+It is therefore useful as an **architecture benchmark** and source of implementation patterns. It is **not** a good near-term migration target because the framework is large and the current quantbot bottlenecks are still signal quality, overlay calibration, and live validation rather than engine generality.
+
+### Bottom Line
+Borrow **engine patterns**, **event contracts**, and **adapter interfaces**.
+
+Do **not** attempt to replace quantbot with NautilusTrader right now.
+
+---
+
+### What to Borrow
+
+#### 1. Explicit event types inside quantbot
+Instead of letting modules call each other too directly, push more state transitions through explicit events.
+
+Concrete sketch:
+
+```rust
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub enum BotEvent {
+    MarketDataUpdated {
+        instrument: String,
+        eval_date: chrono::NaiveDate,
+    },
+    ForecastProduced {
+        instrument: String,
+        eval_date: chrono::NaiveDate,
+        model_name: String,
+        model_version: String,
+    },
+    OverlayProposed {
+        eval_date: chrono::NaiveDate,
+        source: String, // "volatility", "news", "kronos"
+        action_json: String,
+    },
+    OverlayApplied {
+        eval_date: chrono::NaiveDate,
+        action_json: String,
+    },
+    RiskRejected {
+        eval_date: chrono::NaiveDate,
+        reason: String,
+    },
+    OrdersGenerated {
+        eval_date: chrono::NaiveDate,
+        count: usize,
+    },
+    ExecutionAck {
+        instrument: String,
+        status: String,
+    },
+}
+```
+
+Reason: this makes replay/live parity easier. The daemon, replay engine, and status command can all consume the same state transitions.
+
+#### 2. Adapter traits for all "external intelligence"
+Treat non-core systems as adapters, not as first-class strategy engines.
+
+Concrete sketch:
+
+```rust
+pub trait ForecastAdapter {
+    fn produce_summary(
+        &self,
+        instrument: &str,
+        eval_date: chrono::NaiveDate,
+    ) -> anyhow::Result<crate::forecast::ForecastSummary>;
+}
+
+pub trait TextRiskAdapter {
+    fn classify_bundle(
+        &self,
+        scope: &str,
+        eval_date: chrono::NaiveDate,
+    ) -> anyhow::Result<TextRiskSummary>;
+}
+```
+
+Then the concrete implementations can be:
+- cached SQLite replay
+- Python sidecar
+- live HTTP service
+
+without changing the trading engine.
+
+#### 3. Unified replay/live decision path
+One of the biggest Nautilus-style lessons: do not fork logic too early between replay and live.
+
+Desired quantbot shape:
+
+```rust
+fn run_decision_cycle(ctx: &DecisionContext) -> anyhow::Result<DecisionResult> {
+    let base_targets = compute_deterministic_targets(&ctx.bars, &ctx.config)?;
+    let overlays = collect_overlays(ctx)?;
+    let final_targets = apply_all_overlays(base_targets, overlays, ctx.eval_date);
+    let risk_checked = run_risk_gate(final_targets, &ctx.risk)?;
+    let orders = generate_orders(risk_checked, &ctx.positions, &ctx.router)?;
+    Ok(DecisionResult { overlays, orders })
+}
+```
+
+Then:
+- replay mode builds `DecisionContext` from caches and historical state
+- live mode builds `DecisionContext` from current bars and live positions
+
+The **same function** should decide.
+
+#### 4. Separate "strategy", "risk", and "execution planning"
+Even when they are all local Rust modules, keep the boundaries hard.
+
+Concrete sketch:
+
+```rust
+pub struct StrategyOutput {
+    pub target_weights: std::collections::HashMap<String, f64>,
+    pub metadata: serde_json::Value,
+}
+
+pub struct RiskOutput {
+    pub approved_weights: std::collections::HashMap<String, f64>,
+    pub veto_reason: Option<String>,
+}
+
+pub struct ExecutionPlan {
+    pub orders: Vec<OrderRequest>,
+    pub warnings: Vec<String>,
+}
+```
+
+This is a healthier scaling pattern than letting one function do:
+- signal generation
+- overlay combination
+- risk gate
+- order planning
+- execution side effects
+
+#### 5. Normalize data/provider boundaries
+NautilusTrader is strong on adapters. Quantbot should keep moving in that direction.
+
+Concrete sketch:
+
+```rust
+pub trait BarProvider {
+    fn load_history(
+        &self,
+        instrument: &str,
+        start: Option<chrono::NaiveDate>,
+        end: Option<chrono::NaiveDate>,
+    ) -> anyhow::Result<crate::core::bar::BarSeries>;
+}
+
+pub trait ExecutionVenue {
+    fn get_positions(&self) -> anyhow::Result<Vec<LivePosition>>;
+    fn submit_orders(&self, orders: &[OrderRequest]) -> anyhow::Result<Vec<OrderReceipt>>;
+}
+```
+
+Then Yahoo, CSV, IG, and any future broker all live behind explicit interfaces.
+
+---
+
+### What to Ignore
+
+#### 1. Full framework migration now
+Avoid:
+- rewriting quantbot around NautilusTrader
+- forcing current overlay research into a much larger abstraction layer
+- solving infrastructure generality before proving signal value
+
+Current priority remains:
+- validate Kronos
+- calibrate overlays
+- test bounded news / text ideas
+- harden live ops
+
+#### 2. Premature complexity in venue/instrument modeling
+NautilusTrader handles a broad universe of venues and instruments. Quantbot does not need all of that immediately.
+
+Useful local rule:
+- build the smallest interface that supports current needs
+- do not generalize to dozens of venue types until actually needed
+
+#### 3. Any refactor that breaks current replayability
+A framework-inspired rewrite is only good if replay remains:
+- deterministic
+- cache-driven
+- easy to inspect
+
+If that gets worse, the refactor is a regression regardless of elegance.
+
+---
+
+### Best Concrete Lessons for Quantbot
+
+#### A. Record event stream, not just final artifacts
+Today quantbot records:
+- signals
+- orders
+- overlay actions
+- positions
+
+Potential improvement:
+
+```rust
+pub struct EventRecorder {
+    db: std::sync::Arc<std::sync::Mutex<Db>>,
+}
+
+impl EventRecorder {
+    pub fn record(&self, run_id: &str, event: &BotEvent) {
+        let json = serde_json::to_string(event).unwrap_or_default();
+        // future: insert into bot_events(run_id, event_type, event_json, ts)
+        eprintln!("EVENT {run_id} {json}");
+    }
+}
+```
+
+That would make debugging daemon/live discrepancies much easier.
+
+#### B. Formalize overlay sources as pluggable producers
+Current overlays are already moving in the right direction. Make the contract explicit:
+
+```rust
+pub trait OverlayProducer {
+    fn name(&self) -> &'static str;
+    fn produce(
+        &self,
+        ctx: &OverlayContext,
+    ) -> anyhow::Result<Vec<crate::overlay::OverlayAction>>;
+}
+```
+
+Examples:
+- `VolatilityOverlayProducer`
+- `NewsOverlayProducer`
+- `KronosOverlayProducer`
+
+This makes composition cleaner and more testable.
+
+#### C. Make state transitions explicit in the daemon
+Instead of "daemon runs a big loop", prefer explicit phases:
+
+```rust
+pub enum CyclePhase {
+    RefreshData,
+    BuildContext,
+    ProduceSignals,
+    ProduceOverlays,
+    ApplyRisk,
+    PlanOrders,
+    Execute,
+    Reconcile,
+    Persist,
+}
+```
+
+Even if implemented locally, this creates a more auditable ops story.
+
+---
+
+### Proposed Incremental Refactor Path (Borrowing the Good Parts)
+
+#### Step 1 — add explicit internal event type
+Low risk, high debugging value.
+
+#### Step 2 — define `OverlayProducer` and `ForecastAdapter` traits
+Lets Kronos/news/replay/live adapters share the same shape.
+
+#### Step 3 — converge replay/live into a single decision-cycle function
+Highest-value architecture cleanup once current feature work stabilizes.
+
+#### Step 4 — optionally add event recording table
+Only after the event taxonomy settles.
+
+---
+
+### Decision
+NautilusTrader is one of the best external repos to study for **engine quality** and **replay/live parity**, but it should remain a **reference architecture**, not a dependency or migration target for now.
+
+Best use:
+- copy the patterns
+- keep the current quantbot scope
+- improve internal contracts incrementally
