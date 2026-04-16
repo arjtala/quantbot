@@ -73,32 +73,33 @@ pub fn combine_signals(
         let cat = blend_category(sym);
         let blend_w = blend_config.weights_for(cat);
 
-        let (combined_weight, indicator_w, indicator_used, latency_ms) =
-            match indicator_signals.get(sym) {
-                Some(ind_sig) if should_use_indicator(ind_sig, gating) => {
-                    let ind_w = ind_sig.strength * ind_sig.confidence * vol_scalar;
-                    let latency = ind_sig.metadata.get("latency_ms").copied();
+        let (combined_weight, indicator_w, indicator_used, latency_ms) = match indicator_signals
+            .get(sym)
+        {
+            Some(ind_sig) if should_use_indicator(ind_sig, gating) => {
+                let ind_w = ind_sig.strength * ind_sig.confidence * vol_scalar;
+                let latency = ind_sig.metadata.get("latency_ms").copied();
 
-                    match blend_w.mode {
-                        BlendMode::ProtectiveOverride => {
-                            // Only use indicator on true sign flips (opposite directions)
-                            let is_sign_flip =
-                                tsmom_w != 0.0 && ind_w != 0.0 && tsmom_w.signum() != ind_w.signum();
-                            if is_sign_flip {
-                                let combined = blend_w.tsmom * tsmom_w + blend_w.indicator * ind_w;
-                                (combined, ind_w, true, latency)
-                            } else {
-                                (tsmom_w, 0.0, false, latency)
-                            }
-                        }
-                        BlendMode::Blend => {
+                match blend_w.mode {
+                    BlendMode::ProtectiveOverride => {
+                        // Only use indicator on true sign flips (opposite directions)
+                        let is_sign_flip =
+                            tsmom_w != 0.0 && ind_w != 0.0 && tsmom_w.signum() != ind_w.signum();
+                        if is_sign_flip {
                             let combined = blend_w.tsmom * tsmom_w + blend_w.indicator * ind_w;
                             (combined, ind_w, true, latency)
+                        } else {
+                            (tsmom_w, 0.0, false, latency)
                         }
                     }
+                    BlendMode::Blend => {
+                        let combined = blend_w.tsmom * tsmom_w + blend_w.indicator * ind_w;
+                        (combined, ind_w, true, latency)
+                    }
                 }
-                _ => (tsmom_w, 0.0, false, None),
-            };
+            }
+            _ => (tsmom_w, 0.0, false, None),
+        };
 
         results.push(CombinedResult {
             instrument: sym.clone(),
@@ -165,7 +166,10 @@ pub fn build_combined_signal(
     if let Some(lat) = result.latency_ms {
         metadata.insert("latency_ms".into(), lat);
     }
-    metadata.insert("indicator_used".into(), if result.indicator_used { 1.0 } else { 0.0 });
+    metadata.insert(
+        "indicator_used".into(),
+        if result.indicator_used { 1.0 } else { 0.0 },
+    );
 
     let mut sig = Signal::new(
         result.instrument.clone(),
@@ -260,9 +264,15 @@ mod tests {
     fn basic_gold_50_50() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.7));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.7),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         assert_eq!(results.len(), 1);
@@ -282,9 +292,15 @@ mod tests {
     fn equity_100_0_passthrough() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("SPY".into(), make_signal("SPY", SignalDirection::Short, -0.5, 0.9, "tsmom", 1.5));
+        tsmom.insert(
+            "SPY".into(),
+            make_signal("SPY", SignalDirection::Short, -0.5, 0.9, "tsmom", 1.5),
+        );
         let mut indicator = HashMap::new();
-        indicator.insert("SPY".into(), make_indicator_signal("SPY", SignalDirection::Long, 0.8, 0.8));
+        indicator.insert(
+            "SPY".into(),
+            make_indicator_signal("SPY", SignalDirection::Long, 0.8, 0.8),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -301,9 +317,15 @@ mod tests {
     fn fallback_on_flat_indicator() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Flat, 0.0, 0.0));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Flat, 0.0, 0.0),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -315,7 +337,10 @@ mod tests {
     fn fallback_on_llm_success_zero() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
         let mut ind_sig = make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.7);
         ind_sig.metadata.insert("llm_success".into(), 0.0);
@@ -329,7 +354,10 @@ mod tests {
     fn fallback_on_missing_indicator() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let indicator = HashMap::new(); // empty
 
         let results = combine_signals(&tsmom, &indicator, &config);
@@ -351,9 +379,15 @@ mod tests {
     fn opposing_signals() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Short, -0.8, 1.0));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Short, -0.8, 1.0),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -368,9 +402,15 @@ mod tests {
     fn both_flat_gives_zero() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Flat, 0.0, 0.0, "tsmom", 1.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Flat, 0.0, 0.0, "tsmom", 1.0),
+        );
         let mut indicator = HashMap::new();
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Flat, 0.0, 0.0));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Flat, 0.0, 0.0),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -397,9 +437,15 @@ mod tests {
         };
 
         let mut tsmom = HashMap::new();
-        tsmom.insert("SPY".into(), make_signal("SPY", SignalDirection::Long, 0.8, 1.0, "tsmom", 1.5));
+        tsmom.insert(
+            "SPY".into(),
+            make_signal("SPY", SignalDirection::Long, 0.8, 1.0, "tsmom", 1.5),
+        );
         let mut indicator = HashMap::new();
-        indicator.insert("SPY".into(), make_indicator_signal("SPY", SignalDirection::Short, -0.5, 0.8));
+        indicator.insert(
+            "SPY".into(),
+            make_indicator_signal("SPY", SignalDirection::Short, -0.5, 0.8),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -426,7 +472,10 @@ mod tests {
         tsmom.insert("GLD".into(), sig);
 
         let mut indicator = HashMap::new();
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.7));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.7),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -443,9 +492,15 @@ mod tests {
     fn build_combined_signal_basic() {
         let config = gold_50_50_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.7));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.7),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -467,10 +522,16 @@ mod tests {
         });
 
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
         // confidence 0.5 < min_confidence 0.7 → gated out
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.5));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Long, 0.6, 0.5),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         assert!(!results[0].indicator_used);
@@ -487,10 +548,16 @@ mod tests {
         });
 
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
         // |strength| = 0.1 < min_abs_strength 0.3 → gated out
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.1, 0.8));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Long, 0.1, 0.8),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         assert!(!results[0].indicator_used);
@@ -506,10 +573,16 @@ mod tests {
         });
 
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
         // confidence 0.8 >= 0.7, |strength| 0.5 >= 0.3 → passes gating
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.5, 0.8));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Long, 0.5, 0.8),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         assert!(results[0].indicator_used);
@@ -540,10 +613,16 @@ mod tests {
         // Same-sign indicator (dampener) should be ignored
         let config = gold_protective_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
         // Same direction as TSMOM → not a sign flip → ignored
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Long, 0.4, 0.8));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Long, 0.4, 0.8),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -557,10 +636,16 @@ mod tests {
         // Opposite-sign indicator (true disagreement) should pass through
         let config = gold_protective_config();
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
         // Opposite direction → sign flip → used
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Short, -0.6, 0.8));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Short, -0.6, 0.8),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];
@@ -581,10 +666,16 @@ mod tests {
         });
 
         let mut tsmom = HashMap::new();
-        tsmom.insert("GLD".into(), make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0));
+        tsmom.insert(
+            "GLD".into(),
+            make_signal("GLD", SignalDirection::Long, 0.8, 1.0, "tsmom", 2.0),
+        );
         let mut indicator = HashMap::new();
         // Opposite sign but confidence 0.5 < 0.7 → gated out before mode check
-        indicator.insert("GLD".into(), make_indicator_signal("GLD", SignalDirection::Short, -0.6, 0.5));
+        indicator.insert(
+            "GLD".into(),
+            make_indicator_signal("GLD", SignalDirection::Short, -0.6, 0.5),
+        );
 
         let results = combine_signals(&tsmom, &indicator, &config);
         let r = &results[0];

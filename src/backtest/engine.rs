@@ -2,11 +2,11 @@ use std::collections::{BTreeSet, HashMap};
 
 use chrono::NaiveDate;
 
+#[cfg(feature = "track-b")]
+use crate::agents::combiner;
 use crate::agents::tsmom::TSMOMAgent;
 #[cfg(feature = "track-b")]
 use crate::agents::SignalAgent;
-#[cfg(feature = "track-b")]
-use crate::agents::combiner;
 #[cfg(feature = "track-b")]
 use crate::config::BlendConfig;
 use crate::core::bar::{Bar, BarSeries};
@@ -130,7 +130,13 @@ impl BacktestEngine {
             signals.insert(sym.clone(), sig);
         }
 
-        self.build_snapshot(signals, raw_weights, bars_by_instrument, current_quantities, nav)
+        self.build_snapshot(
+            signals,
+            raw_weights,
+            bars_by_instrument,
+            current_quantities,
+            nav,
+        )
     }
 
     /// Generate target positions with externally-provided signals and weights.
@@ -149,7 +155,13 @@ impl BacktestEngine {
         current_quantities: &HashMap<String, f64>,
         nav: f64,
     ) -> TargetSnapshot {
-        self.build_snapshot(signals, raw_weights, bars_by_instrument, current_quantities, nav)
+        self.build_snapshot(
+            signals,
+            raw_weights,
+            bars_by_instrument,
+            current_quantities,
+            nav,
+        )
     }
 
     /// Shared pipeline: apply risk limits, size positions, diff orders, compute margin.

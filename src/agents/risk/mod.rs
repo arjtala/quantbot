@@ -232,10 +232,7 @@ mod tests {
     #[test]
     fn allow_within_limits() {
         let agent = RiskAgent::new(RiskConfig::default());
-        let orders = vec![
-            make_order("SPY", -100_000.0),
-            make_order("GLD", 150_000.0),
-        ];
+        let orders = vec![make_order("SPY", -100_000.0), make_order("GLD", 150_000.0)];
         // Gross leverage = 250k / 1M = 0.25, well under 2.5
         let decision = agent.check_targets(&orders, 1_000_000.0);
         assert_eq!(decision, RiskDecision::Allow);
@@ -324,10 +321,7 @@ mod tests {
             max_position_pct: 0.25,
             max_drawdown_pct: 0.15,
         });
-        let orders = vec![
-            make_order("SPY", -100_000.0),
-            make_order("GLD", 150_000.0),
-        ];
+        let orders = vec![make_order("SPY", -100_000.0), make_order("GLD", 150_000.0)];
         // All within limits, no drawdown
         let (decision, detail) = agent.check_all(&orders, 1_000_000.0, 1_000_000.0);
         assert_eq!(decision, RiskDecision::Allow);

@@ -137,10 +137,18 @@ impl DataUpdater {
 
             if from > to {
                 // Already up to date
-                let total = self.last_date(sym).ok().flatten().map(|_| {
-                    let loader = CsvLoader::new(&self.data_dir);
-                    loader.load_bars(sym, None, None).map(|s| s.len()).unwrap_or(0)
-                }).unwrap_or(0);
+                let total = self
+                    .last_date(sym)
+                    .ok()
+                    .flatten()
+                    .map(|_| {
+                        let loader = CsvLoader::new(&self.data_dir);
+                        loader
+                            .load_bars(sym, None, None)
+                            .map(|s| s.len())
+                            .unwrap_or(0)
+                    })
+                    .unwrap_or(0);
 
                 results.push(UpdateResult {
                     symbol: sym.clone(),
@@ -301,8 +309,8 @@ mod tests {
         let new_bars = vec![
             bar("2025-01-02", 100.0, 101.0, 99.0, 100.5, 50000.0), // duplicate
             bar("2025-01-03", 100.5, 103.0, 100.0, 102.0, 60000.0), // duplicate
-            bar("2025-01-06", 102.0, 102.5, 98.5, 99.0, 45000.0),   // new
-            bar("2025-01-07", 99.0, 101.5, 98.0, 101.0, 55000.0),   // new
+            bar("2025-01-06", 102.0, 102.5, 98.5, 99.0, 45000.0),  // new
+            bar("2025-01-07", 99.0, 101.5, 98.0, 101.0, 55000.0),  // new
         ];
 
         let result = updater.merge_bars("SPY", &new_bars).unwrap();
@@ -325,9 +333,7 @@ mod tests {
         );
 
         let updater = DataUpdater::new(dir.path());
-        let new_bars = vec![
-            bar("2025-01-02", 100.0, 101.0, 99.0, 100.5, 50000.0),
-        ];
+        let new_bars = vec![bar("2025-01-02", 100.0, 101.0, 99.0, 100.5, 50000.0)];
 
         let result = updater.merge_bars("SPY", &new_bars).unwrap();
         assert_eq!(result.bars_appended, 0);

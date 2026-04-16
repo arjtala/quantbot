@@ -113,7 +113,12 @@ impl LlmIndicatorAgent {
             },
             Err(e) => {
                 eprintln!("  WARN: LLM request failed for {instrument}: {e}");
-                (flat_signal(instrument, &snapshot), e.to_string(), false, false)
+                (
+                    flat_signal(instrument, &snapshot),
+                    e.to_string(),
+                    false,
+                    false,
+                )
             }
         };
 
@@ -129,8 +134,7 @@ impl LlmIndicatorAgent {
             llm_ok,
             parse_ok,
             latency_ms: Some(latency_ms),
-            created_at: chrono::Utc::now()
-                .to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
         };
         if let Ok(mut entries) = self.cache_entries.lock() {
             entries.push(entry);

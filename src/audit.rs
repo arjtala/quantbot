@@ -109,15 +109,10 @@ impl AuditLogger {
         let filename = format!("{}.jsonl", run_id.id);
         let path = audit_dir.join(&filename);
 
-        let writer = match fs::create_dir_all(audit_dir)
-            .and_then(|_| File::create(&path))
-        {
+        let writer = match fs::create_dir_all(audit_dir).and_then(|_| File::create(&path)) {
             Ok(f) => Some(BufWriter::new(f)),
             Err(e) => {
-                eprintln!(
-                    "  WARN: failed to create audit log {}: {e}",
-                    path.display()
-                );
+                eprintln!("  WARN: failed to create audit log {}: {e}", path.display());
                 None
             }
         };
@@ -212,27 +207,14 @@ impl AuditLogger {
     }
 
     pub fn log_auth_ok(&mut self, engine: &str) {
-        self.log(
-            "auth_ok",
-            "INFO",
-            serde_json::json!({ "engine": engine }),
-        );
+        self.log("auth_ok", "INFO", serde_json::json!({ "engine": engine }));
     }
 
     pub fn log_health_check_ok(&mut self) {
-        self.log(
-            "health_check_ok",
-            "INFO",
-            serde_json::json!({}),
-        );
+        self.log("health_check_ok", "INFO", serde_json::json!({}));
     }
 
-    pub fn log_prompt_info(
-        &mut self,
-        prompt_hash: &str,
-        prompt_source: &str,
-        llm_model: &str,
-    ) {
+    pub fn log_prompt_info(&mut self, prompt_hash: &str, prompt_source: &str, llm_model: &str) {
         self.log(
             "prompt_info",
             "INFO",
@@ -244,7 +226,13 @@ impl AuditLogger {
         );
     }
 
-    pub fn log_nav_mtm(&mut self, initial_cash: f64, unrealized_pnl: f64, mtm_nav: f64, positions: &[crate::execution::mtm::MtmPosition]) {
+    pub fn log_nav_mtm(
+        &mut self,
+        initial_cash: f64,
+        unrealized_pnl: f64,
+        mtm_nav: f64,
+        positions: &[crate::execution::mtm::MtmPosition],
+    ) {
         self.log(
             "nav_mark_to_market",
             "INFO",
@@ -259,7 +247,11 @@ impl AuditLogger {
     }
 
     pub fn log_risk_check(&mut self, detail: &RiskCheckDetail) {
-        let level = if detail.decision == "VETO" { "ERROR" } else { "INFO" };
+        let level = if detail.decision == "VETO" {
+            "ERROR"
+        } else {
+            "INFO"
+        };
         self.log(
             "risk_check",
             level,
@@ -364,12 +356,7 @@ impl AuditLogger {
         );
     }
 
-    pub fn log_targets(
-        &mut self,
-        eval_date: &str,
-        nav: f64,
-        targets: &[TargetEntry],
-    ) {
+    pub fn log_targets(&mut self, eval_date: &str, nav: f64, targets: &[TargetEntry]) {
         self.log(
             "targets",
             "INFO",
@@ -392,11 +379,7 @@ impl AuditLogger {
         );
     }
 
-    pub fn log_reconcile(
-        &mut self,
-        orders: &[OrderEntry],
-        skipped_dust: &[DustDelta],
-    ) {
+    pub fn log_reconcile(&mut self, orders: &[OrderEntry], skipped_dust: &[DustDelta]) {
         self.log(
             "reconcile",
             "INFO",
@@ -466,11 +449,7 @@ impl AuditLogger {
         );
     }
 
-    pub fn log_verify(
-        &mut self,
-        pass: bool,
-        mismatches: &[MismatchEntry],
-    ) {
+    pub fn log_verify(&mut self, pass: bool, mismatches: &[MismatchEntry]) {
         let level = if pass { "INFO" } else { "WARN" };
         self.log(
             "verify",
@@ -635,7 +614,16 @@ mod tests {
         assert!(expected_path.exists());
 
         // Write an event and verify JSONL
-        logger.log_run_start("live", "ig", false, "config.toml", &["SPY".into()], 1e6, Some("DEMO"), Some("data/live-state.json"));
+        logger.log_run_start(
+            "live",
+            "ig",
+            false,
+            "config.toml",
+            &["SPY".into()],
+            1e6,
+            Some("DEMO"),
+            Some("data/live-state.json"),
+        );
 
         // Flush
         if let Some(w) = logger.writer.as_mut() {
@@ -696,25 +684,41 @@ mod tests {
         let run_id_str = rid.id.clone();
         let mut logger = AuditLogger::new(rid, dir.path());
 
-        logger.log_run_start("live", "ig", true, "config.toml", &["SPY".into()], 1e6, Some("DEMO"), None);
-        logger.log_targets("2025-03-31", 1e6, &[TargetEntry {
-            instrument: "SPY".into(),
-            signed_deal_size: -282.0,
-            weight: -0.16,
-        }]);
-        logger.log_run_end("DRY_RUN", &RunSummary {
-            run_id: run_id_str.clone(),
-            outcome: "DRY_RUN".into(),
-            duration_ms: 500,
-            orders_placed: 0,
-            orders_confirmed: 0,
-            orders_rejected: 0,
-            dust_skipped: 0,
-            mismatches: 0,
-            audit_write_failed: false,
-            db_write_failed: false,
-            audit_path: format!("data/audit/{run_id_str}.jsonl"),
-        });
+        logger.log_run_start(
+            "live",
+            "ig",
+            true,
+            "config.toml",
+            &["SPY".into()],
+            1e6,
+            Some("DEMO"),
+            None,
+        );
+        logger.log_targets(
+            "2025-03-31",
+            1e6,
+            &[TargetEntry {
+                instrument: "SPY".into(),
+                signed_deal_size: -282.0,
+                weight: -0.16,
+            }],
+        );
+        logger.log_run_end(
+            "DRY_RUN",
+            &RunSummary {
+                run_id: run_id_str.clone(),
+                outcome: "DRY_RUN".into(),
+                duration_ms: 500,
+                orders_placed: 0,
+                orders_confirmed: 0,
+                orders_rejected: 0,
+                dust_skipped: 0,
+                mismatches: 0,
+                audit_write_failed: false,
+                db_write_failed: false,
+                audit_path: format!("data/audit/{run_id_str}.jsonl"),
+            },
+        );
 
         // Flush and read
         if let Some(w) = logger.writer.as_mut() {

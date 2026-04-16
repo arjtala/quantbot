@@ -59,7 +59,12 @@ impl std::fmt::Display for CoverageReport {
             };
             write!(f, "    {sym:<14} {}/{sym_total} ({pct:.0}%)", cov.hits)?;
             if !cov.missing_dates.is_empty() {
-                let show: Vec<&str> = cov.missing_dates.iter().take(5).map(|s| s.as_str()).collect();
+                let show: Vec<&str> = cov
+                    .missing_dates
+                    .iter()
+                    .take(5)
+                    .map(|s| s.as_str())
+                    .collect();
                 write!(f, "  missing: {}", show.join(", "))?;
                 if cov.missing_dates.len() > 5 {
                     write!(f, " +{} more", cov.missing_dates.len() - 5)?;
@@ -94,7 +99,11 @@ impl CachedIndicatorAgent {
 
     /// Return the aggregate coverage report for the replay run.
     pub fn coverage_report(&self) -> CoverageReport {
-        let instruments = self.coverage.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let instruments = self
+            .coverage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let total_hits = instruments.values().map(|c| c.hits).sum();
         let total_misses = instruments.values().map(|c| c.misses).sum();
         CoverageReport {
@@ -106,9 +115,7 @@ impl CachedIndicatorAgent {
 
     fn record_hit(&self, instrument: &str) {
         if let Ok(mut cov) = self.coverage.lock() {
-            cov.entry(instrument.to_string())
-                .or_default()
-                .hits += 1;
+            cov.entry(instrument.to_string()).or_default().hits += 1;
         }
     }
 
@@ -323,7 +330,12 @@ mod tests {
         // CachedIndicatorAgent should build the same key
         let db = test_db();
         // Insert with the expected key
-        insert_cache_entry(&db, &expected, "GLD", r#"{"direction":"short","confidence":0.7,"strength":-0.5}"#);
+        insert_cache_entry(
+            &db,
+            &expected,
+            "GLD",
+            r#"{"direction":"short","confidence":0.7,"strength":-0.5}"#,
+        );
 
         let agent = CachedIndicatorAgent::new(db, "mymodel".into(), "myhash".into());
         let sig = agent.generate_signal(&bars, "GLD");
@@ -344,7 +356,12 @@ mod tests {
         let eval_date = bars.bars().last().unwrap().date.to_string();
         let ta_hash = sha256_short(&user_prompt);
         let spy_key = format!("m|h|SPY|{eval_date}|{ta_hash}");
-        insert_cache_entry(&db, &spy_key, "SPY", r#"{"direction":"long","confidence":0.8,"strength":0.6}"#);
+        insert_cache_entry(
+            &db,
+            &spy_key,
+            "SPY",
+            r#"{"direction":"long","confidence":0.8,"strength":0.6}"#,
+        );
 
         let agent = CachedIndicatorAgent::new(db, "m".into(), "h".into());
         agent.generate_signal(&bars, "SPY");

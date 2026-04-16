@@ -161,12 +161,7 @@ pub fn compute_ema(values: &[f64], period: usize) -> Option<f64> {
 }
 
 /// MACD: difference between fast and slow EMA, with a signal line (EMA of MACD line).
-pub fn compute_macd(
-    closes: &[f64],
-    fast: usize,
-    slow: usize,
-    signal: usize,
-) -> Option<MacdResult> {
+pub fn compute_macd(closes: &[f64], fast: usize, slow: usize, signal: usize) -> Option<MacdResult> {
     if closes.len() < slow + signal {
         return None;
     }
@@ -376,7 +371,10 @@ mod tests {
         let values: Vec<f64> = (1..=20).map(|i| (i as f64).powi(2)).collect();
         let ema = compute_ema(&values, 10).unwrap();
         let sma = compute_sma(&values, 10).unwrap();
-        assert!(ema > sma, "EMA ({ema}) should weight recent values more than SMA ({sma})");
+        assert!(
+            ema > sma,
+            "EMA ({ema}) should weight recent values more than SMA ({sma})"
+        );
     }
 
     #[test]
@@ -390,7 +388,10 @@ mod tests {
     fn macd_uptrend() {
         let prices: Vec<f64> = (0..60).map(|i| 100.0 + i as f64 * 0.5).collect();
         let macd = compute_macd(&prices, 12, 26, 9).unwrap();
-        assert!(macd.macd_line > 0.0, "MACD line should be positive in uptrend");
+        assert!(
+            macd.macd_line > 0.0,
+            "MACD line should be positive in uptrend"
+        );
     }
 
     #[test]
@@ -442,7 +443,10 @@ mod tests {
         let atr = compute_atr(&highs, &lows, &closes, 14).unwrap();
         assert!(atr > 0.0, "ATR should be positive");
         // High-low range is 4.0, plus gaps of 0.5 → TR ≈ 4.5
-        assert!(atr > 3.0 && atr < 6.0, "ATR should be around 4-5, got {atr}");
+        assert!(
+            atr > 3.0 && atr < 6.0,
+            "ATR should be around 4-5, got {atr}"
+        );
     }
 
     #[test]

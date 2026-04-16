@@ -151,8 +151,8 @@ mod tests {
     #[test]
     fn check_all_collects_errors() {
         let symbols = vec![
-            ("SPY".to_string(), Some(d(2025, 1, 6))),  // fresh
-            ("GLD".to_string(), None),                    // no data
+            ("SPY".to_string(), Some(d(2025, 1, 6))),   // fresh
+            ("GLD".to_string(), None),                  // no data
             ("GC=F".to_string(), Some(d(2024, 12, 1))), // stale
         ];
         let errors = check_all_fresh(&symbols, d(2025, 1, 7), 3);

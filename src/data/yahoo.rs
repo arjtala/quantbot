@@ -104,16 +104,8 @@ impl YahooClient {
     ) -> Result<Vec<Bar>> {
         self.rate_limit().await;
 
-        let period1 = from
-            .and_hms_opt(0, 0, 0)
-            .unwrap()
-            .and_utc()
-            .timestamp();
-        let period2 = to
-            .and_hms_opt(23, 59, 59)
-            .unwrap()
-            .and_utc()
-            .timestamp();
+        let period1 = from.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
+        let period2 = to.and_hms_opt(23, 59, 59).unwrap().and_utc().timestamp();
 
         let url = format!(
             "{}/v8/finance/chart/{}?period1={}&period2={}&interval=1d",
@@ -151,10 +143,7 @@ impl YahooClient {
             );
         }
 
-        let results = chart_resp
-            .chart
-            .result
-            .unwrap_or_default();
+        let results = chart_resp.chart.result.unwrap_or_default();
 
         let result = results
             .into_iter()
@@ -164,14 +153,15 @@ impl YahooClient {
             })?;
 
         let timestamps = result.timestamp.unwrap_or_default();
-        let quote = result
-            .indicators
-            .quote
-            .into_iter()
-            .next()
-            .ok_or_else(|| YahooError::NoData {
-                symbol: symbol.to_string(),
-            })?;
+        let quote =
+            result
+                .indicators
+                .quote
+                .into_iter()
+                .next()
+                .ok_or_else(|| YahooError::NoData {
+                    symbol: symbol.to_string(),
+                })?;
 
         let mut bars = Vec::new();
         for (i, &ts) in timestamps.iter().enumerate() {
@@ -192,12 +182,7 @@ impl YahooClient {
                 None => continue,
             };
             // Volume may be missing for FX — default to 0
-            let volume = quote
-                .volume
-                .get(i)
-                .copied()
-                .flatten()
-                .unwrap_or(0.0);
+            let volume = quote.volume.get(i).copied().flatten().unwrap_or(0.0);
 
             let date = chrono::DateTime::from_timestamp(ts, 0)
                 .map(|dt| dt.date_naive())
@@ -288,7 +273,10 @@ mod tests {
     async fn fetch_parses_bars() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/v8/finance/chart/SPY.*".to_string()))
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/v8/finance/chart/SPY.*".to_string()),
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(sample_response())
@@ -312,7 +300,10 @@ mod tests {
     async fn nulls_filtered_out() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/v8/finance/chart/TEST.*".to_string()))
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/v8/finance/chart/TEST.*".to_string()),
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(response_with_nulls())
@@ -334,7 +325,10 @@ mod tests {
     async fn http_error_reported() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/v8/finance/chart/BAD.*".to_string()))
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/v8/finance/chart/BAD.*".to_string()),
+            )
             .with_status(404)
             .with_body("not found")
             .create_async()
@@ -354,7 +348,10 @@ mod tests {
     async fn empty_result_is_error() {
         let mut server = mockito::Server::new_async().await;
         let mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/v8/finance/chart/EMPTY.*".to_string()))
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/v8/finance/chart/EMPTY.*".to_string()),
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"chart":{"result":[],"error":null}}"#)
@@ -393,7 +390,10 @@ mod tests {
 
         let mut server = mockito::Server::new_async().await;
         let mock = server
-            .mock("GET", mockito::Matcher::Regex(r"/v8/finance/chart/GBPUSD.*".to_string()))
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"/v8/finance/chart/GBPUSD.*".to_string()),
+            )
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(body)

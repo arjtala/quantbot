@@ -417,7 +417,10 @@ mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             OverlayAction::Flatten { scope, reason } => {
-                assert!(matches!(scope, OverlayScope::AssetClass(BlendCategory::Forex)));
+                assert!(matches!(
+                    scope,
+                    OverlayScope::AssetClass(BlendCategory::Forex)
+                ));
                 assert_eq!(reason, "weekend risk");
             }
             other => panic!("expected Flatten, got {other:?}"),
@@ -550,7 +553,10 @@ mod tests {
         let (actions, _) = compute_news_actions(&feed, eval, &cfg);
         match &actions[0] {
             OverlayAction::ScaleExposure { factor, .. } => {
-                assert!((factor - 1.0).abs() < 1e-10, "factor should be clamped to 1.0");
+                assert!(
+                    (factor - 1.0).abs() < 1e-10,
+                    "factor should be clamped to 1.0"
+                );
             }
             other => panic!("expected ScaleExposure, got {other:?}"),
         }

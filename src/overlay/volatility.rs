@@ -42,8 +42,7 @@ impl TriggerResult {
     }
 
     pub fn atr_triggered(&self, th: &ResolvedVolThresholds) -> bool {
-        self.atr_pct
-            .is_some_and(|ap| ap >= th.atr_pct_threshold)
+        self.atr_pct.is_some_and(|ap| ap >= th.atr_pct_threshold)
     }
 
     pub fn move_triggered(&self, th: &ResolvedVolThresholds) -> bool {
@@ -66,10 +65,7 @@ fn stdev(values: &[f64]) -> f64 {
 
 /// Compute log returns from close prices.
 fn log_returns(closes: &[f64]) -> Vec<f64> {
-    closes
-        .windows(2)
-        .map(|w| (w[1] / w[0]).ln())
-        .collect()
+    closes.windows(2).map(|w| (w[1] / w[0]).ln()).collect()
 }
 
 /// Compute ATR using Wilder's smoothing (self-contained, no track-b dependency).
@@ -569,7 +565,10 @@ mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             OverlayAction::ScaleExposure { scope, .. } => {
-                assert!(matches!(scope, OverlayScope::AssetClass(BlendCategory::Gold)));
+                assert!(matches!(
+                    scope,
+                    OverlayScope::AssetClass(BlendCategory::Gold)
+                ));
             }
             other => panic!("expected ScaleExposure(Gold), got {other:?}"),
         }
@@ -616,7 +615,10 @@ mod tests {
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             OverlayAction::FreezeEntries { scope, .. } => {
-                assert!(matches!(scope, OverlayScope::AssetClass(BlendCategory::Gold)));
+                assert!(matches!(
+                    scope,
+                    OverlayScope::AssetClass(BlendCategory::Gold)
+                ));
             }
             other => panic!("expected FreezeEntries(Gold), got {other:?}"),
         }
@@ -682,7 +684,10 @@ mod tests {
                 factor,
                 until,
             } => {
-                assert!(matches!(scope, OverlayScope::AssetClass(BlendCategory::Gold)));
+                assert!(matches!(
+                    scope,
+                    OverlayScope::AssetClass(BlendCategory::Gold)
+                ));
                 assert!((factor - 0.3).abs() < 1e-10); // gold override
                 assert_eq!(*until, eval + chrono::Duration::days(3)); // gold override
             }
@@ -725,8 +730,24 @@ mod tests {
 
         // Should get per-category: freeze for gold, scale for equity
         assert_eq!(actions.len(), 2);
-        let has_freeze_gold = actions.iter().any(|a| matches!(a, OverlayAction::FreezeEntries { scope: OverlayScope::AssetClass(BlendCategory::Gold), .. }));
-        let has_scale_equity = actions.iter().any(|a| matches!(a, OverlayAction::ScaleExposure { scope: OverlayScope::AssetClass(BlendCategory::Equity), .. }));
+        let has_freeze_gold = actions.iter().any(|a| {
+            matches!(
+                a,
+                OverlayAction::FreezeEntries {
+                    scope: OverlayScope::AssetClass(BlendCategory::Gold),
+                    ..
+                }
+            )
+        });
+        let has_scale_equity = actions.iter().any(|a| {
+            matches!(
+                a,
+                OverlayAction::ScaleExposure {
+                    scope: OverlayScope::AssetClass(BlendCategory::Equity),
+                    ..
+                }
+            )
+        });
         assert!(has_freeze_gold, "expected FreezeEntries(Gold)");
         assert!(has_scale_equity, "expected ScaleExposure(Equity)");
     }

@@ -4,9 +4,7 @@ use std::sync::Mutex;
 use crate::audit::TargetEntry;
 use crate::core::signal::SignalDirection;
 use crate::db::{Db, LlmCacheEntry};
-use crate::execution::traits::{
-    DealStatus, OrderAck, OrderRequest,
-};
+use crate::execution::traits::{DealStatus, OrderAck, OrderRequest};
 use crate::overlay::AppliedOverlay;
 
 // ─── Signal Record ──────────────────────────────────────────────
@@ -120,7 +118,13 @@ impl Recorder {
                 conn.execute(
                     "INSERT INTO positions (run_id, instrument, signed_deal_size, source, ts)
                      VALUES (?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![&self.run_id, &t.instrument, t.signed_deal_size, "target", &now],
+                    rusqlite::params![
+                        &self.run_id,
+                        &t.instrument,
+                        t.signed_deal_size,
+                        "target",
+                        &now
+                    ],
                 )?;
             }
             Ok(())
@@ -296,7 +300,10 @@ impl Recorder {
         let mut written = 0;
         for entry in entries {
             if let Err(e) = db.insert_llm_cache(entry) {
-                eprintln!("  WARN: SQLite insert_llm_cache failed for {}: {e}", entry.instrument);
+                eprintln!(
+                    "  WARN: SQLite insert_llm_cache failed for {}: {e}",
+                    entry.instrument
+                );
                 self.mark_failed();
             } else {
                 written += 1;
