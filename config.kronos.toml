@@ -38,7 +38,7 @@ max_drawdown_pct = 0.15
 [overlays.kronos]
 enabled = true
 model_name = "NeoQuasar/Kronos-mini"
-model_version = "v1"
+model_version = "v1-kronos"
 tokenizer_name = "NeoQuasar/Kronos-Tokenizer-2k"
 lookback_bars = 512
 sample_count = 64
