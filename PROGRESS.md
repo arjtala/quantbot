@@ -799,9 +799,11 @@ account_id = "Z69YJL"
 
 | Repo | Stars | Use |
 |------|-------|-----|
-| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | Debate pipeline reference |
+| [ATLAS](https://github.com/chrisworsey55/atlas-gic) | — | **Darwinian meta-weighting + autoresearch** (JOURNAL §5.1). Constrained softmax for adaptive blend weights. Disagreement penalty for opposing signals. Prompt evolution loop. |
+| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | **Debate pipeline + BM25 memory** (JOURNAL §5.2). Structured bull/bear debate with round limits. Offline similarity memory. 5-tier rating scale. |
 | [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) | 49.6K | Sharpe benchmark |
 | [nofx](https://github.com/NoFxAiOS/nofx) | 11.2K | Circuit breaker pattern |
+| [FinceptTerminal](https://github.com/Fincept-Corporation/FinceptTerminal) | — | Multi-persona agents + SuperAgent router (JOURNAL §5.3) |
 
 ---
 
@@ -871,10 +873,19 @@ account_id = "Z69YJL"
 - [ ] **AlphaGen Agent** *(JOURNAL.md §F, §J)* — Self-improving alpha discovery loop. LLM generates mathematical factor code, runs it through `BacktestEngine`, evaluates Sharpe, iteratively refines. Promotes winners to production.
 - [ ] **Clifford TSMOM** *(JOURNAL.md §R)* — Geometric algebra-enhanced momentum via full geometric product. Research direction — potentially publishable.
 - [ ] **Multi-timeframe analysis** *(from QuantAgent-SBU + TorchTrade)* — Analyze across 1h/4h/1d simultaneously. Daily trend + shorter-timeframe entry signals for confluence.
+- [ ] **Multi-persona indicator agents** *(from FinceptTerminal §5.3)* — Instead of one "trading analyst" prompt, generate signals from 2-3 specialized perspectives (momentum analyst, mean-reversion analyst, macro analyst) and blend outputs via combiner.
+- [ ] **Autoresearch prompt evolution** *(from ATLAS §5.1)* — Automated prompt A/B loop: identify worst instrument by rolling Sharpe → generate targeted prompt modification → cache fill + replay → commit or revert. Target: `quantbot eval autoresearch` subcommand.
 
 ### Risk & Sizing
 - [ ] Correlation-aware sizing, drawdown deleveraging
 - [ ] **RL-based dynamic agent weighting** *(JOURNAL.md §Q, TorchTrade PPO reference)* — Replace fixed `SignalCombiner` weights with a bandit/PPO agent that learns optimal weights per market regime. RL survey shows hybrid methods outperform by 15-20%.
+- [ ] **Adaptive softmax blend weights** *(from ATLAS §5.1)* — Replace static per-asset-class blend weights with constrained softmax over rolling 60-day Sharpe. Floor (0.1) prevents zeroing; ceiling (0.9) prevents over-concentration.
+- [ ] **Disagreement penalty** *(from ATLAS §5.1)* — When TSMOM and indicator disagree on direction, penalize conviction by `opposing_weight × 0.5` instead of blending. Produces FLAT/small position on conflict, aligning with ablation finding that selectivity is risk management.
+
+### Signal Quality & Evaluation
+- [ ] **alphalens factor analysis** *(from awesome-ai-in-finance §5.3)* — Run Quantopian alphalens tear sheets on cached LLM signals to quantify information coefficient, turnover, and alpha decay. Uses existing SQLite cache data.
+- [ ] **BM25 regime memory** *(from TradingAgents §5.2)* — Store (market_conditions, indicator_recommendation, actual_return) tuples in SQLite. On each run, inject top-2 similar past situations into LLM prompt for contextual learning without retraining.
+- [ ] **5-tier rating scale** *(from TradingAgents §5.2)* — Replace LONG/SHORT/FLAT with BUY/OVERWEIGHT/HOLD/UNDERWEIGHT/SELL. Maps to position scale factors (1.0/0.75/existing/0.25/-1.0) for finer-grained sizing.
 
 ### Alternative Signal Sources
 - [ ] **PredictionMarketAgent** — Polymarket/Kalshi probability estimates as macro sentiment signal. Use [prediction-market-analysis](https://github.com/Jon-Becker/prediction-market-analysis) dataset (36GB) for backtesting. Execution via [pmxt](https://github.com/pmxt-dev/pmxt) if trading prediction markets directly.
@@ -884,3 +895,5 @@ account_id = "Z69YJL"
 - [ ] IBKR execution engine — re-add via same `ExecutionEngine` trait for DMA/options/futures if needed
 - [ ] Alerting (Slack/Telegram/email)
 - [ ] **Local Fin-R1 model via Ollama** *(JOURNAL.md §K)* — 7B model matching GPT-4 on financial reasoning. Replace API calls with local inference for near-zero cost paper trading. Supported by `rig-core` (Rust) and `langchain` (Python) via Ollama.
+- [ ] **Multi-provider LLM fallback** *(from OpenStock §5.3)* — Add `fallback_url`/`fallback_model` to `LlmConfig`. If primary returns 5xx/timeout after retries, try fallback before returning Flat. Simple production resilience.
+- [ ] **Two-tier LLM strategy** *(from TradingAgents §5.2)* — Use Fin-R1 7B for per-instrument indicator (fast, 6 calls/run), larger model for weekly meta-reasoning or overlay classification (1 call/week). Separate `quick_think_llm` and `deep_think_llm` in config.

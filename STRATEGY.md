@@ -118,6 +118,12 @@ Port the LLM indicator agent — calls Ollama locally, parses JSON signals. Star
 - **Confidence gating** (PR B6): `GatingConfig` (min_confidence, min_abs_strength) on `BlendConfig` filters out low-conviction signals before blending
 - **Ablation result (2026-04-06):** 15-month eval (98.7% cache, 2024-01 → 2025-03) showed no evidence of alpha from Fin-R1 + baseline prompt under IG spread costs. Ablation ladder: ungated 1.278 → gated 1.314 → forex-off 1.365 → TSMOM-only 1.394. Monotonic improvement as indicator exposure removed. Production default: TSMOM-only. Next: prompt/model A/B testing
 - **Gold protective override (2026-04-08):** `BlendMode::ProtectiveOverride` — indicator only intervenes on sign flips (true directional disagreements). Gold dampening collapsed from 95% to 0%. Sharpe 1.427 vs TSMOM-only 1.394 (+0.033). Safe optionality preserved.
+- **Next research directions (from ATLAS/TradingAgents review, JOURNAL §5.1-5.2):**
+  - Adaptive blend weights via constrained softmax (ATLAS pattern: rolling 60-day Sharpe → softmax with 0.1/0.9 floor/ceiling)
+  - Disagreement penalty (ATLAS pattern: when TSMOM and indicator disagree, penalize conviction by `opposing_weight × 0.5` → FLAT on conflict)
+  - BM25 regime memory (TradingAgents pattern: inject past similar market conditions into LLM prompt)
+  - Autoresearch prompt evolution (ATLAS pattern: automated prompt A/B with 5-day eval windows)
+  - 5-tier rating scale (TradingAgents pattern: BUY/OVERWEIGHT/HOLD/UNDERWEIGHT/SELL → position scale factors)
 
 ---
 
@@ -127,7 +133,7 @@ Build order (see JOURNAL.md §8 for full architecture):
 
 1. **Overlay actions v1** ✅ — typed enum (`FreezeEntries`, `ScaleExposure`, `Flatten`, `DisableInstrument`) with scope (Global/AssetClass/Instrument), date-based expiry, SQLite persistence, audit logging. Config-driven (`[[overlays.actions]]` in TOML). TightenGating deferred to v2.
 2. **Volatility/market-condition overlay** ✅ — per-asset-class vol thresholds, deterministic triggers emitting bounded actions
-3. **News overlay** — bounded risk overlay, not primary alpha. Polling + caching + classifier
+3. **News overlay** — bounded risk overlay, not primary alpha. Polling + caching + classifier. ATLAS reflexivity engine (JOURNAL §5.1) provides a framework for modeling cascading effects (tariff → dollar strength → FX risk → deleverage) rather than simple sentiment classification.
 4. **Daemon + scheduling** ✅ — PID lock, checkpoint persistence, periodic timer, auto-update, SIGTERM handling
 5. **Auto-update** ✅ — daily CSV refresh from Yahoo, integrated into daemon cycle
 6. **Systemd service** ✅ — user unit file + install script
@@ -139,6 +145,11 @@ Build order (see JOURNAL.md §8 for full architecture):
 ## Track C: Vision Agents
 
 Pattern + Trend agents using vision models. Completely untested — deferred to next eval round. Needs cluster GPU.
+
+Architecture references:
+- QuantAgent-SBU (JOURNAL §2.1, §5.3): vision LLM chart pipeline + multi-timeframe analysis (1m to 1d)
+- TradingAgents (JOURNAL §5.2): modular analyst plugins with tool bindings — each agent gets specific data access
+- FinceptTerminal (JOURNAL §5.3): multi-persona agents — generate signals from specialized perspectives (momentum, mean-reversion, macro) and blend
 
 ---
 

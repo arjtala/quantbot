@@ -194,22 +194,342 @@ The following papers address gaps in the original literature review, covering mu
 
 | Repo | Stars | Relevance |
 |---|---|---|
-| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | Bull/bear debate implementation (paper §H now open-sourced). Study analyst→researcher→risk→trader pipeline. |
+| [ATLAS](https://github.com/chrisworsey55/atlas-gic) | — | **Deep-dived (§5.1).** 25-agent Darwinian selection system with meta-weighting, autoresearch, reflexivity simulation. Closest architectural analog to quantbot's multi-agent blend. |
+| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | 9.3K | **Deep-dived (§5.2).** Bull/bear debate implementation (paper §H now open-sourced). Hierarchical analyst→researcher→risk→trader pipeline with BM25 memory. |
 | [ai-hedge-fund](https://github.com/virattt/ai-hedge-fund) | 49.6K | Competitive benchmark — near-identical multi-agent architecture. Compare Sharpe ratios. |
 | [QuantAgent (SBU)](https://github.com/Y-Research-SBU/QuantAgent) | — | Architecture twin to Phase 2 (indicator+pattern+trend agents via LangGraph+vision LLM). Key difference: no TSMOM anchor, no memory, no execution. Study their vision LLM chart pipeline + multi-timeframe analysis (1m to 1d). |
 | [nofx](https://github.com/NoFxAiOS/nofx) | 11.2K | Circuit breaker / safe mode pattern — auto-flatten after consecutive failures, drawdown breaker, graceful degradation. |
 | [TorchTrade](https://github.com/TorchTrade/torchtrade) | — | RL trading framework on TorchRL. Study: multi-timeframe observation design, Chronos as encoder transform (validates foundation model approach), PPO-based agent weighting. |
+| [FinceptTerminal](https://github.com/Fincept-Corporation/FinceptTerminal) | — | **Reviewed (§5.3).** C++/Qt6 Bloomberg-class terminal with 30+ LLM agent personas, multi-engine backtesting, IG broker adapter. SuperAgent router uses LLM-based intent classification. |
+| [OpenStock](https://github.com/Open-Dev-Society/OpenStock) | — | **Reviewed (§5.3).** Next.js stock tracker. One borrowable pattern: multi-provider LLM fallback (Gemini → Siray.ai). |
+
+### 5.1 ATLAS Deep-Dive — Darwinian Selection + Meta-Weighting
+
+**Source:** [chrisworsey55/atlas-gic](https://github.com/chrisworsey55/atlas-gic) (2025)
+
+ATLAS is a multi-agent LLM trading system with 25 agents organized in 4 layers, Darwinian selection across 5 market-regime cohorts, and a reflexivity simulation engine. It is the closest open-source architectural analog to quantbot's multi-agent blend — but oriented toward equity stock-picking rather than multi-asset TSMOM.
+
+#### Architecture: 4-Layer Agent Hierarchy
+
+- **Layer 1 (Macro, 10 agents):** Central bank, geopolitical, China, dollar, yield curve, commodities, volatility, emerging markets, news sentiment, institutional flow
+- **Layer 2 (Sector, 7 agents):** Semiconductor, energy, biotech, consumer, industrials, financials + relationship mapper
+- **Layer 3 (Superinvestors, 4 agents):** Druckenmiller (macro/momentum), Aschenbrenner (AI/compute), Baker (deep tech), Ackman (quality)
+- **Layer 4 (Decision, 4 agents):** CRO (risk adversary), Alpha Discovery, Execution, CIO (final synthesis)
+
+Each agent receives macro regime as context before making picks. Layers feed forward: macro → sector → philosophy → decision.
+
+#### Borrowable Pattern 1: Constrained Softmax Meta-Weighting
+
+ATLAS scores cohorts on 50% hit rate + 50% normalized Sharpe, then applies softmax with floor/ceiling constraints (MIN=0.2, MAX=0.8) to prevent concentration. This is more sophisticated than quantbot's fixed per-asset-class blend weights.
+
+```python
+# atlas-gic/janus.py:202-239
+def _softmax_with_constraints(self, scores: Dict[str, float]) -> Dict[str, float]:
+    max_score = max(scores.values())
+    exp_scores = {k: math.exp(v - max_score) for k, v in scores.items()}
+    total = sum(exp_scores.values())
+    weights = {k: v / total for k, v in exp_scores.items()}
+    # Apply floor/ceiling constraints
+    for cohort in weights:
+        if weights[cohort] < self.MIN_WEIGHT:
+            weights[cohort] = self.MIN_WEIGHT
+```
+
+**Quantbot application:** Replace static blend weights with adaptive softmax over rolling Sharpe. Floor prevents any strategy from being zeroed out entirely. Ceiling prevents over-concentration during lucky streaks. For quantbot: `MIN_WEIGHT=0.1, MAX_WEIGHT=0.9` on TSMOM vs indicator blend ratios per asset class, recalculated weekly from a 60-day rolling window.
+
+#### Borrowable Pattern 2: Conviction-Weighted Disagreement Penalty
+
+When agents disagree on direction, ATLAS penalizes conviction proportionally to opposing weight — preventing false consensus and surfacing genuine conflicts.
+
+```python
+# atlas-gic/janus.py:374-396
+long_weighted = sum(e["conviction"] * e["weight"] for e in longs)
+short_weighted = sum(e["conviction"] * e["weight"] for e in shorts)
+if contested:
+    disagreement_penalty = opposing_conviction * 0.5
+    final_conviction = max(0, base_conviction - disagreement_penalty)
+```
+
+**Quantbot application:** When TSMOM says LONG and indicator says SHORT, current combiner uses weighted average which produces a weak LONG. ATLAS's approach would instead reduce conviction to near-zero (via penalty), producing a FLAT or very small position. This aligns with the ablation finding that FLAT selectivity *is* the risk management — disagreement should shrink positions, not blend them.
+
+#### Borrowable Pattern 3: Autoresearch / Prompt Evolution
+
+The autoresearch loop identifies the worst-performing agent by rolling 60-day Sharpe, generates a single targeted prompt modification via Claude, runs it for 5 trading days, then commits or reverts based on Sharpe improvement. 54 modifications attempted, 16 kept (30% success rate).
+
+**Quantbot application:** Directly maps to the planned prompt A/B testing pipeline. Current approach requires manual prompt editing + cache fill + replay. ATLAS's automated version: (1) identify worst-performing instrument by rolling Sharpe, (2) generate prompt modification with Claude reviewing recent wrong calls, (3) cache fill on 5-day window, (4) replay comparison, (5) commit or revert `prompts/indicator_system.md`. Could be a `quantbot eval autoresearch` subcommand.
+
+#### Borrowable Pattern 4: Forward Training on Simulated Scenarios
+
+MiroFish generates 5 future scenarios (base, bull, bear, tail_up, tail_down) with 30-day correlated price paths. Agents make recommendations blind, then are scored against outcomes. Performance in simulations adjusts agent weights independently from live P&L.
+
+```python
+# atlas-gic/mirofish_trainer.py:223
+score = 0.5 + (avg_return / 0.40)  # +20% return = 1.0, -20% = 0.0
+if avg_return < 0:
+    score *= (1 - conviction * 0.3)  # Penalize wrong high-conviction
+```
+
+**Quantbot application:** Phase 4+. Generate synthetic OHLCV scenarios (using TimesFM §S or Monte Carlo with historical vol), run indicator agent, score against synthetic outcomes. Enables weight calibration without waiting for live market data.
+
+#### Borrowable Pattern 5: Reflexivity Engine (Soros-inspired)
+
+Models 5 feedback loops: price→fundamentals (15%+ moves trigger credit events), P&L→behavior (10%+ drawdown triggers forced selling), narrative→flows (3+ analyst consensus drives retail following), market→policy (15%+ drawdown triggers CB easing), reflexive reversal (5+ rounds same direction = extremes). Generates branching scenarios scored against real 5-day outcomes.
+
+**Quantbot application:** Research direction for news overlay (Track D3). Instead of simple sentiment classification, model how news creates cascading effects: tariff announcement → dollar strength → FX position risk → force deleveraging. The reflexivity lens explains *why* news matters for trading, not just *what* the sentiment is.
+
+#### What to Ignore
+
+- **Equity stock-picking orientation** — ATLAS is designed for 150+ equities, not 6-instrument multi-asset TSMOM
+- **Fully autonomous prompt evolution** — autoresearch is interesting but live prompt mutation is risky for production. Use offline replay first
+- **CIO layer complexity** — backtest showed portfolio returns bottlenecked on orchestration, not signal quality. CIO was independently downweighted to 0.3 (minimum) by the Darwinian system. Lesson: keep the decision layer simple
+
+### 5.2 TradingAgents Deep-Dive — Hierarchical Debate + BM25 Memory
+
+**Source:** [TauricResearch/TradingAgents](https://github.com/TauricResearch/TradingAgents) (2024)
+**Paper:** arXiv:2412.20138 (§H above)
+
+TradingAgents is the open-source implementation of the Multi-Agents LLM Financial Trading Framework paper. It orchestrates specialized LLM agents through a hierarchical pipeline: analysts → researcher debate → trader → risk debate → portfolio manager. Built on LangGraph with modular analyst plugins and BM25-based experience memory.
+
+#### Architecture: Hierarchical Pipeline
+
+1. **Analysis phase** — 4 analyst types (market, fundamentals, news, social) generate reports using specialized tools
+2. **Investment debate** — Bull and Bear researchers argue for max `N` rounds, Research Manager judges
+3. **Trade decision** — Trader synthesizes research into a conviction-rated proposal
+4. **Risk debate** — Aggressive, Neutral, and Conservative risk analysts argue perspectives
+5. **Final decision** — Portfolio Manager synthesizes all inputs into BUY/OVERWEIGHT/HOLD/UNDERWEIGHT/SELL
+
+#### Borrowable Pattern 1: Structured Debate with Round Limits
+
+Bull and Bear researchers alternate arguments, each referencing the other's last point plus past memory of similar situations. Conditional routing ensures convergence.
+
+```python
+# TradingAgents/tradingagents/agents/utils/conditional_logic.py:46-67
+def should_continue_debate(self, state: AgentState) -> str:
+    if state["investment_debate_state"]["count"] >= 2 * self.max_debate_rounds:
+        return "Research Manager"
+    if state["investment_debate_state"]["current_response"].startswith("Bull"):
+        return "Bear Researcher"
+    return "Bull Researcher"
+```
+
+The debate prompt structure forces adversarial engagement:
+
+```python
+# TradingAgents/tradingagents/agents/researchers/bull_researcher.py:3-56
+prompt = f"""You are a Bull Analyst advocating for investing in the stock...
+Key points to focus on:
+- Growth Potential...
+- Competitive Advantages...
+- Bear Counterpoints: Critically analyze the bear argument with specific data...
+Conversation history of the debate: {history}
+Last bear argument: {current_response}
+Reflections from similar situations: {past_memory_str}
+"""
+```
+
+**Quantbot application:** Track C debate agents. Instead of the current Python fan-out/fan-in graph, implement a structured Rust debate loop: TSMOM case → LLM counter-case → round limit → adjudicator. The round limit (2-3 max) controls latency. The adjudicator maps to quantbot's combiner but with richer context than numeric blending.
+
+#### Borrowable Pattern 2: BM25 Memory — Offline, No API Calls
+
+Uses Best Matching 25 lexical search to find similar past market situations. No embedding API required — works offline with zero cost.
+
+```python
+# TradingAgents/tradingagents/agents/utils/memory.py:1-145
+class FinancialSituationMemory:
+    def get_memories(self, current_situation: str, n_matches: int = 1) -> List[dict]:
+        # Tokenize query, get BM25 scores, return top-n matches with similarity
+        scores = self.bm25.get_scores(query_tokens)
+        # Returns: matched_situation, recommendation, similarity_score
+```
+
+Memory is built via reflection after observing returns:
+
+```python
+# TradingAgents/tradingagents/agents/utils/reflection.py:57-80
+def _reflect_on_component(self, component_type, report, situation, returns_losses):
+    messages = [
+        ("system", detailed_reflection_prompt),
+        ("human", f"Returns: {returns_losses}\nAnalysis: {report}\nMarket context: {situation}")
+    ]
+    # Result is added to memory for future similar trades
+```
+
+**Quantbot application:** Implement a `RegimeMemory` in Rust backed by SQLite. Store (market_conditions_text, indicator_recommendation, actual_5d_return) tuples. On each run, compute BM25 similarity to current TA snapshot, inject top-2 memories into the LLM prompt: "In similar conditions on 2024-08-15, going SHORT was correct (5d return: -2.3%)." This is a natural extension of FinMem (§G) but without the embedding cost. Rust BM25 crates: `bm25` or implement directly (IDF + TF scoring over tokenized text).
+
+#### Borrowable Pattern 3: 5-Tier Rating Scale
+
+Bridges verbose LLM reasoning to discrete trading actions:
+
+```python
+# TradingAgents/tradingagents/graph/signal_processing.py:1-33
+def process_signal(self, full_signal: str) -> str:
+    messages = [
+        ("system", "Extract the rating as exactly one of: BUY, OVERWEIGHT, HOLD, UNDERWEIGHT, SELL..."),
+        ("human", full_signal),
+    ]
+    return self.quick_thinking_llm.invoke(messages).content
+```
+
+| Rating | Position Action |
+|---|---|
+| BUY | Full weight per asset-class allocation |
+| OVERWEIGHT | 75% of full weight |
+| HOLD | Maintain existing position (no change) |
+| UNDERWEIGHT | 25% of full weight |
+| SELL | Exit / reverse direction |
+
+**Quantbot application:** Replace the current binary LONG/SHORT/FLAT with a 5-tier output from the LLM indicator. Map to position scale factors: BUY=1.0, OVERWEIGHT=0.75, HOLD=existing, UNDERWEIGHT=0.25, SELL=-1.0. This naturally bridges the gap between "indicator says SHORT" and "how much to short" — currently lost in the combiner's strength×confidence multiplication.
+
+#### Borrowable Pattern 4: Modular Analyst Plugins with Tool Bindings
+
+Each analyst type gets specific tools:
+
+```python
+# TradingAgents/tradingagents/graph/setup.py:54-85
+if "market" in selected_analysts:
+    analyst_nodes["market"] = create_market_analyst(self.quick_thinking_llm)
+    tool_nodes["market"] = self.tool_nodes["market"]  # MACD, RSI, SMA, etc.
+if "fundamentals" in selected_analysts:
+    # get_fundamentals, get_balance_sheet, get_cashflow, get_income_statement
+```
+
+```python
+# TradingAgents/tradingagents/graph/trading_graph.py:156-190
+self.tool_nodes = {
+    "market": ToolNode([get_stock_data, get_indicators]),
+    "social": ToolNode([get_news]),
+    "news": ToolNode([get_news, get_global_news, get_insider_transactions]),
+    "fundamentals": ToolNode([get_fundamentals, get_balance_sheet, ...])
+}
+```
+
+**Quantbot application:** Define `IndicatorTool` trait in Rust — each indicator agent gets access to specific TA functions. Market analyst gets MACD/RSI/Bollinger (already in `ta.rs`), trend analyst gets trendlines/support-resistance (Track C), macro analyst gets VIX/rate differentials (Phase 4). Tool selection can be specified in TOML config per agent.
+
+#### Borrowable Pattern 5: Two-Tier LLM Strategy
+
+```python
+# TradingAgents/tradingagents/default_config.py:1-37
+DEFAULT_CONFIG = {
+    "deep_think_llm": "gpt-5.4",       # Complex reasoning (Research Manager, Portfolio Manager)
+    "quick_think_llm": "gpt-5.4-mini", # Quick tasks (Analysts, debaters)
+}
+```
+
+**Quantbot application:** Use Fin-R1 7B for per-instrument indicator signals (fast, 6 calls/run), use a larger model (qwen3:32b or Claude) for the weekly meta-reasoning or overlay classification (1 call/week). Current architecture uses the same model for everything — wasteful on simple tasks, underpowered on complex ones.
+
+#### Borrowable Pattern 6: Hierarchical State with Nested Debate Substates
+
+```python
+# TradingAgents/tradingagents/agents/utils/agent_states.py:1-73
+class InvestDebateState(TypedDict):
+    bull_history: str      # All bull contributions
+    bear_history: str      # All bear contributions
+    history: str           # Full debate chronology
+    current_response: str  # Latest message
+    judge_decision: str    # Research Manager's final call
+    count: int             # Debate round counter
+```
+
+Agents append to state without overwriting:
+
+```python
+# From bull_researcher.py
+new_investment_debate_state = {
+    "history": history + "\n" + argument,        # Append
+    "bull_history": bull_history + "\n" + argument,
+    "bear_history": investment_debate_state.get("bear_history", ""),  # Preserve
+    "current_response": argument,
+    "count": investment_debate_state["count"] + 1,
+}
+```
+
+**Quantbot application:** For Track C debate, define `DebateState` struct in Rust:
+
+```rust
+struct DebateState {
+    bull_history: Vec<String>,
+    bear_history: Vec<String>,
+    current_speaker: Speaker,
+    round: usize,
+    judge_decision: Option<SignalDirection>,
+}
+```
+
+Natural for append-only state machines. Serialize to SQLite for replay.
+
+#### What to Ignore
+
+- **Equity/single-stock focus** — designed for NVDA-style analysis, not multi-asset TSMOM
+- **Full LangGraph dependency** — heavy Python orchestration. Quantbot should implement the debate *pattern* in Rust, not depend on LangGraph
+- **yfinance data dependency** — TradingAgents uses live yfinance; quantbot has its own CSV pipeline
+- **No backtesting engine** — TradingAgents makes single-point decisions with no backtest infrastructure
+
+### 5.3 Research Survey — QuantAgent, OpenStock, FinceptTerminal, awesome-ai-in-finance
+
+Reviewed 2026-04-17. Four repos assessed for quantbot integration potential.
+
+#### QuantAgent (Y-Research-SBU) — Vision LLM Chart Analysis
+
+**Source:** [Y-Research-SBU/QuantAgent](https://github.com/Y-Research-SBU/QuantAgent) — already reviewed in §2.1.
+
+Additional observations from deep-dive: the multi-report synthesis pattern in `decision_agent.py` (3 independent analyst reports → single JSON decision with risk-reward ratio) is a simpler version of TradingAgents' debate. Their provider abstraction (`TradingGraph._create_llm()`) supports per-agent model selection (mini for indicators, large for decisions) — matches the two-tier LLM strategy recommended in §5.2.
+
+**Verdict:** Architecture reference for Track C vision agents. No production-usable code.
+
+#### OpenStock (Open-Dev-Society) — LLM Fallback Pattern
+
+**Source:** [Open-Dev-Society/OpenStock](https://github.com/Open-Dev-Society/OpenStock)
+
+Consumer stock tracking platform (Next.js/TypeScript). One borrowable pattern: **multi-provider LLM fallback** — primary model (Gemini) fails → automatic switchover to secondary (Siray.ai) with zero downtime.
+
+**Quantbot application:** Add `fallback_url`/`fallback_model` fields to `LlmConfig`. In `LlmClient::chat()`, if primary returns 5xx/timeout after retries, try fallback before returning Flat. Simple resilience for production runs.
+
+**Verdict:** Single pattern worth borrowing. Not an integration target.
+
+#### FinceptTerminal (Fincept-Corporation) — SuperAgent Router + Multi-Engine Backtest
+
+**Source:** [Fincept-Corporation/FinceptTerminal](https://github.com/Fincept-Corporation/FinceptTerminal)
+
+C++/Qt6 Bloomberg-class desktop terminal. 30+ LLM agent personas (Buffett, Dalio, macro strategists), multi-engine backtesting (Zipline/VectorBT/Backtrader), and broker adapters including IG.
+
+Borrowable patterns:
+1. **SuperAgent router** — LLM-based intent classification (not keyword matching) to route queries to the right agent. More sophisticated than quantbot's static `BlendCategory` routing.
+2. **Unified backtest provider interface** — `BaseProvider` abstraction across multiple backtest engines with common `PerformanceMetrics`/`Trade` types.
+3. **Multi-persona agents** — 20+ investor personalities. For quantbot: instead of one "trading analyst" prompt, generate signals from specialized perspectives (momentum analyst, mean-reversion analyst, macro analyst) and blend outputs.
+
+**Verdict:** Architecture reference, especially for multi-persona agent design (Phase 4+). C++/Python stack prevents code reuse.
+
+#### awesome-ai-in-finance (georgezouq) — Curated Reference List
+
+**Source:** [georgezouq/awesome-ai-in-finance](https://github.com/georgezouq/awesome-ai-in-finance)
+
+Actively maintained curated list. Most relevant entries for quantbot:
+
+| Entry | Category | Relevance |
+|---|---|---|
+| [ATLAS](https://github.com/chrisworsey55/atlas-gic) | Multi-agent | Deep-dived above (§5.1) |
+| [TradingAgents](https://github.com/TauricResearch/TradingAgents) | Multi-agent | Deep-dived above (§5.2) |
+| [Ensemble-Strategy](https://github.com/AI4Finance-LLC/Deep-Reinforcement-Learning-for-Automated-Stock-Trading-Ensemble-Strategy-ICAIF-2020) | Signal blending | DRL ensemble for signal combination. Academic foundation for adaptive blend weights |
+| [skfolio](https://github.com/skfolio/skfolio) | Portfolio opt | sklearn-based portfolio optimization. Could inform risk/sizing math |
+| [alphalens](https://github.com/quantopian/alphalens) | Factor analysis | **Actionable:** validate whether LLM indicator signal adds alpha via factor tear sheets |
+| [CRNG](https://github.com/brotto/crng) | Risk | Fat-tail distribution modeling. Relevant for circuit breaker calibration |
+| [MarS](https://github.com/microsoft/MarS) | Simulation | Microsoft market simulation engine. Backtest architecture reference |
+| "Financial Statement Analysis with LLMs" (SSRN 4835311) | Paper | GPT-4 outperforms analysts. Sharpe improvement validation |
+| "LLMs Meet Finance" (arXiv 2504.13125) | Paper | Fine-tuning pipeline (SFT → DPO → RL) for trading LLMs. Actionable for Fin-R1 successors |
+
+**Verdict:** Bookmark as ongoing reference. alphalens specifically worth using to validate LLM signal quality using cached signals.
 
 ### Phase Relevance Map
 
 | QuantBot Phase | Most Relevant Papers & Repos |
 |---|---|
-| Phase 2 (LLM agents) | TradingAgents (H), StockAgent (I), MarketSenseAI (N), FinAgent (L), QuantAgent-SBU, ai-hedge-fund |
+| Phase 2 (LLM agents) | TradingAgents (H, §5.2), StockAgent (I), MarketSenseAI (N), FinAgent (L), QuantAgent-SBU, ai-hedge-fund |
 | Phase 3 Track A (TSMOM + IG) | nofx (circuit breaker), Qlib (U, online rolling for production) |
-| Phase 3 Track B (LLM agents in Rust) | TradingAgents, QuantAgent-SBU (vision pipeline), MambaStock (P) |
-| Phase 4 (Extensions) | TimesFM (S), Fin-R1 (K), QuantAgent-HKUST (J), CliffordNet (R), TorchTrade (RL weighting) |
-| Phase 5+ (Meta-reasoning) | Nemotron-Cascade (T), Qlib RD-Agent (U) |
-| General reference | RL survey (Q) |
+| Phase 3 Track B (LLM agents in Rust) | ATLAS (§5.1, meta-weighting), TradingAgents (§5.2, debate+memory), MambaStock (P) |
+| Phase 3 Track D (overlays) | ATLAS (§5.1, reflexivity engine), FinceptTerminal (§5.3, SuperAgent router) |
+| Phase 4 (Extensions) | TimesFM (S), Fin-R1 (K), QuantAgent-HKUST (J), CliffordNet (R), TorchTrade (RL weighting), alphalens (factor validation) |
+| Phase 5+ (Meta-reasoning) | Nemotron-Cascade (T), Qlib RD-Agent (U), ATLAS autoresearch (§5.1) |
+| General reference | RL survey (Q), awesome-ai-in-finance (§5.3) |
 
 ---
 
