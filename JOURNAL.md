@@ -1513,3 +1513,67 @@ Best use:
 - copy the patterns
 - keep the current quantbot scope
 - improve internal contracts incrementally
+
+---
+
+## 12. TradeMaster Review — Borrow the Evaluation Taxonomy, Skip the RL Stack
+
+**Reference:** [TradeMaster-NTU/TradeMaster](https://github.com/TradeMaster-NTU/TradeMaster) — Apache 2.0, Python/Jupyter, v1.0.0 (Mar 2023), sporadic additions through early 2025.
+
+### Snapshot
+TradeMaster is an academic RL platform for quantitative trading. It bundles:
+- 13+ RL algorithms (PPO, A2C, SAC, DDPG, TD3, Rainbow/DQN, PG) plus trading-specific agents (DeepScalper, SARL, ETEO, EIIE, OPD, DeepTrader)
+- Multi-asset datasets (S&P500, DJ30, SSE50, BTC, FX, futures, HK stocks; 1m–1d granularity)
+- "High-fidelity data-driven" market simulators as RL environments
+- An evaluation toolkit marketed as **6 axes × 17 measures** (PRUDEX-Compass)
+- Feature generators and automatic hyperparameter tuning
+- A web UI for the simulator and metric visualisations
+
+### Bottom Line
+**Reference, not dependency.** The only piece worth borrowing is the evaluation taxonomy (§ "What to Borrow" below). Everything else conflicts with quantbot's thesis (deterministic core + bounded overlays, explicitly not RL) or its substrate (Rust engine, not Python/Jupyter).
+
+### What to Ignore
+
+#### 1. RL algorithms
+PPO/SAC/DQN et al. are paradigm-incompatible with quantbot's deterministic TSMOM core. Adopting an RL agent would:
+- re-introduce the opacity we deliberately bounded via the LLM-as-overlay architecture (§8)
+- require a simulator good enough to train on — a large scope expansion for unproven alpha
+- break replayability guarantees (random exploration inside decision cycles)
+
+The ablation ladder in STRATEGY (TSMOM-only 1.394 > ungated LLM 1.278) also argues against adding more opaque signal sources before the existing ones are justified.
+
+#### 2. Trading-specific RL agents (DeepScalper, EIIE, DeepTrader, etc.)
+High-frequency / portfolio-allocation agents trained on historical price tensors. Quantbot trades daily bars through IG spread betting with published-alpha strategies (Moskowitz/Ooi/Pedersen TSMOM). The minute-bar HFT lineage is not our universe.
+
+#### 3. Market simulators
+TradeMaster's simulators are RL-training environments, not event-driven execution. Our backtest engine (next-open fill, configurable slippage, SQLite persistence) already serves our needs and is ~41 unit tests of validated behaviour.
+
+#### 4. Python/Jupyter stack
+82% notebooks. Nothing ports cleanly into the Rust engine. Even the evaluation code is entangled with their data loaders and agent wrappers — cleaner to re-derive the metric formulas than to vendor code.
+
+### What to Borrow — Evaluation Taxonomy Only
+
+Current `BacktestResult` in `src/backtest/metrics.rs` exposes 8 fields: Sharpe, Sortino, Calmar, ann return/vol, max DD, DD duration, total return, total trades.
+
+The PRUDEX-Compass axes are a useful lens for spotting blind spots:
+
+| Axis | What it tests | Quantbot coverage today | Candidate addition |
+|---|---|---|---|
+| **Profitability** | Does it make money? | Total return, Ann return, Sharpe | — (covered) |
+| **Risk-control** | How badly can it lose? | Max DD, DD duration, Ann vol, Sortino, Calmar | **VaR(95)**, **CVaR(95)**, **downside deviation (raw)** |
+| **Robustness** | Does it survive regime changes? | *Not measured* | **Rolling-window Sharpe stability** (std of 60-day Sharpe), **worst-quartile return** |
+| **Universality** | Does it generalise across instruments? | Partially (per-instrument Sharpe in STRATEGY table) | **Cross-sectional Sharpe dispersion** (per-instrument Sharpe std), **fraction of instruments with Sharpe > 0** |
+| **Reliability** | Is the outcome repeatable? | *Not measured* | **Turnover** (gross notional / NAV), **hit rate**, **avg win / avg loss** |
+| **Explainability** | Can we attribute the PnL? | Partial (PnL attribution in `eval_results/`) | Already strong — keep the per-instrument PnL contribution reports |
+
+The two biggest genuine gaps: **tail-risk measures** (VaR/CVaR) and **rolling-Sharpe stability**. Both are cheap to compute from the existing `nav_series` and would meaningfully improve how we compare ablations. See STRATEGY §"Evaluation Hardening" for the concrete implementation targets.
+
+### What *Not* to Borrow from the Taxonomy
+- Do **not** adopt PRUDEX's weighting scheme or composite score. Composite scores hide the very trade-offs we want visible.
+- Do **not** add metrics that can't be computed deterministically from `Vec<Snapshot>` — they become stale or unreplayable.
+- Do **not** add >3–4 metrics per round. Metric bloat makes ablation tables unreadable.
+
+### Decision
+Skim `TradeMaster/evaluation/` and the PRUDEX paper **for metric formulas only** (~30 minutes). Add VaR/CVaR and rolling-Sharpe stability to `BacktestResult`. Ignore the rest of the repo.
+
+Best use: taxonomy inspiration, not code or architecture. Continues the pattern from §9 (AutoHedge), §10 (FinGPT), §11 (NautilusTrader): borrow ideas, not dependencies.

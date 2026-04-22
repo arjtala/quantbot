@@ -153,6 +153,94 @@ Architecture references:
 
 ---
 
+## Evaluation Hardening — Risk & Robustness Metrics
+
+Motivated by the TradeMaster / PRUDEX-Compass review (JOURNAL §12). Current `BacktestResult` in `src/backtest/metrics.rs:9` covers profitability + basic drawdown. Two axes are under-measured: **tail risk** and **robustness across time**.
+
+Add the following fields to `BacktestResult` (`src/backtest/metrics.rs:9-20`) and compute them in `from_snapshots` (`src/backtest/metrics.rs:24-111`) from the existing `daily_returns` and `nav_series` — no new inputs required.
+
+### 1. Tail risk — VaR(95) and CVaR(95)
+
+```rust
+// in BacktestResult
+pub var_95: f64,       // 5th-percentile daily return (negative number)
+pub cvar_95: f64,      // mean of returns ≤ var_95
+```
+
+Logic (drop into `from_snapshots` alongside the existing Sortino block at `src/backtest/metrics.rs:82-97`):
+
+```rust
+let mut sorted = daily_returns.clone();
+sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+let idx = ((sorted.len() as f64) * 0.05).floor() as usize;
+let var_95 = sorted.get(idx).copied().unwrap_or(0.0);
+let tail: Vec<f64> = sorted.iter().take(idx.max(1)).copied().collect();
+let cvar_95 = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f64>() / tail.len() as f64 };
+```
+
+Why: Sortino only penalises below-zero volatility; VaR/CVaR quantify *how bad* the tail actually is. This is what surfaces black-swan exposure that Sharpe/Sortino happily hide.
+
+### 2. Robustness — rolling-Sharpe stability
+
+```rust
+pub rolling_sharpe_std: f64,   // std of 60-day rolling Sharpe across the window
+pub worst_60d_sharpe: f64,     // min 60-day Sharpe — the single worst regime
+```
+
+Logic (new helper, called after the main Sharpe computation):
+
+```rust
+fn rolling_sharpe(returns: &[f64], window: usize) -> Vec<f64> {
+    returns
+        .windows(window)
+        .map(|w| {
+            let mean = w.iter().sum::<f64>() / window as f64;
+            let sd = std_dev(w);
+            if sd > 1e-8 { mean / sd * TRADING_DAYS_PER_YEAR.sqrt() } else { 0.0 }
+        })
+        .collect()
+}
+```
+
+Then `rolling_sharpe_std = std_dev(&rolls)` and `worst_60d_sharpe = rolls.iter().fold(f64::INFINITY, |a, &b| a.min(b))`.
+
+Why: the ablation ladder (TSMOM-only 1.394 vs gated 1.314) compares single-number Sharpes. A strategy that's 1.4 steady-state but dips to -2.0 in one regime is *worse* than one that's 1.2 with no dips below 0.3. We cannot currently see that.
+
+### 3. Turnover (reliability axis)
+
+```rust
+pub avg_daily_turnover: f64,   // mean |Δ notional| / NAV across snapshots
+```
+
+Logic (requires iterating `Snapshot::position_notionals` pairwise at `src/backtest/engine.rs` — already tracked in snapshots):
+
+```rust
+let mut turnover_sum = 0.0;
+for pair in snapshots.windows(2) {
+    let (prev, curr) = (&pair[0], &pair[1]);
+    let delta: f64 = curr.position_notionals.iter()
+        .map(|(k, v)| (v - prev.position_notionals.get(k).copied().unwrap_or(0.0)).abs())
+        .sum();
+    turnover_sum += delta / curr.nav;
+}
+let avg_daily_turnover = turnover_sum / (snapshots.len() - 1) as f64;
+```
+
+Why: STRATEGY §"Why 6, Not 21" already hand-computed this for the 21-instrument regression (-836% over-attribution). Making it a first-class metric means every ablation surfaces cost-drag before we commit capital.
+
+### Summary printer
+
+Extend `summary()` at `src/backtest/metrics.rs:114-147` with three new lines grouped under a `RISK & ROBUSTNESS` divider. Keep composite scores out — report each metric raw so ablation tables stay legible.
+
+### Out of scope (deliberately)
+- PRUDEX composite "compass" score — hides trade-offs.
+- Entropy / explainability metrics — already covered qualitatively by per-instrument PnL attribution in `eval_results/`.
+- Universality dispersion (per-instrument Sharpe std) — useful but requires running ablations per instrument; defer until the core three above land.
+
+Implementation effort: ~1 PR, all in `src/backtest/metrics.rs`, no engine or schema changes.
+
+---
+
 ## Remaining Phase 2 Experiments (Nice-to-Have)
 
 | # | Experiment | Status | Blocking? |
