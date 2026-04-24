@@ -3,6 +3,8 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::NaiveDate;
 
 #[cfg(feature = "track-b")]
+use crate::agents::combiner::blend_category;
+#[cfg(feature = "track-b")]
 use crate::agents::combiner;
 use crate::agents::tsmom::TSMOMAgent;
 #[cfg(feature = "track-b")]
@@ -12,6 +14,8 @@ use crate::config::BlendConfig;
 use crate::core::bar::{Bar, BarSeries};
 use crate::core::portfolio::{Fill, Order, OrderSide, PortfolioState, Position};
 use crate::core::signal::{Signal, SignalDirection};
+#[cfg(feature = "track-b")]
+use crate::config::BlendCategory;
 use crate::execution::router::{ExecutionRouter, SizedOrder, SpreadCostTracker};
 
 /// Backtest configuration.
@@ -20,6 +24,8 @@ pub struct BacktestConfig {
     pub vol_target: f64,
     pub max_gross_leverage: f64,
     pub max_position_pct: f64,
+    pub drawdown_deleveraging: Option<DrawdownDeleveragingConfig>,
+    pub correlation_groups: Vec<CorrelationGroup>,
 }
 
 impl Default for BacktestConfig {
@@ -29,8 +35,24 @@ impl Default for BacktestConfig {
             vol_target: 0.40,
             max_gross_leverage: 2.0,
             max_position_pct: 0.20,
+            drawdown_deleveraging: None,
+            correlation_groups: vec![],
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct DrawdownDeleveragingConfig {
+    pub start_drawdown_pct: f64,
+    pub full_drawdown_pct: f64,
+    pub min_gross_scale: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct CorrelationGroup {
+    pub name: String,
+    pub members: Vec<String>,
+    pub max_total_weight: f64,
 }
 
 /// Daily snapshot of backtest state.
@@ -87,6 +109,17 @@ impl BacktestEngine {
 
     pub fn with_defaults() -> Self {
         Self::new(BacktestConfig::default())
+    }
+
+    pub fn apply_portfolio_constraints(
+        &self,
+        weights: &mut HashMap<String, f64>,
+        current_nav: f64,
+        peak_nav: Option<f64>,
+    ) {
+        self.apply_drawdown_deleveraging(weights, current_nav, peak_nav);
+        self.apply_correlation_group_caps(weights);
+        self.apply_risk_limits(weights);
     }
 
     /// Generate target positions for a single point in time (paper-trade mode).
@@ -185,9 +218,9 @@ impl BacktestEngine {
             }
         }
 
-        // Apply risk limits to a clone of the weights
+        // Apply portfolio constraints to a clone of the weights
         let mut target_weights = raw_weights.clone();
-        self.apply_risk_limits(&mut target_weights);
+        self.apply_portfolio_constraints(&mut target_weights, nav, None);
 
         // Size from weights to lot-rounded quantities
         let mut target_quantities: HashMap<String, f64> = HashMap::new();
@@ -269,6 +302,7 @@ impl BacktestEngine {
 
         let dates: Vec<NaiveDate> = all_dates.into_iter().collect();
         let mut portfolio = PortfolioState::new(self.config.initial_cash);
+        let mut peak_nav = portfolio.nav();
         let mut snapshots = Vec::new();
         let mut pending_targets: HashMap<String, f64> = HashMap::new();
         let mut spread_tracker = SpreadCostTracker::new();
@@ -300,6 +334,7 @@ impl BacktestEngine {
 
             // Step 2: Mark positions to today's close
             Self::mark_to_market(&mut portfolio, &close_prices);
+            peak_nav = peak_nav.max(portfolio.nav());
 
             // Step 3: Generate signals using data up to today
             let mut signals: HashMap<String, Signal> = HashMap::new();
@@ -326,8 +361,8 @@ impl BacktestEngine {
                 }
             }
 
-            // Apply risk limits
-            self.apply_risk_limits(&mut target_weights);
+            // Apply portfolio constraints
+            self.apply_portfolio_constraints(&mut target_weights, portfolio.nav(), Some(peak_nav));
 
             // Convert weights to target quantities using execution router
             let nav = portfolio.nav();
@@ -413,6 +448,7 @@ impl BacktestEngine {
 
         let dates: Vec<NaiveDate> = all_dates.into_iter().collect();
         let mut portfolio = PortfolioState::new(self.config.initial_cash);
+        let mut peak_nav = portfolio.nav();
         let mut snapshots = Vec::new();
         let mut pending_targets: HashMap<String, f64> = HashMap::new();
         let mut spread_tracker = SpreadCostTracker::new();
@@ -443,6 +479,7 @@ impl BacktestEngine {
 
             // Step 2: Mark positions to today's close
             Self::mark_to_market(&mut portfolio, &close_prices);
+            peak_nav = peak_nav.max(portfolio.nav());
 
             // Step 3: Generate TSMOM signals
             let mut tsmom_signals: HashMap<String, Signal> = HashMap::new();
@@ -492,8 +529,8 @@ impl BacktestEngine {
                 combined_signals.insert(r.instrument.clone(), combined_sig);
             }
 
-            // Apply risk limits
-            self.apply_risk_limits(&mut target_weights);
+            // Apply portfolio constraints
+            self.apply_portfolio_constraints(&mut target_weights, portfolio.nav(), Some(peak_nav));
 
             // Convert weights to target quantities
             let nav = portfolio.nav();
@@ -658,6 +695,61 @@ impl BacktestEngine {
             }
         }
     }
+
+    fn apply_drawdown_deleveraging(
+        &self,
+        weights: &mut HashMap<String, f64>,
+        current_nav: f64,
+        peak_nav: Option<f64>,
+    ) {
+        let Some(cfg) = &self.config.drawdown_deleveraging else {
+            return;
+        };
+        let Some(peak_nav) = peak_nav else {
+            return;
+        };
+        if peak_nav <= 0.0 || current_nav <= 0.0 {
+            return;
+        }
+
+        let drawdown = ((peak_nav - current_nav) / peak_nav).max(0.0);
+        if drawdown <= cfg.start_drawdown_pct {
+            return;
+        }
+
+        let scale = if drawdown >= cfg.full_drawdown_pct {
+            cfg.min_gross_scale
+        } else {
+            let span = (cfg.full_drawdown_pct - cfg.start_drawdown_pct).max(1e-12);
+            let progress = ((drawdown - cfg.start_drawdown_pct) / span).clamp(0.0, 1.0);
+            1.0 - progress * (1.0 - cfg.min_gross_scale)
+        };
+
+        for w in weights.values_mut() {
+            *w *= scale;
+        }
+    }
+
+    fn apply_correlation_group_caps(&self, weights: &mut HashMap<String, f64>) {
+        for group in &self.config.correlation_groups {
+            let gross: f64 = group
+                .members
+                .iter()
+                .map(|sym| weights.get(sym).copied().unwrap_or(0.0).abs())
+                .sum();
+
+            if gross <= group.max_total_weight || gross <= 1e-12 {
+                continue;
+            }
+
+            let scale = group.max_total_weight / gross;
+            for sym in &group.members {
+                if let Some(w) = weights.get_mut(sym) {
+                    *w *= scale;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -696,6 +788,55 @@ mod tests {
         let snaps = engine.run(&agent, &instruments, 253, None);
         assert!(!snaps.is_empty());
         assert_eq!(snaps.len(), 300 - 253);
+    }
+
+    #[test]
+    fn drawdown_deleveraging_scales_weights() {
+        let engine = BacktestEngine::new(BacktestConfig {
+            max_gross_leverage: 2.0,
+            max_position_pct: 1.0,
+            drawdown_deleveraging: Some(DrawdownDeleveragingConfig {
+                start_drawdown_pct: 0.10,
+                full_drawdown_pct: 0.20,
+                min_gross_scale: 0.50,
+            }),
+            ..BacktestConfig::default()
+        });
+
+        let mut weights = HashMap::from([
+            ("SPY".to_string(), 1.0),
+            ("GLD".to_string(), -0.5),
+        ]);
+
+        engine.apply_portfolio_constraints(&mut weights, 850_000.0, Some(1_000_000.0));
+
+        // 15% drawdown halfway between 10% and 20% => scale 0.75
+        assert!((weights["SPY"] - 0.75).abs() < 1e-10);
+        assert!((weights["GLD"] + 0.375).abs() < 1e-10);
+    }
+
+    #[test]
+    fn correlation_group_cap_scales_group_gross() {
+        let engine = BacktestEngine::new(BacktestConfig {
+            correlation_groups: vec![CorrelationGroup {
+                name: "gold".into(),
+                members: vec!["GLD".into(), "GC=F".into()],
+                max_total_weight: 0.60,
+            }],
+            ..BacktestConfig::default()
+        });
+
+        let mut weights = HashMap::from([
+            ("GLD".to_string(), 0.40),
+            ("GC=F".to_string(), 0.40),
+            ("SPY".to_string(), 0.20),
+        ]);
+
+        engine.apply_portfolio_constraints(&mut weights, 1_000_000.0, None);
+
+        assert!((weights["GLD"] - 0.30).abs() < 1e-10);
+        assert!((weights["GC=F"] - 0.30).abs() < 1e-10);
+        assert!((weights["SPY"] - 0.20).abs() < 1e-10);
     }
 
     #[test]

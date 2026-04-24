@@ -63,6 +63,25 @@ fn print_eval(label: &str, result: &BacktestResult, python_sharpe: f64) {
         "  Delta:         {delta:+.4} ({:+.1}%)",
         delta / python_sharpe.abs().max(0.01) * 100.0
     );
+    println!(
+        "  Tail risk:     VaR95={:+.2}% CVaR95={:+.2}% | VaR99={:+.2}% CVaR99={:+.2}%",
+        result.var_95 * 100.0,
+        result.cvar_95 * 100.0,
+        result.var_99 * 100.0,
+        result.cvar_99 * 100.0,
+    );
+    println!(
+        "  Rolling 63d:   mean={:+.2} min={:+.2} max={:+.2} std={:.2} pos={:.1}%",
+        result.rolling_sharpe_mean_63d,
+        result.rolling_sharpe_min_63d,
+        result.rolling_sharpe_max_63d,
+        result.rolling_sharpe_std_63d,
+        result.rolling_sharpe_positive_pct_63d * 100.0,
+    );
+    println!(
+        "  Turnover:      avg_daily={:.2}% of NAV",
+        result.avg_daily_turnover * 100.0,
+    );
 }
 
 /// Print per-instrument exposure from the last snapshot for diagnostics.

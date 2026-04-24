@@ -5,7 +5,7 @@ use std::process;
 
 use anyhow::{bail, Context, Result};
 use chrono::NaiveDate;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[cfg(feature = "track-b")]
 use quantbot::agents::combiner;
@@ -53,6 +53,8 @@ struct Cli {
 enum Command {
     /// Run TSMOM backtest on historical CSV data
     Backtest(BacktestArgs),
+    /// Compare two exported backtest metrics JSON files
+    MetricsDiff(MetricsDiffArgs),
     /// Generate target positions and orders for today (paper-trade mode)
     PaperTrade(PaperTradeArgs),
     /// Live trade with IG execution
@@ -435,6 +437,45 @@ struct BacktestArgs {
     /// Write output to file instead of stdout
     #[arg(long, short)]
     output: Option<PathBuf>,
+
+    /// Also write machine-readable metrics JSON to this file
+    #[arg(long)]
+    metrics_json: Option<PathBuf>,
+}
+
+#[derive(Parser)]
+struct MetricsDiffArgs {
+    /// Baseline metrics JSON file
+    #[arg(long)]
+    baseline: PathBuf,
+
+    /// Candidate metrics JSON file
+    #[arg(long)]
+    candidate: PathBuf,
+
+    /// Output as JSON
+    #[arg(long)]
+    json: bool,
+
+    /// Show only metrics whose values changed
+    #[arg(long)]
+    only_changed: bool,
+
+    /// Sort output rows
+    #[arg(long, value_enum, default_value_t = MetricsDiffSort::Importance)]
+    sort_by: MetricsDiffSort,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+enum MetricsDiffSort {
+    /// Domain-aware ordering: Sharpe, return, drawdown, tail risk, robustness, turnover
+    Importance,
+    /// Largest absolute raw delta first
+    AbsDelta,
+    /// Largest absolute percentage delta first
+    AbsDeltaPct,
+    /// Alphabetical by metric name
+    Name,
 }
 
 #[derive(Parser)]
@@ -660,6 +701,7 @@ async fn main() {
 
     let result = match cli.command {
         Command::Backtest(args) => run_backtest(args),
+        Command::MetricsDiff(args) => run_metrics_diff(args),
         Command::PaperTrade(args) => run_paper_trade(args),
         Command::Live(args) => run_live(args).await,
         Command::Daemon(args) => run_daemon(args).await,
@@ -750,9 +792,18 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
     let result = BacktestResult::from_snapshots(&snapshots)
         .context("Not enough snapshots to compute metrics")?;
 
+    if let Some(path) = &args.metrics_json {
+        result
+            .write_json_file(path)
+            .with_context(|| format!("failed to write metrics JSON {}", path.display()))?;
+        eprintln!("  Metrics JSON written to {}", path.display());
+    }
+
     // Output
     let output_text = if args.json {
-        serde_json::to_string_pretty(&result).context("Failed to serialize results")?
+        result
+            .to_pretty_json()
+            .context("Failed to serialize results")?
     } else {
         result.summary()
     };
@@ -766,6 +817,167 @@ fn run_backtest(args: BacktestArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn run_metrics_diff(args: MetricsDiffArgs) -> Result<()> {
+    let baseline_text = std::fs::read_to_string(&args.baseline)
+        .with_context(|| format!("failed to read {}", args.baseline.display()))?;
+    let candidate_text = std::fs::read_to_string(&args.candidate)
+        .with_context(|| format!("failed to read {}", args.candidate.display()))?;
+
+    let baseline: BacktestResult =
+        serde_json::from_str(&baseline_text).context("failed to parse baseline metrics JSON")?;
+    let candidate: BacktestResult =
+        serde_json::from_str(&candidate_text).context("failed to parse candidate metrics JSON")?;
+
+    let rows = candidate.compare_against(&baseline);
+    let mut filtered_rows: Vec<_> = if args.only_changed {
+        rows.into_iter()
+            .filter(|row| row.delta.abs() > 1e-12)
+            .collect()
+    } else {
+        rows
+    };
+    sort_metric_rows(&mut filtered_rows, args.sort_by);
+
+    if args.json {
+        let json = serde_json::to_string_pretty(&filtered_rows)
+            .context("failed to serialize diff JSON")?;
+        println!("{json}");
+        return Ok(());
+    }
+
+    let verdict = summarize_metric_diff(&filtered_rows);
+    println!("METRICS DIFF");
+    println!("Baseline:  {}", args.baseline.display());
+    println!("Candidate: {}", args.candidate.display());
+    println!("Verdict:   {verdict}");
+    println!("Sorted by: {}", metrics_diff_sort_label(args.sort_by));
+    println!(
+        "{:<32} {:>12} {:>12} {:>12} {:>12} {:>10}",
+        "Metric", "Baseline", "Candidate", "Delta", "Delta %", "Assess"
+    );
+    println!("{}", "-".repeat(96));
+    for row in filtered_rows {
+        println!(
+            "{:<32} {:>12.4} {:>12.4} {:>+12.4} {:>+11.1}% {:>10}",
+            row.metric,
+            row.baseline,
+            row.candidate,
+            row.delta,
+            row.delta_pct * 100.0,
+            row.assessment,
+        );
+    }
+
+    Ok(())
+}
+
+fn summarize_metric_diff(rows: &[quantbot::backtest::metrics::MetricComparisonRow]) -> String {
+    if rows.is_empty() {
+        return "no metric changes".to_string();
+    }
+
+    let key_metrics = [
+        "sharpe_ratio",
+        "total_return",
+        "max_drawdown",
+        "cvar_95",
+        "rolling_sharpe_min_63d",
+        "avg_daily_turnover",
+    ];
+
+    let mut better = Vec::new();
+    let mut worse = Vec::new();
+
+    for metric in key_metrics {
+        if let Some(row) = rows.iter().find(|r| r.metric == metric) {
+            match row.assessment.as_str() {
+                "better" => better.push(metric_label(metric)),
+                "worse" => worse.push(metric_label(metric)),
+                _ => {}
+            }
+        }
+    }
+
+    match (better.is_empty(), worse.is_empty()) {
+        (false, true) => format!("improved {}", better.join(", ")),
+        (true, false) => format!("deteriorated {}", worse.join(", ")),
+        (false, false) => format!(
+            "improved {} but worsened {}",
+            better.join(", "),
+            worse.join(", ")
+        ),
+        (true, true) => "mixed / mostly unchanged".to_string(),
+    }
+}
+
+fn metric_label(metric: &str) -> String {
+    match metric {
+        "sharpe_ratio" => "Sharpe".to_string(),
+        "total_return" => "return".to_string(),
+        "max_drawdown" => "drawdown".to_string(),
+        "cvar_95" => "tail risk".to_string(),
+        "rolling_sharpe_min_63d" => "worst rolling Sharpe".to_string(),
+        "avg_daily_turnover" => "turnover".to_string(),
+        _ => metric.to_string(),
+    }
+}
+
+fn sort_metric_rows(
+    rows: &mut [quantbot::backtest::metrics::MetricComparisonRow],
+    sort_by: MetricsDiffSort,
+) {
+    match sort_by {
+        MetricsDiffSort::Importance => rows.sort_by_key(|row| metric_importance_rank(&row.metric)),
+        MetricsDiffSort::AbsDelta => rows.sort_by(|a, b| {
+            b.delta
+                .abs()
+                .partial_cmp(&a.delta.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        MetricsDiffSort::AbsDeltaPct => rows.sort_by(|a, b| {
+            b.delta_pct
+                .abs()
+                .partial_cmp(&a.delta_pct.abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        MetricsDiffSort::Name => rows.sort_by(|a, b| a.metric.cmp(&b.metric)),
+    }
+}
+
+fn metric_importance_rank(metric: &str) -> usize {
+    match metric {
+        "sharpe_ratio" => 0,
+        "total_return" => 1,
+        "annualized_return" => 2,
+        "max_drawdown" => 3,
+        "cvar_95" => 4,
+        "cvar_99" => 5,
+        "var_95" => 6,
+        "var_99" => 7,
+        "rolling_sharpe_min_63d" => 8,
+        "rolling_sharpe_std_63d" => 9,
+        "rolling_sharpe_positive_pct_63d" => 10,
+        "rolling_sharpe_mean_63d" => 11,
+        "rolling_sharpe_max_63d" => 12,
+        "avg_daily_turnover" => 13,
+        "annualized_vol" => 14,
+        "sortino_ratio" => 15,
+        "calmar_ratio" => 16,
+        "max_drawdown_duration_days" => 17,
+        "total_trades" => 18,
+        _ => 999,
+    }
+}
+
+fn metrics_diff_sort_label(sort_by: MetricsDiffSort) -> &'static str {
+    match sort_by {
+        MetricsDiffSort::Importance => "importance",
+        MetricsDiffSort::AbsDelta => "abs-delta",
+        MetricsDiffSort::AbsDeltaPct => "abs-delta-pct",
+        MetricsDiffSort::Name => "name",
+    }
 }
 
 #[cfg(feature = "track-b")]

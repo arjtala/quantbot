@@ -159,12 +159,14 @@ Motivated by the TradeMaster / PRUDEX-Compass review (JOURNAL §12). Current `Ba
 
 Add the following fields to `BacktestResult` (`src/backtest/metrics.rs:9-20`) and compute them in `from_snapshots` (`src/backtest/metrics.rs:24-111`) from the existing `daily_returns` and `nav_series` — no new inputs required.
 
-### 1. Tail risk — VaR(95) and CVaR(95)
+### 1. Tail risk — historical VaR/CVaR at 95% and 99%
 
 ```rust
 // in BacktestResult
 pub var_95: f64,       // 5th-percentile daily return (negative number)
 pub cvar_95: f64,      // mean of returns ≤ var_95
+pub var_99: f64,       // 1st-percentile daily return
+pub cvar_99: f64,      // mean of returns ≤ var_99
 ```
 
 Logic (drop into `from_snapshots` alongside the existing Sortino block at `src/backtest/metrics.rs:82-97`):
@@ -172,19 +174,27 @@ Logic (drop into `from_snapshots` alongside the existing Sortino block at `src/b
 ```rust
 let mut sorted = daily_returns.clone();
 sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-let idx = ((sorted.len() as f64) * 0.05).floor() as usize;
-let var_95 = sorted.get(idx).copied().unwrap_or(0.0);
-let tail: Vec<f64> = sorted.iter().take(idx.max(1)).copied().collect();
-let cvar_95 = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f64>() / tail.len() as f64 };
+let var_cvar = |alpha: f64| {
+    let idx = ((sorted.len() as f64) * alpha).floor() as usize;
+    let var = sorted.get(idx).copied().unwrap_or(0.0);
+    let tail: Vec<f64> = sorted.iter().take(idx.max(1)).copied().collect();
+    let cvar = if tail.is_empty() { 0.0 } else { tail.iter().sum::<f64>() / tail.len() as f64 };
+    (var, cvar)
+};
+let (var_95, cvar_95) = var_cvar(0.05);
+let (var_99, cvar_99) = var_cvar(0.01);
 ```
 
-Why: Sortino only penalises below-zero volatility; VaR/CVaR quantify *how bad* the tail actually is. This is what surfaces black-swan exposure that Sharpe/Sortino happily hide.
+Why: Sortino only penalises below-zero volatility; VaR/CVaR quantify *how bad* the tail actually is. This is what surfaces black-swan exposure that Sharpe/Sortino happily hide. Start with **historical** estimates only; Gaussian variants can wait until there is a concrete use for them.
 
-### 2. Robustness — rolling-Sharpe stability
+### 2. Robustness — 63-day rolling-Sharpe stability
 
 ```rust
-pub rolling_sharpe_std: f64,   // std of 60-day rolling Sharpe across the window
-pub worst_60d_sharpe: f64,     // min 60-day Sharpe — the single worst regime
+pub rolling_sharpe_mean_63d: f64,
+pub rolling_sharpe_min_63d: f64,
+pub rolling_sharpe_max_63d: f64,
+pub rolling_sharpe_std_63d: f64,
+pub rolling_sharpe_positive_pct_63d: f64,
 ```
 
 Logic (new helper, called after the main Sharpe computation):
@@ -202,7 +212,18 @@ fn rolling_sharpe(returns: &[f64], window: usize) -> Vec<f64> {
 }
 ```
 
-Then `rolling_sharpe_std = std_dev(&rolls)` and `worst_60d_sharpe = rolls.iter().fold(f64::INFINITY, |a, &b| a.min(b))`.
+Then compute:
+
+```rust
+let rolls = rolling_sharpe(&daily_returns, 63);
+let rolling_sharpe_mean_63d = if rolls.is_empty() { 0.0 } else { rolls.iter().sum::<f64>() / rolls.len() as f64 };
+let rolling_sharpe_min_63d = rolls.iter().copied().reduce(f64::min).unwrap_or(0.0);
+let rolling_sharpe_max_63d = rolls.iter().copied().reduce(f64::max).unwrap_or(0.0);
+let rolling_sharpe_std_63d = std_dev(&rolls);
+let rolling_sharpe_positive_pct_63d = if rolls.is_empty() { 0.0 } else {
+    rolls.iter().filter(|&&x| x > 0.0).count() as f64 / rolls.len() as f64
+};
+```
 
 Why: the ablation ladder (TSMOM-only 1.394 vs gated 1.314) compares single-number Sharpes. A strategy that's 1.4 steady-state but dips to -2.0 in one regime is *worse* than one that's 1.2 with no dips below 0.3. We cannot currently see that.
 
@@ -230,7 +251,19 @@ Why: STRATEGY §"Why 6, Not 21" already hand-computed this for the 21-instrument
 
 ### Summary printer
 
-Extend `summary()` at `src/backtest/metrics.rs:114-147` with three new lines grouped under a `RISK & ROBUSTNESS` divider. Keep composite scores out — report each metric raw so ablation tables stay legible.
+Extend `summary()` at `src/backtest/metrics.rs:114-147` with a `RISK & ROBUSTNESS` divider and raw metric lines for:
+
+- VaR(95), CVaR(95), VaR(99), CVaR(99)
+- rolling 63d Sharpe mean/min/max/std/% positive
+- turnover if/when that field lands
+
+Also update `tests/validate_sharpe.rs` to print the new fields during regression runs so round-by-round comparisons expose tail risk and regime fragility, not just top-line Sharpe.
+
+### Testing / export requirements
+
+- Add deterministic unit tests in `src/backtest/metrics.rs` for VaR/CVaR and rolling-window stability
+- Keep the calculations pure from `Vec<Snapshot>` / daily returns
+- Add a compact machine-readable metrics export path later if ablation comparisons start getting cumbersome in plain-text summaries
 
 ### Out of scope (deliberately)
 - PRUDEX composite "compass" score — hides trade-offs.

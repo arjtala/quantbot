@@ -883,6 +883,15 @@ account_id = "Z69YJL"
 - [ ] **Disagreement penalty** *(from ATLAS §5.1)* — When TSMOM and indicator disagree on direction, penalize conviction by `opposing_weight × 0.5` instead of blending. Produces FLAT/small position on conflict, aligning with ablation finding that selectivity is risk management.
 
 ### Signal Quality & Evaluation
+- [x] **TradeMaster evaluation hardening** *(JOURNAL.md §12, STRATEGY.md "Evaluation Hardening")* — historical **VaR/CVaR at 95% and 99%** added to `src/backtest/metrics.rs` and exposed on `BacktestResult`
+- [x] **Rolling Sharpe stability metrics** — **63-day rolling Sharpe mean/min/max/std/% positive windows** added to `src/backtest/metrics.rs` for regime-robustness reporting
+- [x] **Metrics summary expansion** — `BacktestResult::summary()` and `tests/validate_sharpe.rs` now print tail-risk + stability metrics
+- [x] **Deterministic metrics tests** — unit coverage added in `src/backtest/metrics.rs` for VaR/CVaR and rolling-window stats on synthetic return series
+- [x] **Machine-readable metrics export** — `backtest --metrics-json <path>` writes compact structured metrics snapshots for diffing across runs
+- [x] **`metrics-diff` subcommand** — compare two metrics JSON files with summary verdicts, better/worse assessment, `--only-changed`, and sorting (`importance|abs-delta|abs-delta-pct|name`)
+- [ ] **Persist metrics snapshots for eval replays automatically** — write structured metrics alongside replay outputs / ablation artifacts instead of requiring manual `--metrics-json`
+- [ ] **Risk-adjusted ablation report template** — standardize comparisons around Sharpe, tail risk, worst rolling Sharpe, turnover, and total return
+- [ ] **Cross-run metrics registry** — keep a lightweight index of experiment name → metrics JSON path so `metrics-diff` can compare named runs later
 - [ ] **alphalens factor analysis** *(from awesome-ai-in-finance §5.3)* — Run Quantopian alphalens tear sheets on cached LLM signals to quantify information coefficient, turnover, and alpha decay. Uses existing SQLite cache data.
 - [ ] **BM25 regime memory** *(from TradingAgents §5.2)* — Store (market_conditions, indicator_recommendation, actual_return) tuples in SQLite. On each run, inject top-2 similar past situations into LLM prompt for contextual learning without retraining.
 - [ ] **5-tier rating scale** *(from TradingAgents §5.2)* — Replace LONG/SHORT/FLAT with BUY/OVERWEIGHT/HOLD/UNDERWEIGHT/SELL. Maps to position scale factors (1.0/0.75/existing/0.25/-1.0) for finer-grained sizing.

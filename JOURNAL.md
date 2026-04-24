@@ -1576,4 +1576,20 @@ The two biggest genuine gaps: **tail-risk measures** (VaR/CVaR) and **rolling-Sh
 ### Decision
 Skim `TradeMaster/evaluation/` and the PRUDEX paper **for metric formulas only** (~30 minutes). Add VaR/CVaR and rolling-Sharpe stability to `BacktestResult`. Ignore the rest of the repo.
 
+### Concrete takeaways for quantbot
+
+Translate the review into a **small evaluation hardening pass**, not a framework migration:
+
+- **Tail risk first:** add **historical VaR/CVaR at 95% and 99%** from existing daily returns
+- **Robustness second:** add **63-day rolling Sharpe stability** stats (mean, min, max, std, % positive windows)
+- **Validation visibility:** print the new risk/stability metrics in `tests/validate_sharpe.rs` so every regression run shows more than Sharpe
+- **Reporting hygiene:** keep metrics raw and separate; do **not** introduce PRUDEX composite scores
+
+Default choices:
+- Use **historical** VaR/CVaR first, not Gaussian estimates
+- Use a **63-trading-day** window as the primary robustness lens
+- Keep implementation local to `src/backtest/metrics.rs` and summary/reporting unless later work proves we need wider engine changes
+
+That gives quantbot the useful part of TradeMaster — a better evaluation lens — without importing its RL assumptions, notebook stack, or simulator architecture.
+
 Best use: taxonomy inspiration, not code or architecture. Continues the pattern from §9 (AutoHedge), §10 (FinGPT), §11 (NautilusTrader): borrow ideas, not dependencies.
